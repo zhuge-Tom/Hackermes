@@ -1,9 +1,7 @@
 # 默认按文本处理并规范化换行
 * text=auto
 
-# 源文件一律 UTF-8。
-# 参考项目 ZeroFall 有过源文件被非 UTF-8 保存导致中文注释永久损坏的事故
-# (src\ZeroFall.Traffic\Capture\TrafficCaptureRecord.cs:3)。
+# 源文件一律 UTF-8。中文注释一旦被非 UTF-8 编码写回就会永久损坏,不可逆。
 #
 # 注意:这里不设 working-tree-encoding —— 那个属性是给"工作区需要非 UTF-8 编码"
 # 的场景用的,我们的文件本来就是 UTF-8,设了反而会触发多余的编码转换。

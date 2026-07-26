@@ -28,8 +28,8 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
     /// 适配器就绪的探测节奏。
     /// <para>
     /// 为什么不只依赖 <c>AdapterCreated</c> 事件:该事件在部分时序下不会触发
-    /// (例如控件在适配器创建完成之后才挂上处理器),参考项目也因此采用了事件加轮询的双保险。
-    /// 这里沿用同样策略 —— 宁可多探几次,也不要一个永远白屏的标签页。
+    /// (例如控件在适配器创建完成之后才挂上处理器),因此采用事件加轮询的双保险。
+    /// 宁可多探几次,也不要一个永远白屏的标签页。
     /// </para>
     /// </summary>
     private static readonly int[] ProbeDelaysMs = [150, 400, 800, 1500, 3000, 6000];

@@ -101,8 +101,8 @@ public sealed record ThemeChangedEvent(bool IsDarkMode);
 public sealed record AppSettingsSavedEvent;
 
 /// <summary>
-/// 分节设置变更。相比参考项目"一个全局事件 + 各模块自己再发专用事件"的混合模型,
-/// 这里统一成强类型分节通知,新增设置项时不容易漏接线。
+/// 分节设置变更。统一成强类型分节通知,而不是"一个全局事件 + 各模块自己再发专用事件"
+/// 的混合模型 —— 后者在新增设置项时很容易漏接线。
 /// </summary>
 public sealed record SettingsSectionChangedEvent(SettingsSection Section);
 

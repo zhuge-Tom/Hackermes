@@ -1,27 +1,101 @@
 # Hookmes
 
-本地桌面端网页调试自动化工具。交互式命令终端 + 内置浏览器视图 + 人工操作 + AI 辅助前端调试,在一个窗口里完成。
+本地桌面端网页调试自动化工具。内置浏览器、页面内 Hook、交互式终端与 AI 辅助,在一个窗口里完成前端调试的完整闭环。
+
+基于 .NET 10 + Avalonia,面向 Windows。
+
+---
 
 ## 它解决什么
 
-前端调试的日常是:打开 DevTools、点点页面、看网络面板、翻 console、猜哪个请求出了问题。Hookmes 把这套流程搬进一个可编程、可录制、可交给 AI 的工作台:
+前端调试的日常是这样的:打开 DevTools、点点页面、翻网络面板、看 console、猜哪个请求出了问题。信息散落在多个面板里,操作无法复现,更没法交给别人(或 AI)代劳。
 
-- **内置浏览器** — 基于 WebView2,通过 CDP 全域控制。零代理配置、零证书安装即可看到完整网络流量。
-- **页面内 Hook** — 文档级预注入的 Page Agent 包装 `fetch` / `XHR` / `WebSocket` / storage / 路由,记录**发起调用栈**——这是 DevTools 网络面板之外的信息。
-- **统一动作模型** — 人工点击、终端命令、AI 工具调用、脚本回放四条路径收敛成同一种可序列化的动作,因此录制、审计、回放都是免费的。
-- **交互式终端** — 既是真 PTY(cmd / pwsh / bash),也是操作页面的领域 REPL(`click #submit`、`net ls --status=4xx`)。
-- **AI 辅助** — AI 能截图、点击、输入、读 console、查网络、Mock 响应,和人走完全相同的动作路径,并受策略闸门约束。
+Hookmes 把这套流程变成可编程、可录制、可自动化的工作台:
 
-## 与 ZeroFall 的关系
+**零配置的完整流量视图** — 通过 CDP 直接观测,不需要配置代理,也不需要安装根证书就能看到 HTTPS 明文。
 
-架构参考 [ZeroFall(烬)](https://github.com/) 的模块化骨架,但定位不同:ZeroFall 是安全攻防工作台,靠 MITM 代理**旁路观测**流量;Hookmes 是前端调试工作台,靠 CDP 与页面内 Agent **进入并驱动**页面。继承其模块化、Tab 保活、AI 工具源生成等成熟设计,详见 `docs/INHERITED-PATTERNS.md`。
+**页面内 Hook** — 文档级预注入的 Page Agent 包装 `fetch` / `XMLHttpRequest` / `WebSocket` / storage / 路由,记录**发起处的调用栈**。这是 DevTools 网络面板给不了的信息:协议层能告诉你发生了什么请求,告诉不了你哪行代码发起的。
 
-## 文档
+```
+net/fetch → {"url":"/api/user",  "stack":"at .../checkout.js:142:9"}
+net/xhr   → {"url":"/api/cart",  "stack":"at .../legacy.js:88:5"}
+```
 
-| 文档 | 内容 |
+**统一动作模型** — 人工点击、终端命令、AI 工具调用、脚本回放,四条路径收敛成同一种可序列化的动作。因此录制、审计、回放都是架构的自然结果,而非额外功能。
+
+**交互式终端** — 既是真 PTY(cmd / pwsh / bash),也是操作页面的领域 REPL:
+
+```
+open https://example.com
+click #submit
+net ls --status=4xx
+eval document.title
+rec start
+```
+
+**AI 辅助** — AI 能截图、点击、输入、读 console、查网络、Mock 响应,和人走完全相同的动作路径,并受策略闸门约束。
+
+---
+
+## 架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Hookmes.App          宿主 / 启动装配 / 主窗口             │
+├──────────────────────────────────────────────────────────┤
+│  功能模块层(互不引用,靠事件与注册表通信)                  │
+│  Browser  Inspector  Automation  Terminal  AiPanel        │
+├──────────────────────────────────────────────────────────┤
+│  能力层                                                    │
+│  Cdp(会话/域封装/事件泵)   PageAgent(页面内驻留 JS)      │
+│  Dock(布局/Tab 保活)      Editor      DataTable          │
+├──────────────────────────────────────────────────────────┤
+│  Hookmes.Platform     应用平台层:配置/事件词典/注册表/存储  │
+├──────────────────────────────────────────────────────────┤
+│  Hookmes.Base         契约与基础设施                       │
+└──────────────────────────────────────────────────────────┘
+```
+
+几条贯穿全局的约定:
+
+- **模块间零项目引用。** 横向通信走事件总线与四个注册表(Dock / 菜单 / 设置 / 内容工厂)。检查面板与自动化模块都要操作页面,但都不引用浏览器模块——三者通过 CDP 会话注册表相遇。
+- **两段式模块装配。** 第一趟只注册服务,容器构建后第二趟才向注册表登记 Tab、菜单与 AI 工具。
+- **启动路径为观感调优。** 空窗先显示,DI 容器在后台线程构建,布局稳定后才关遮罩,WebView 创建与工作区恢复都往后推。
+
+详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+---
+
+## 当前状态
+
+按五个阶段推进,每阶段以"可运行、可验证"为终点。
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 0 | 骨架:模块契约、事件总线、五区域布局、Tab 保活、设置持久化 | ✅ 完成 |
+| 1 | CDP 通道:COM 互操作、请求-响应、事件泵、浏览器多标签 | ✅ 完成 |
+| 2 | Page Agent 与检查面板:页面内 Hook、网络面板、控制台面板 | ✅ 完成 |
+| 3 | 统一动作模型:执行器、选择器引擎、录制回放、交互式终端 | 进行中 |
+| 4 | AI 集成:工具集、策略闸门、MCP | 待开始 |
+
+已可用:内置浏览器多标签、CDP 请求-响应与事件订阅、页面内 Hook 与调用栈捕获、网络面板(协议数据与调用栈合并)、控制台面板(console / 未捕获异常 / 浏览器级日志三源合并)、五区域布局与布局持久化。
+
+冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
+
+### 项目构成
+
+| 项目 | 职责 |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 总体架构、分层、模块划分、目录结构、实施路线 |
-| [`docs/INHERITED-PATTERNS.md`](docs/INHERITED-PATTERNS.md) | 从 ZeroFall 继承的设计与精确源码出处 |
+| `Hookmes.Base` | 模块契约、事件总线、ViewModel 基类、脚本闸门、日志抽象 |
+| `Hookmes.Platform` | 注册表、共享事件词典、UI 线程桥、设置持久化、DPAPI 密钥库、工作区 |
+| `Hookmes.Cdp` | COM vtable 互操作、CDP 会话(请求-响应 + 事件泵)、会话注册表 |
+| `Hookmes.PageAgent` | 页面内驻留脚本(TypeScript),经 binding 回传 |
+| `Hookmes.Dock` | Tab 保活控件、布局 ViewModel、懒物化 |
+| `Hookmes.Browser` | 浏览器标签页、WebView 生命周期、Agent 装配 |
+| `Hookmes.Inspector` | 网络面板、控制台面板 |
+| `Hookmes.App` | 启动装配、主窗口、视图定位 |
+
+---
 
 ## 环境要求
 
@@ -30,74 +104,24 @@
 | 操作系统 | Windows 10/11 x64 |
 | .NET SDK | 10.0 — [下载](https://dotnet.microsoft.com/download) |
 | WebView2 Runtime | 任意近期版本 — [下载](https://developer.microsoft.com/microsoft-edge/webview2/) |
-| Node.js | 18+,仅在修改 `Hookmes.PageAgent` 或 `Hookmes.AiPanel/chat-web` 时需要 |
+| Node.js | 18+,**仅在修改 Page Agent 源码时需要** |
 
-前端产物(Page Agent 脚本、AI 聊天页面)以生成的 C# 源文件形式提交进仓库,因此**常规构建不需要 Node.js**。
+前端产物以生成的 C# 源文件形式提交进仓库,因此常规构建不需要 Node.js。
 
-## 构建
+## 构建与运行
 
 ```bash
 dotnet restore
-dotnet build src/Hookmes.App/Hookmes.App.csproj
+dotnet build Hookmes.slnx
 dotnet run --project src/Hookmes.App/Hookmes.App.csproj
 ```
 
-修改 Page Agent 后需重新生成:
+修改 Page Agent 的 TypeScript 源码后需重新生成:
 
 ```bash
 cd src/Hookmes.PageAgent
 npm install
-npm run build      # esbuild → generate.mjs → Generated/PageAgentScript.g.cs
-```
-
-## 状态
-
-实施按 `docs/ARCHITECTURE.md` 第十一节的五个阶段推进。
-
-**阶段 0(骨架)已完成并通过运行验证。** 已就位的四个项目:
-
-| 项目 | 内容 |
-|---|---|
-| `Hookmes.Base` | `IModule` 两段式契约、同步 `EventBus`、`ViewModelBase`(订阅自动退订)、`UiScriptGate`、日志抽象 |
-| `Hookmes.Platform` | 注册表契约、共享事件词典、`UiThreadBridge`、设置持久化(三级目录回退 + 原子写 + .bak)、DPAPI 密钥库、工作区服务、WebView2 创建互斥 |
-| `Hookmes.Dock` | `PersistTabControl` 双模式 Tab 保活控件、面板与布局 ViewModel、懒物化、布局持久化 |
-| `Hookmes.App` | 分阶段异步启动、模块装配、`ViewLocator`、五区域主界面 |
-
-**阶段 1(CDP 通道与浏览器)已完成并通过运行验证。** 新增两个项目:
-
-| 项目 | 内容 |
-|---|---|
-| `Hookmes.Cdp` | COM vtable 直调、源生成 CCW 回调、`CdpSession`(请求-响应 + 事件泵 + 域启用)、会话注册表、CDP JSON 辅助 |
-| `Hookmes.Browser` | 浏览器标签页、WebView2 生命周期与适配器探测、CDP 会话建立、地址栏与导航、标签管理 |
-
-**阶段 2(Page Agent 与检查面板)已完成并通过运行验证。** 新增两个项目:
-
-| 项目 | 内容 |
-|---|---|
-| `Hookmes.PageAgent` | 页面内驻留脚本(TypeScript):`fetch` / `XHR` / `WebSocket` / storage / cookie / 路由 hook,经 `Runtime.addBinding` 回传。esbuild 打包后生成 C# 常量并提交进仓库 |
-| `Hookmes.Inspector` | 网络面板(CDP Network 域 + Agent 调用栈合并)、控制台面板(console / 未捕获异常 / 浏览器级日志三源合并) |
-
-当前可运行:五区域布局、Tab 懒物化、面板折叠、布局持久化、主题切换、工作区打开与恢复、内置浏览器多标签、CDP 请求-响应与事件订阅、**页面内 hook 与调用栈捕获、网络与控制台检查面板**。
-
-下一步是阶段 3:统一动作模型(`ActionDescriptor` + 执行器 + 选择器引擎)、录制回放,以及交互式终端。
-
-### Page Agent 能做什么
-
-CDP 的 Network 域能告诉你"发生了什么请求",但告诉不了你"哪行代码发起的"。Page Agent 补上这一层:
-
-```
-net/fetch → {"url":"data.json","method":"GET","stack":"at http://127.0.0.1:8899/app.js:5:1"}
-net/xhr   → {"url":"data.json?via=xhr","stack":"at http://127.0.0.1:8899/app.js:23:5"}
-```
-
-网络面板的"发起"列因此能区分 `fetch` 与 `xhr`,选中请求还能看到完整调用栈。
-
-改动 TypeScript 源码后需重新生成:
-
-```bash
-cd src/Hookmes.PageAgent
-npm install
-npm run build      # esbuild → build.mjs → Generated/PageAgentScript.g.cs
+npm run build      # esbuild 打包 → 生成 Generated/PageAgentScript.g.cs
 ```
 
 ### 诊断开关
@@ -107,6 +131,19 @@ npm run build      # esbuild → build.mjs → Generated/PageAgentScript.g.cs
 | `HOOKMES_LOG_LEVEL` | `Debug` / `Info` / `Warn` / `Error`,默认 `Info` |
 | `HOOKMES_AUTOOPEN_URL` | 启动后自动打开该地址,用于无人值守验证 |
 | `HOOKMES_SELFTEST` | 设为 `1` 时,CDP 就绪后自动跑一次自检并把结果写进日志 |
+
+日志位于 `%LocalAppData%\Hookmes\logs\`。
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 分层、模块划分、CDP 层设计、Page Agent 协议、AI 工具规划、实施路线 |
+| [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) | 关键设计决策、平台陷阱清单、明确的取舍、待偿还的技术债 |
+
+---
 
 ## 免责声明
 

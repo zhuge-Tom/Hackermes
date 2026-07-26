@@ -11,8 +11,8 @@ public enum LogLevel
 }
 
 /// <summary>
-/// 轻量日志抽象。相较参考项目散落各处的 <c>Debug.WriteLine</c>,这里给出统一入口,
-/// 但保留同一条原则:<strong>日志失败绝不能影响应用行为</strong>,实现方需吞掉自身异常。
+/// 轻量日志抽象。统一入口,避免诊断输出散落成各处的 <c>Debug.WriteLine</c>。
+/// 一条原则:<strong>日志失败绝不能影响应用行为</strong>,实现方需吞掉自身异常。
 /// </summary>
 public interface IAppLogger
 {

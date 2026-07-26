@@ -10,7 +10,7 @@ namespace Hookmes.Platform.Services;
 /// <para>
 /// <strong>同一时刻只允许一个 WebView2 实例初始化。</strong>
 /// 并发初始化会在 WebView2 运行时内部争抢用户数据目录,表现为其中一个永远卡在创建中。
-/// 参考项目在浏览器与 AI 面板两个 WebView 上都撞过这个问题,因此引入了同名协调器。
+/// 浏览器视图与 AI 面板各持一个 WebView,同时创建就会撞上这个问题。
 /// </para>
 /// <para>看门狗是必需的:初始化失败时回调可能永不到达,不设超时会让后续所有创建饿死。</para>
 /// </summary>

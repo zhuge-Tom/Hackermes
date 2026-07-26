@@ -9,7 +9,7 @@ namespace Hookmes.Platform.Registries;
 
 /// <summary>
 /// 五个固定区域。区域是编译期常量,只有 Tab 是动态的 —— 不做可拖拽 Dock 树,
-/// 复杂度与收益不成正比(参考项目验证过这个取舍)。
+/// 可拖拽 Dock 树的复杂度与收益不成正比,故不提供。
 /// </summary>
 public enum DockPosition
 {

@@ -13,8 +13,8 @@ namespace Hookmes.Platform.Services;
 /// <summary>
 /// 敏感值(API Key 等)存取。
 /// <para>
-/// 参考项目把 API Key 明文写在 settings.json 里,这里改用 Windows DPAPI 按当前用户加密。
-/// 加密后的密文与普通配置<strong>分开存放</strong>,避免误随配置导出或提交。
+/// 用 Windows DPAPI 按当前用户加密,不把密钥明文写进配置文件。
+/// 密文与普通配置<strong>分开存放</strong>,避免误随配置导出或提交。
 /// </para>
 /// </summary>
 public interface ISecretStore

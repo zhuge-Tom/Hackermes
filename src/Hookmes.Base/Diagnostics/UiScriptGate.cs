@@ -9,7 +9,7 @@ namespace Hookmes.Base.Diagnostics;
 /// <para>
 /// 浏览器视图与 AI 面板是两个 WebView 实例,<strong>共用同一条 UI 线程</strong>。
 /// 一方在等待脚本/CDP 结果时另一方发起调用会互相阻塞,表现为整个界面挂死。
-/// 参考项目 ZeroFall 正是因为这个问题引入了同名闸门 —— 这是踩坑后的产物,不要绕过它。
+/// 这不是理论风险:两个 WebView 交叉调用时界面会整个挂死,且没有任何报错。不要绕过它。
 /// </para>
 /// <para>
 /// 所有 <c>ExecuteScript</c> 与 CDP 调用都必须包在 <see cref="EnterAsync"/> 之内。

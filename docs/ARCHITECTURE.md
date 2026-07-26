@@ -2,52 +2,44 @@
 
 > 本地桌面端网页调试自动化工具 — 交互式命令终端 + 内置浏览器 + 人工操作 + AI 辅助前端调试
 
-参考项目:`G:\Oofo\zerofall`(烬 ZeroFall)。本文先说明与参考项目的定位差异,再给出分层、模块划分、目录结构与关键机制设计。
+本文给出 Hookmes 的分层、模块划分、目录结构与关键机制设计。实现过程中的具体决策与踩坑记录见 [`DESIGN-NOTES.md`](DESIGN-NOTES.md)。
 
 ---
 
-## 一、定位:Hookmes 不是 ZeroFall
+## 一、定位与范围
 
-ZeroFall 是**安全攻防工作台**,其浏览器部分的本质是**旁路观测**:流量从 Fluxzy 本地代理经过并入库,页面内容靠 CDP 只读拉取(`DOM.getDocument` / `getOuterHTML`)。它刻意不进入页面内部——`OpenSourceBrowserPolicy.ProxyOnlyTrafficCapture` 甚至把 CDP 抓包路径整个短路,626 行的 `BrowserAiToolService` 在开源构建里根本不可达。
+Hookmes 是**前端调试自动化工作台**,核心主张是:调试工具不应该只是旁观者,而应该能**进入页面内部并驱动它**。
 
-Hookmes 是**前端调试自动化工作台**,本质是**进入页面内部并驱动它**。这决定了两者在能力上几乎不重叠:
+这条主张划出了能力边界:
 
-| 维度 | ZeroFall | Hookmes |
-|---|---|---|
-| 网络数据来源 | Fluxzy MITM 代理(需装根证书) | CDP `Network` + `Fetch` 域(零证书配置) |
-| 页面读取 | 只读 DOM 快照 → Markdown | DOM / 可访问性树 / 计算样式 / Storage / 覆盖率 |
-| 页面写入 | 无 | `Input.dispatch*` 真实输入事件、`Runtime.evaluate` |
-| 页面内驻留代码 | 无 | Page Agent(文档级预注入,hook fetch/XHR/WS/事件) |
-| 页面→宿主通道 | 无(单向 pull) | `Runtime.addBinding` 双向 |
-| 交互定位 | 无 | Overlay 高亮 + 元素拾取 + 选择器生成 |
-| 自动化 | Intruder(HTTP 层爆破) | 录制/回放脚本(UI 层) |
-| AI 的角色 | 分析已捕获的数据 | 直接驱动页面并观察结果 |
+| 能力 | 做法 |
+|---|---|
+| 网络观测 | CDP `Network` + `Fetch` 域。零代理配置、零证书安装即可看到完整流量 |
+| 页面读取 | DOM / 可访问性树 / 计算样式 / Storage,可访问性树是给 AI 的首选表示 |
+| 页面写入 | `Input.dispatch*` 真实输入事件,而非 JS 层的 `.click()` |
+| 页面内驻留 | Page Agent 文档级预注入,hook `fetch` / `XHR` / `WebSocket` / storage / 路由 |
+| 页面→宿主通道 | `Runtime.addBinding` 双向通信 |
+| 交互定位 | Overlay 高亮 + 元素拾取 + 选择器策略链 |
+| 自动化 | UI 层录制与回放,而非 HTTP 层重放 |
+| AI 的角色 | 直接驱动页面并观察结果,与人走同一条动作路径 |
 
-一句话:**ZeroFall 看流量,Hookmes 动页面。**
+### 三条设计主张
 
-### 从 ZeroFall 继承什么
+**一、观测要能回答"为什么"。** 协议层能告诉你发生了什么请求,告诉不了你哪行代码发起的。所以有了 Page Agent——它存在的唯一理由就是补上协议层给不了的那部分信息。
 
-四份源码分析确认了一批经过实战打磨、值得直接继承的设计(详见 `docs/INHERITED-PATTERNS.md`):
+**二、人和机器走同一条路。** 人工点击、终端命令、AI 工具调用、脚本回放,四条路径如果各写一份实现,行为必然发散,录制也无从下手。统一成 `ActionDescriptor` 后,录制、审计、回放都是架构的自然结果。
 
-1. **两段式 `IModule` + 注册表插件化** — 模块清单硬编码(不反射扫描),`RegisterServices` / `Initialize` 两趟循环。
-2. **同步 EventBus + 共享事件词典** — 功能模块之间零项目引用。
-3. **`PersistTabControl` 双模式 Tab 保活** — 切页不卸载可视树,否则 WebView2 与 PTY 会被销毁。这是 Hookmes 的刚需。
-4. **`[AiTool]` 源生成器** — 从 C# 方法签名生成 OpenAI tool schema 与 DI 执行器闭包,零反射。
-5. **Vite singlefile → C# raw string literal** — Web 前端零依赖烧进 .NET,产物入库,构建机不需要 Node。
-6. **流式 Markdown 双段渲染** — 稳定块用 HTML、活跃尾用纯文本,避免半截语法闪烁。
-7. **API 载荷从 SQLite 重建而非从 UI 内存拼** — 撤销、压缩、子 Agent 都成为同一份数据的不同投影。
-8. **WebView2 创建互斥 + UI 线程脚本闸门** — 多个 WebView 共用 UI 线程,交叉调用会死锁。
+**三、默认保守。** AI 能驱动页面意味着它也能破坏东西。策略闸门放在工具执行的唯一收口处,只读操作放行,写操作与 shell 命令需确认,危险模式直接拒绝。用户可以切到信任模式全放行,但那必须是显式选择。
 
-### 明确改进什么
+### 工程基线
 
-ZeroFall 的四个已知短板,在 Hookmes 里从一开始就避开:
-
-| 问题 | ZeroFall 现状 | Hookmes 方案 |
-|---|---|---|
-| 包版本管理 | 无中央管理,十余个版本号手工重复 | `Directory.Packages.props` 中央包管理 |
-| AI 工具安全闸门 | **完全没有**。AI 可无审批执行任意 shell 命令、ssh、输密码 | `IToolPolicyGate` 在唯一收口处强制策略,危险动作需确认 |
-| 敏感信息存储 | API Key 明文存 JSON | Windows DPAPI(`ProtectedData` + `CurrentUser`) |
-| 日志 | 自写静态类 + 散落的 `Debug.WriteLine` | `ILogger` 抽象 + 轻量文件 sink |
+| 项 | 决定 |
+|---|---|
+| 包版本管理 | `Directory.Packages.props` 中央管理,叶子项目不写版本号 |
+| 敏感信息 | Windows DPAPI(`ProtectedData` + `CurrentUser`),与普通配置分开存放 |
+| 日志 | `IAppLogger` 抽象 + 轻量文件 sink,级别可用环境变量覆盖 |
+| 序列化 | System.Text.Json 源生成上下文,无反射 |
+| AOT 取向 | 视图定位用显式字典、AI 工具用源生成器、COM 互操作用源生成 CCW |
 
 ---
 
@@ -75,7 +67,7 @@ ZeroFall 的四个已知短板,在 Hookmes 里从一开始就避开:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-依赖方向严格自上而下,无环。与 ZeroFall 一致,`Platform` 是"应用平台层"而非 OS 封装层——不含 P/Invoke。
+依赖方向严格自上而下,无环。注意 `Platform` 是"应用平台层"而非 OS 封装层——它承载配置、事件词典、注册表与存储,不含 P/Invoke。真正的原生互操作集中在 `Cdp`。
 
 ### 2.2 依赖图
 
@@ -156,7 +148,7 @@ public sealed record ActionDescriptor(
 
 ### 4.1 取得 CDP 通道
 
-沿用 ZeroFall 验证过的路径,但把封装做厚:
+Avalonia 的 WebView 控件只暴露裸指针,因此走 COM vtable 直调:
 
 ```
 NativeWebView (Avalonia.Controls.WebView)
@@ -166,7 +158,7 @@ NativeWebView (Avalonia.Controls.WebView)
   → CallDevToolsProtocolMethod / AddDevToolsProtocolEventReceiver
 ```
 
-ZeroFall 只做了 `CallDevToolsProtocolMethod`(单向请求-响应)。Hookmes 必须额外接上 **`GetDevToolsProtocolEventReceiver`**(`ICoreWebView2_11` 起的官方 API)——没有事件订阅就没有 `Network.responseReceived`、`Runtime.consoleAPICalled`、`Runtime.bindingCalled`,整个实时能力无从谈起。
+除了 `CallDevToolsProtocolMethod`(请求-响应),还必须接上 **`GetDevToolsProtocolEventReceiver`**(`ICoreWebView2_11` 起的官方 API)——没有事件订阅就没有 `Network.responseReceived`、`Runtime.consoleAPICalled`、`Runtime.bindingCalled`,整个实时能力无从谈起。
 
 事件订阅的机制有一个重要约束:**receiver 是按事件名创建的**,不是一个总线。流程为
 
@@ -212,7 +204,7 @@ public interface ICdpSessionRegistry          // 单例
 }
 ```
 
-**必须继承的两条硬约束**(ZeroFall 踩坑后的产物):
+**两条必须存在的并发闸门**:
 
 - `WebViewCreationCoordinator` — 同一时刻只允许一个 WebView2 初始化,带看门狗超时。多实例并发初始化会卡死。
 - `UiScriptGate` — 浏览器 WebView 与 AI 面板 WebView 共用 UI 线程,脚本调用需全局互斥,否则交叉调用死锁。
@@ -223,7 +215,7 @@ CDP 调用还需注意:**WebView2 按调用顺序派发但可能乱序完成**,�
 
 ## 五、Page Agent(`Hookmes.PageAgent`)
 
-页面内驻留的 TypeScript,经 `Page.addScriptToEvaluateOnNewDocument` 在**任何页面脚本之前**执行。这是 ZeroFall 完全没有、而 Hookmes 赖以成立的部分。
+页面内驻留的 TypeScript,经 `Page.addScriptToEvaluateOnNewDocument` 在**任何页面脚本之前**执行。这是 Hookmes 区别于纯协议层观测工具的关键部分。
 
 ### 职责
 
@@ -267,7 +259,7 @@ WebView2 的 `AddScriptToExecuteOnDocumentCreated` 与 `NavigateWithWebResourceR
 
 ### 构建
 
-沿用 ZeroFall 的 `ai-chat-web` 手法:TypeScript → esbuild 单文件 IIFE → `generate.mjs` 写成 C# raw string literal(`PageAgentScript.g.cs`)→ **产物提交进 Git**。构建机无需 Node 即可 `dotnet build`。
+TypeScript → esbuild 单文件 IIFE → `build.mjs` 写成 C# raw string literal(`PageAgentScript.g.cs`)→ **产物提交进 Git**。构建机无需 Node 即可 `dotnet build`,只有改动 TS 源码时才需要跑构建脚本。
 
 ---
 
@@ -281,7 +273,7 @@ WebView2 的 `AddScriptToExecuteOnDocumentCreated` 与 `NavigateWithWebResourceR
 ### Hookmes.ToolGen
 Roslyn 增量源生成器(netstandard2.0)。扫描 `[AiTool]` 方法,生成 `AiToolRegistration_{ClassName}.Register(registry, serviceProvider)`,内含 JSON Schema 与参数绑定执行器闭包。
 
-相对 ZeroFall 的改进:支持嵌套对象参数(ZeroFall 遇到非基元类型一律 fallback 成 string)、支持 `[ToolParam(Enum = ...)]` 显式枚举值、生成时校验工具名唯一性并在重复时报编译错误。
+要点:支持嵌套对象参数(不能遇到非基元类型就 fallback 成 string)、支持 `[ToolParam(Enum = ...)]` 显式枚举值、生成时校验工具名唯一性并在重复时报编译错误。
 
 ### Hookmes.Platform
 应用平台层。`AppSettings`(源生成 `JsonSerializerContext`)、`PlatformEvents`(共享事件词典)、四个注册表(`IDockLayoutRegistry` / `IMenuRegistry` / `ISettingsRegistry` / `IContentFactoryRegistry`)、`UiThreadBridge`、`WorkspaceService`、`SqliteService`、`SecretStore`(DPAPI)、`OutboundHttpClientFactory`。
@@ -336,9 +328,9 @@ snap --full                       截图
 AI 对话面板。Vue 3 + Vite singlefile 前端烧进 C#,WebView 承载。OpenAI 兼容 API 客户端(手写 `HttpClient` + SSE 解析,兼容各类网关差异)、工具调用编排、上下文压缩、MCP 桥接、子 Agent。
 
 ### Hookmes.Dock / DataTable / Editor / Sidebar / Settings / DomToMarkdown
-UI 基础设施,基本沿用 ZeroFall 的成熟实现。`Dock` 中的 `PersistTabControl`(Tab 保活)是 WebView2 与 PTY 能正常工作的前提,必须优先移植。
+UI 基础设施。`Dock` 中的 `PersistTabControl`(Tab 保活)是 WebView2 与 PTY 能正常工作的前提,是这一层里最先要落地的东西。
 
-`DomToMarkdown` 保持零依赖、直接消费 CDP 节点树的设计——ZeroFall 的洞察很关键:**绕过 HTML 字符串解析可以规避实体反转义导致的标签注入**(例如页面把 CSS 藏在 `<textarea>` 文本节点里,HTML 解析器会把它当成真标签)。
+`DomToMarkdown` 保持零依赖,并且**直接消费 CDP 节点树而不解析 HTML 字符串**。这不只是省一步:走 HTML 解析器会反转义实体,页面若把内容藏在 `<textarea>` 文本节点里(常见于反爬手段),解析器会把它当成真标签,凭空造出结构。跳过解析阶段从根上规避,还顺带拿到 AOT 友好与 iframe 穿透。
 
 ---
 
@@ -386,7 +378,7 @@ UI 基础设施,基本沿用 ZeroFall 的成熟实现。`Dock` 中的 `PersistTa
 
 ### 安全闸门
 
-ZeroFall 最明确的缺口是 AI 可以无审批执行任意 shell 命令。Hookmes 在 `AiToolDispatcher` 这个唯一收口处引入策略:
+AI 能驱动页面就意味着它也能破坏东西。策略在 `AiToolDispatcher` 这个唯一收口处强制执行:
 
 ```csharp
 public interface IToolPolicyGate
@@ -408,9 +400,9 @@ public interface IToolPolicyGate
 
 ## 八、数据存储
 
-工作区 = 一个目录;数据库 = 该目录下的 `.hookmes.db`。沿用 ZeroFall 的 `ProjectOpenedEvent` 枢纽模式:各 store 订阅事件拿到库路径,惰性建表,库文件由第一个写入者隐式创建。
+工作区 = 一个目录;数据库 = 该目录下的 `.hookmes.db`。`ProjectOpenedEvent` 是整个数据层的枢纽:各 store 订阅它拿到库路径,惰性建表,库文件由第一个写入者隐式创建(SQLite 打开即创建)。
 
-裸 `Microsoft.Data.Sqlite` + 手写 SQL,不引 ORM。**但改进 schema 演进**:ZeroFall 完全靠 `CREATE TABLE IF NOT EXISTS` + `PRAGMA table_info` 补列,没有版本号,迁移逻辑分散在九个 store 里。Hookmes 使用 `PRAGMA user_version` + 集中的迁移脚本列表。
+裸 `Microsoft.Data.Sqlite` + 手写 SQL,不引 ORM——查询形态简单,抽象成本高于收益。**但 schema 演进要有版本号**:用 `PRAGMA user_version` + 集中的迁移脚本列表,而不是让每个 store 各自用 `CREATE TABLE IF NOT EXISTS` 加 `PRAGMA table_info` 补列。后者写起来省事,但迁移逻辑一旦散落到十几个 store 里就再也理不清了。
 
 主要表:
 
@@ -431,7 +423,7 @@ public interface IToolPolicyGate
 
 ## 九、界面布局
 
-五区域固定 Grid + 动态 Tab(区域编译期固定,不做可拖拽 Dock 树——ZeroFall 的取舍是对的,复杂度与收益不成正比):
+五区域固定 Grid + 动态 Tab。区域在编译期固定,不做可拖拽 Dock 树——那套复杂度与收益不成正比:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -451,7 +443,7 @@ public interface IToolPolicyGate
                           StatusBar
 ```
 
-三条 UI 约定继承自 ZeroFall:
+三条 UI 约定:
 
 - Tab **壳/内容两阶段懒物化** — 启动只建标题壳,选中时才构造 View。
 - 浏览器与终端 Tab 标记 `NonReloadable`,由 `PersistTabControl` 叠层保活。
@@ -471,7 +463,7 @@ G:\Hookmes\
 │
 ├─ docs\
 │  ├─ ARCHITECTURE.md                 本文
-│  ├─ INHERITED-PATTERNS.md           从 ZeroFall 继承的设计与出处
+│  ├─ DESIGN-NOTES.md                 设计决策、平台陷阱、取舍与技术债
 │  ├─ CDP-LAYER.md                    CDP 域封装与事件流详解
 │  ├─ PAGE-AGENT.md                   Page Agent 协议与 hook 清单
 │  ├─ AI-TOOLS.md                     工具清单、schema、策略矩阵
@@ -615,7 +607,7 @@ G:\Hookmes\
 `Base` / `Platform` / `Dock` / `App` 四件套跑通。目标:能启动一个带五区域布局、可切 Tab、能存取设置的空壳。这里把 `PersistTabControl` 移植到位——它是后续一切的地基。
 
 **阶段 1 — 浏览器与 CDP 通道**
-`Cdp` COM 互操作 + 事件接收器,`Browser` 多标签浏览。目标:能打开网页、能调 `Runtime.evaluate` 拿返回值、能收到 `Network.responseReceived` 事件。**事件接收器是本阶段的主要风险点**,ZeroFall 没有现成实现可抄。
+`Cdp` COM 互操作 + 事件接收器,`Browser` 多标签浏览。目标:能打开网页、能调 `Runtime.evaluate` 拿返回值、能收到 `Network.responseReceived` 事件。**事件接收器是本阶段的主要风险点** —— vtable 槽位需自行从 SDK 头文件核对。
 
 **阶段 2 — Page Agent 与检查面板**
 Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面板。目标:纯人工使用已经是一个可用的调试工具。
@@ -635,8 +627,8 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 | ~~**CDP 事件接收器需接入**~~ | **已解除(阶段 1 验证通过)。** 槽位与 IID 全部从 SDK 头文件提取:`GetDevToolsProtocolEventReceiver` = 42,`add_DevToolsProtocolEventReceived` = 3,IID `e2fda4be-5456-406c-a261-3d452138362c`。回调用 .NET 源生成 COM 互操作实现,无需手写 CCW | — |
 | **Page Agent 与页面冲突** | 主世界 hook 无法完全隐藏,页面可检测、可绕过、可篡改;hook 不透明还会改变页面行为 | 主世界部分做到最小(只 hook 与上报);录制/拾取等逻辑放隔离世界;严格的透明性要求(原型链、属性描述符、`toString()`);按站点可关闭并降级到纯 CDP 只读 |
 | **选择器脆弱** | 单一 CSS 选择器在真实站点极易失效 | 候选链 + 运行时评分 + 回放失败时自动尝试次优选择器并提示 |
-| **WebView2 多实例死锁** | 浏览器与 AI 面板共用 UI 线程 | 直接继承 ZeroFall 的创建互斥与脚本闸门,不要重新发明 |
-| **AI 破坏性操作** | 参考项目的实际教训 | 策略闸门默认保守,危险动作需确认 |
+| **WebView2 多实例死锁** | 浏览器与 AI 面板共用 UI 线程,一方等待时另一方发起调用会互相阻塞 | 创建互斥 + 脚本闸门,见 `DESIGN-NOTES.md` 第五节 |
+| **AI 破坏性操作** | AI 能驱动页面就能破坏东西 | 策略闸门默认保守,危险动作需确认 |
 | **.NET 10 预览包** | 依赖多个 preview 版本包 | 中央包管理便于统一升级;`Fluxzy` 等 AOT 不友好的依赖已不在依赖树中 |
 
 ---
