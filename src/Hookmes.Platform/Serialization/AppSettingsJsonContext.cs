@@ -1,0 +1,18 @@
+using Hookmes.Platform.Models;
+using System.Text.Json.Serialization;
+
+namespace Hookmes.Platform.Serialization;
+
+/// <summary>System.Text.Json 源生成上下文 —— 无反射序列化,AOT 与裁剪友好。</summary>
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(AppSettings))]
+[JsonSerializable(typeof(GeneralSettings))]
+[JsonSerializable(typeof(LayoutSettings))]
+[JsonSerializable(typeof(BrowserSettings))]
+[JsonSerializable(typeof(TerminalSettings))]
+public partial class AppSettingsJsonContext : JsonSerializerContext
+{
+}

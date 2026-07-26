@@ -1,0 +1,37 @@
+## .NET
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userprefs
+artifacts/
+publish/
+*.binlog
+
+## Rider / VS / VS Code
+.idea/
+.vs/
+.vscode/*
+!.vscode/extensions.json
+
+## Node(前端子项目)
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+
+## 注意:生成的 C# 源文件是刻意提交进仓库的,不要忽略
+## src/Hookmes.PageAgent/Generated/PageAgentScript.g.cs
+## src/Hookmes.AiPanel/Views/AiChatHtml.g.cs
+
+## 运行时产物
+*.log
+.hookmes.db
+.hookmes.db-shm
+.hookmes.db-wal
+
+## 本机配置
+appsettings.Local.json
+*.local.props

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    本项目只承载 build.mjs 生成的 C# 常量,没有任何依赖。
+    node_modules 与 src 不参与编译(见下方 Compile Remove)。
+    生成物 Generated/PageAgentScript.g.cs 刻意提交进仓库,
+    这样常规 dotnet build 不需要安装 Node。
+  -->
+  <ItemGroup>
+    <Compile Remove="node_modules\**" />
+    <None Remove="node_modules\**" />
+    <None Include="src\**\*.ts" />
+    <None Include="build.mjs" />
+    <None Include="package.json" />
+  </ItemGroup>
+
+</Project>

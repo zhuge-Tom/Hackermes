@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hookmes.Base/Hookmes.Base.csproj" />
+    <Project Path="src/Hookmes.Platform/Hookmes.Platform.csproj" />
+    <Project Path="src/Hookmes.Cdp/Hookmes.Cdp.csproj" />
+    <Project Path="src/Hookmes.PageAgent/Hookmes.PageAgent.csproj" />
+    <Project Path="src/Hookmes.Dock/Hookmes.Dock.csproj" />
+    <Project Path="src/Hookmes.Browser/Hookmes.Browser.csproj" />
+    <Project Path="src/Hookmes.Inspector/Hookmes.Inspector.csproj" />
+    <Project Path="src/Hookmes.App/Hookmes.App.csproj" />
+  </Folder>
+</Solution>

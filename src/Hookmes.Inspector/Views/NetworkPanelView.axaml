@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hookmes.Inspector.ViewModels"
+             xmlns:models="using:Hookmes.Inspector.Models"
+             x:Class="Hookmes.Inspector.Views.NetworkPanelView"
+             x:DataType="vm:NetworkPanelViewModel">
+
+  <DockPanel LastChildFill="True">
+
+    <!-- 工具栏 -->
+    <Border DockPanel.Dock="Top" Padding="6,4" BorderThickness="0,0,0,1"
+            BorderBrush="{DynamicResource SemiColorBorder}">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+        <Button Grid.Column="0" Content="清空" Padding="8,2" Command="{Binding ClearCommand}" />
+        <TextBox Grid.Column="1" Margin="6,0" Watermark="过滤 URL / 方法 / 类型"
+                 Text="{Binding FilterText, Mode=TwoWay}" />
+        <CheckBox Grid.Column="2" Content="只看失败" VerticalAlignment="Center"
+                  IsChecked="{Binding OnlyFailed, Mode=TwoWay}" />
+        <TextBlock Grid.Column="3" Margin="10,0,4,0" VerticalAlignment="Center"
+                   FontSize="11" Opacity="0.7" Text="{Binding Summary}" />
+      </Grid>
+    </Border>
+
+    <!-- 详情:选中请求的完整 URL 与发起处调用栈 -->
+    <Border DockPanel.Dock="Bottom" MinHeight="90" MaxHeight="180"
+            Padding="8,6" BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <ScrollViewer>
+        <StackPanel Spacing="4">
+          <TextBlock Text="{Binding Selected.Url}" FontSize="11" TextWrapping="Wrap" />
+
+          <TextBlock FontSize="11" Opacity="0.6"
+                     Text="{Binding Selected.InitiatorKind, StringFormat='发起方式: {0}'}"
+                     IsVisible="{Binding Selected.InitiatorKind, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+          <!-- 这一段是 Page Agent 的核心价值:协议层拿不到发起处的调用栈 -->
+          <SelectableTextBlock FontFamily="Consolas,monospace" FontSize="11"
+                               TextWrapping="Wrap"
+                               Text="{Binding Selected.InitiatorStack}"
+                               IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+          <TextBlock FontSize="11" Opacity="0.45" Text="(该请求没有页面内调用栈,可能由浏览器直接发起)"
+                     IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <DataGrid ItemsSource="{Binding Visible}"
+              SelectedItem="{Binding Selected, Mode=TwoWay}"
+              AutoGenerateColumns="False"
+              IsReadOnly="True"
+              GridLinesVisibility="Horizontal"
+              HeadersVisibility="Column"
+              CanUserResizeColumns="True"
+              FontSize="11">
+      <!--
+        名称列用 Star 吃掉剩余宽度,其余列给紧凑的固定值。
+        固定宽度加起来必须明显小于面板宽度,否则窄面板下后面的列会被整体挤没
+        (底部区在小窗口下往往只有 500 多像素)。主机信息放在详情区,不占列。
+      -->
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="名称" Width="*" Binding="{Binding ShortName}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="方法" Width="52" Binding="{Binding Method}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="状态" Width="64" Binding="{Binding StatusText}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="类型" Width="70" Binding="{Binding ResourceType}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="大小" Width="64" Binding="{Binding SizeText}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="耗时" Width="64" Binding="{Binding DurationText}" x:DataType="models:NetworkEntry" />
+        <DataGridTextColumn Header="发起" Width="56" Binding="{Binding InitiatorKind}" x:DataType="models:NetworkEntry" />
+      </DataGrid.Columns>
+    </DataGrid>
+
+  </DockPanel>
+</UserControl>

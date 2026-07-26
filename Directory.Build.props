@@ -1,0 +1,30 @@
+<Project>
+  <!--
+    与 ZeroFall 的差异:ZeroFall 未做中央包管理与属性上提,十余个版本号在各 csproj 手工重复。
+    Hookmes 把公共属性集中在这里,叶子 csproj 只声明自己独有的东西。
+    源生成器项目 (Hookmes.ToolGen) 需 netstandard2.0,通过 IsToolGenProject 显式退出下面的默认值。
+  -->
+  <PropertyGroup Condition="'$(IsToolGenProject)' != 'true'">
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>nullable</WarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!-- Avalonia 相关项目统一开启编译期绑定,动态绑定处局部 x:CompileBindings="False" -->
+  <PropertyGroup Condition="'$(UsesAvalonia)' == 'true'">
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsToolGenProject)' != 'true'">
+    <PackageReference Include="Microsoft.Bcl.Memory" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

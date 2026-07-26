@@ -1,0 +1,67 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!-- UI 框架 -->
+  <ItemGroup>
+    <PackageVersion Include="Avalonia" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Controls.DataGrid" Version="12.0.1" />
+    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.0.1" />
+    <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
+    <PackageVersion Include="AvaloniaHex" Version="0.1.13" />
+    <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
+  </ItemGroup>
+
+  <!-- 主题 -->
+  <ItemGroup>
+    <PackageVersion Include="Semi.Avalonia" Version="12.0.3" />
+    <PackageVersion Include="Semi.Avalonia.DataGrid" Version="12.0.0" />
+    <PackageVersion Include="Semi.Avalonia.AvaloniaEdit" Version="12.0.0" />
+    <PackageVersion Include="Irihi.Ursa" Version="2.0.1" />
+    <PackageVersion Include="Irihi.Ursa.Themes.Semi" Version="2.0.1" />
+  </ItemGroup>
+
+  <!-- MVVM / DI -->
+  <ItemGroup>
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-preview.5.26302.115" />
+  </ItemGroup>
+
+  <!-- 浏览器 / CDP -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
+  </ItemGroup>
+
+  <!-- 终端 -->
+  <ItemGroup>
+    <PackageVersion Include="Iciclecreek.Avalonia.Terminal" Version="2.0.3" />
+  </ItemGroup>
+
+  <!-- 数据 -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-preview.5.26302.115" />
+  </ItemGroup>
+
+  <!-- 安全:DPAPI 在 .NET Core 起被拆成独立包 -->
+  <ItemGroup>
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+  </ItemGroup>
+
+  <!-- AI -->
+  <ItemGroup>
+    <PackageVersion Include="Markdig" Version="1.1.2" />
+    <PackageVersion Include="LiveMarkdown.Avalonia" Version="2.2.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.0.0-preview.1" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="1.0.2" />
+  </ItemGroup>
+
+  <!-- 源生成器宿主 -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.9" />
+  </ItemGroup>
+</Project>
