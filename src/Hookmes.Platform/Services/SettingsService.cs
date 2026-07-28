@@ -224,6 +224,7 @@ public sealed class SettingsService : ISettingsService
         settings.Layout ??= new LayoutSettings();
         settings.Browser ??= new BrowserSettings();
         settings.Terminal ??= new TerminalSettings();
+        settings.Ai ??= new AiSettings();
 
         settings.Browser.PageAgentDisabledHosts ??= new();
 
@@ -235,6 +236,15 @@ public sealed class SettingsService : ISettingsService
         var terminal = settings.Terminal;
         terminal.FontSize = Math.Clamp(terminal.FontSize, 8, 32);
         terminal.ScrollbackLines = Math.Clamp(terminal.ScrollbackLines, 200, 100_000);
+
+        settings.Ai.Endpoint = string.IsNullOrWhiteSpace(settings.Ai.Endpoint)
+            ? "https://api.openai.com/v1"
+            : settings.Ai.Endpoint.TrimEnd('/');
+        settings.Ai.Model = string.IsNullOrWhiteSpace(settings.Ai.Model) ? "gpt-5-mini" : settings.Ai.Model.Trim();
+        settings.Ai.MaxToolRounds = Math.Clamp(settings.Ai.MaxToolRounds, 1, 64);
+        settings.Ai.McpServers ??= new();
+        settings.Ai.McpServers.RemoveAll(server => string.IsNullOrWhiteSpace(server.Id) || string.IsNullOrWhiteSpace(server.Command));
+        foreach (var server in settings.Ai.McpServers) server.Arguments ??= new();
 
         settings.Browser.MaxCapturedBodyBytes =
             Math.Clamp(settings.Browser.MaxCapturedBodyBytes, 64 * 1024, 64 * 1024 * 1024);

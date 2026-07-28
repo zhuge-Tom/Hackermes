@@ -21,7 +21,7 @@ public sealed record ConsoleEntry(DateTime At, string Level, string Text, string
 /// <item><c>Log.entryAdded</c> —— 浏览器级日志(CSP 违规、资源加载失败等,页面代码看不到这些)</item>
 /// </list>
 /// </summary>
-public sealed class ConsoleStore
+public sealed class ConsoleStore : IConsoleQueryService
 {
     private const int MaxEntries = 1000;
 
@@ -41,6 +41,12 @@ public sealed class ConsoleStore
     public ObservableCollection<ConsoleEntry> Entries { get; } = [];
 
     public event Action? Changed;
+
+    public IReadOnlyList<ConsoleObservation> Read(int last = 100, string? level = null) => Entries
+        .Where(entry => string.IsNullOrWhiteSpace(level) || string.Equals(entry.Level, level, StringComparison.OrdinalIgnoreCase))
+        .Take(Math.Clamp(last, 1, 1000))
+        .Select(entry => new ConsoleObservation(entry.At.ToString("O"), entry.Level, entry.Text, entry.Source))
+        .ToArray();
 
     public void Clear() => UiThreadBridge.Post(() =>
     {

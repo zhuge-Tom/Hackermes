@@ -25,6 +25,10 @@
     <ProjectReference Include="..\Hookmes.Platform\Hookmes.Platform.csproj" />
     <ProjectReference Include="..\Hookmes.Browser\Hookmes.Browser.csproj" />
     <ProjectReference Include="..\Hookmes.Inspector\Hookmes.Inspector.csproj" />
+    <ProjectReference Include="..\Hookmes.Automation\Hookmes.Automation.csproj" />
+    <ProjectReference Include="..\Hookmes.Terminal\Hookmes.Terminal.csproj" />
+    <ProjectReference Include="..\Hookmes.AiPanel\Hookmes.AiPanel.csproj" />
+    <ProjectReference Include="..\Hookmes.Traffic\Hookmes.Traffic.csproj" />
   </ItemGroup>
 
 </Project>

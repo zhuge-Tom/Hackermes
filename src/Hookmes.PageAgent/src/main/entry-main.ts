@@ -2,6 +2,7 @@ import { createTransport } from '../shared/transport';
 import { installFetchHook, installWebSocketHook, installXhrHook } from './net-hook';
 import { installCookieHook, installStorageHook } from './storage-hook';
 import { installRouteHook } from './route-hook';
+import { installRecordingHook } from './record-hook';
 
 /**
  * 主世界入口。
@@ -39,6 +40,7 @@ declare const __HOOKMES_BINDING__: string;
     installStorageHook(transport);
     installCookieHook(transport);
     installRouteHook(transport);
+    installRecordingHook(transport);
 
     transport.send({
       t: 'lifecycle',

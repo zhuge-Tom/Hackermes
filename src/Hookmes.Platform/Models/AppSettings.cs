@@ -21,6 +21,9 @@ public sealed class AppSettings
 
     [JsonPropertyName("terminal")]
     public TerminalSettings Terminal { get; set; } = new();
+
+    [JsonPropertyName("ai")]
+    public AiSettings Ai { get; set; } = new();
 }
 
 public sealed class GeneralSettings
@@ -105,4 +108,35 @@ public sealed class TerminalSettings
 
     [JsonPropertyName("scrollbackLines")]
     public int ScrollbackLines { get; set; } = 5000;
+}
+
+public sealed class AiSettings
+{
+    [JsonPropertyName("endpoint")]
+    public string Endpoint { get; set; } = "https://api.openai.com/v1";
+
+    [JsonPropertyName("model")]
+    public string Model { get; set; } = "gpt-5-mini";
+
+    /// <summary>显式信任模式；默认关闭。API Key 始终存放在 ISecretStore。</summary>
+    [JsonPropertyName("trustedMode")]
+    public bool TrustedMode { get; set; }
+
+    [JsonPropertyName("maxToolRounds")]
+    public int MaxToolRounds { get; set; } = 12;
+
+    [JsonPropertyName("mcpServers")]
+    public List<McpServerSettings> McpServers { get; set; } = new();
+}
+
+public sealed class McpServerSettings
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("command")]
+    public string Command { get; set; } = string.Empty;
+
+    [JsonPropertyName("arguments")]
+    public List<string> Arguments { get; set; } = new();
 }

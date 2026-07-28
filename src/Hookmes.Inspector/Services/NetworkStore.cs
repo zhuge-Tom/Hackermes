@@ -15,7 +15,7 @@ namespace Hookmes.Inspector.Services;
 /// <summary>
 /// 网络记录中心。自动跟随所有已打开的页面会话。
 /// </summary>
-public sealed class NetworkStore
+public sealed class NetworkStore : INetworkQueryService
 {
     /// <summary>列表上限。超出后丢弃最旧的 —— 长时间运行的页面能产生上万条请求。</summary>
     private const int MaxEntries = 2000;
@@ -46,6 +46,14 @@ public sealed class NetworkStore
     public ObservableCollection<NetworkEntry> Entries { get; } = [];
 
     public event Action? Changed;
+
+    public IReadOnlyList<NetworkObservation> Read(int last = 100, bool failuresOnly = false) => Entries
+        .Where(entry => !failuresOnly || entry.IsFailed)
+        .Take(Math.Clamp(last, 1, 2000))
+        .Select(entry => new NetworkObservation(
+            entry.RequestId, entry.Method, entry.Url, entry.Status, entry.StatusText,
+            entry.IsFailed, entry.DurationMs, entry.InitiatorKind, entry.InitiatorStack))
+        .ToArray();
 
     public void Clear()
     {

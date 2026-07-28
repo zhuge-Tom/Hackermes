@@ -83,11 +83,15 @@ public sealed class BrowserTabManager : IBrowserTabManager
             Content = TabContent.NonReloadable(view)
         };
 
-        // 标题跟随页面变化。
+        // 标题跟随页面变化,并广播出去 —— 其他模块(如控制台的上下文提示符)
+        // 需要知道当前页面叫什么,不能只有 Dock 自己知道。
         viewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(BrowserTabViewModel.Title))
-                tab.Title = viewModel.Title;
+            if (e.PropertyName != nameof(BrowserTabViewModel.Title))
+                return;
+
+            tab.Title = viewModel.Title;
+            _eventBus.Publish(new UpdateDockTabTitleEvent(pageId, viewModel.Title));
         };
 
         lock (_gate)

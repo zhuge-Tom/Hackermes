@@ -60,8 +60,12 @@ internal static class AppModuleBootstrap
         new CoreModule(),
         new DockModule(),
         new Browser.BrowserModule(),
-        new Inspector.InspectorModule()
-        // 后续阶段依次接入:AutomationModule、TerminalModule、
-        // AiPanelModule、SidebarModule、SettingsModule
+        new Traffic.TrafficModule(),
+        new Inspector.InspectorModule(),
+        new Automation.AutomationModule(),
+        new Terminal.TerminalModule(),
+        new TrafficIntegrationModule(),
+        new AiPanel.AiPanelModule()
+        // 后续扩展模块:SidebarModule、SettingsModule
     ];
 }

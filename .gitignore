@@ -1,6 +1,7 @@
 ## .NET
 bin/
 obj/
+.tmp-*/
 [Dd]ebug/
 [Rr]elease/
 *.user

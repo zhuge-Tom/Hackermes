@@ -68,17 +68,24 @@ rec start
 
 ## 当前状态
 
-按五个阶段推进,每阶段以"可运行、可验证"为终点。
+按阶段推进,每阶段以"可运行、可验证"为终点。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 0 | 骨架:模块契约、事件总线、五区域布局、Tab 保活、设置持久化 | ✅ 完成 |
 | 1 | CDP 通道:COM 互操作、请求-响应、事件泵、浏览器多标签 | ✅ 完成 |
 | 2 | Page Agent 与检查面板:页面内 Hook、网络面板、控制台面板 | ✅ 完成 |
-| 3 | 统一动作模型:执行器、选择器引擎、录制回放、交互式终端 | 进行中 |
-| 4 | AI 集成:工具集、策略闸门、MCP | 待开始 |
+| 3 | 统一动作模型:执行器、选择器引擎、录制回放、交互式终端 | ✅ 完成 |
+| 4 | AI 集成:工具集、策略闸门、MCP | ✅ 完成 |
+| 5 | 数据包工作台:拦截、分析、编辑、丢弃、响应替换与重放 | ✅ 完成 |
 
 已可用:内置浏览器多标签、CDP 请求-响应与事件订阅、页面内 Hook 与调用栈捕获、网络面板(协议数据与调用栈合并)、控制台面板(console / 未捕获异常 / 浏览器级日志三源合并)、五区域布局与布局持久化。
+
+阶段 3 已接通 `ActionDescriptor → ActionExecutor → CDP` 的统一执行路径、领域 REPL、真实 PTY System Shell、统一动作时间线和版本化 JSON 脚本。Page Agent 会把人工点击、输入、选择与关键按键转换成带候选选择器的动作，可用 `rec start` / `rec stop` 捕获，并用 `save`、`load`、`replay` 保存和回放；`assert` 支持元素存在、消失、文本和表达式断言。
+
+阶段 4 已接入 OpenAI 兼容流式对话和多轮工具调用。页面工具复用阶段 3 的命令注册表，AI 可查询页面、点击、输入、截图、读取 console 与网络流；所有调用统一经过默认保守的策略闸门，写操作弹窗确认，危险工具拒绝，也可显式启用信任模式。MCP 支持配置 stdio server，自动发现并注册其工具。
+
+阶段 5 新增基于 CDP `Fetch` 域的数据包工作台，无需系统代理或根证书即可对内置浏览器的 HTTP(S) 请求/响应执行类似 Burp Intercept / Repeater 的操作。人工可在底部“数据包”页签编辑原始 HTTP，CLI 可使用 `packet ls|show|analyze|diff|replay|intercept|continue|drop|edit`；内部 Agent 共享同一核心服务，并按只读、修改和高风险分级确认。Agent 查看原始包时默认遮蔽认证头与 Cookie。
 
 冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
 
@@ -93,6 +100,10 @@ rec start
 | `Hookmes.Dock` | Tab 保活控件、布局 ViewModel、懒物化 |
 | `Hookmes.Browser` | 浏览器标签页、WebView 生命周期、Agent 装配 |
 | `Hookmes.Inspector` | 网络面板、控制台面板 |
+| `Hookmes.Automation` | 统一动作、选择器、录制回放、断言、时间线和脚本持久化 |
+| `Hookmes.Terminal` | 领域 REPL 与真实 PTY System Shell |
+| `Hookmes.AiPanel` | OpenAI 兼容对话、AI 工具编排、策略闸门和 MCP stdio 桥接 |
+| `Hookmes.Traffic` | CDP Fetch 流量捕获、拦截规则、编辑/丢弃/响应替换与请求重放 |
 | `Hookmes.App` | 启动装配、主窗口、视图定位 |
 
 ---

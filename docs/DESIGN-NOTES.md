@@ -193,5 +193,5 @@ Chromium 的 `file://` 不走网络栈,CDP Network 域不报告,`performance.get
 - **DB 迁移** — 目前尚未落地,规划用 `PRAGMA user_version` + 集中迁移脚本列表,避免迁移逻辑散落到各个 store
 - **Agent 消息分片** — 单条消息超过 64 KB 时直接丢弃字段并标注 `truncated`。大 payload(如完整请求体)需要分片重组协议
 - **隔离世界 Agent** — `agent-iso` 尚未实现,录制与元素拾取依赖它
-- **AI 工具策略闸门** — `IToolPolicyGate` 契约已定义,执行器与确认 UI 待阶段 4 落地
+- **AI 工具策略闸门** — 已落地默认保守策略、确认 UI、会话授权与显式信任模式；后续可细化按域名和工作区路径授权
 - **国际化** — 当前中文硬编码。不做假的语言开关,要做就一次做对

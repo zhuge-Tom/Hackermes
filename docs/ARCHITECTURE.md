@@ -618,6 +618,9 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 **阶段 4 — AI 集成**
 `AiPanel` + 各模块 AI 工具 + 策略闸门 + MCP。目标:能对 AI 说"帮我看看这个表单为什么提交没反应",它能自主截图、点击、读 console、查网络请求并给出结论。
 
+**阶段 5 — 人机共用数据包工作台**
+`Traffic` 以 CDP `Fetch.requestPaused` 为唯一流量修改核心，人工工作台、`packet` CLI 与 Agent 数据包工具只作为三个适配层。默认捕获后立即放行；显式开启 Intercept 后才允许编辑、丢弃和响应替换。Agent 工具按操作粒度进入策略闸门，读取原始包默认脱敏。
+
 ---
 
 ## 十二、关键风险
@@ -638,7 +641,7 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 | 项 | 要求 | 本机现状 |
 |---|---|---|
 | 操作系统 | Windows 10/11 x64 | Windows 11 ✓ |
-| .NET SDK | **10.0** | ✗ **仅有 .NET 8 运行时,无任何 SDK,需安装** |
+| .NET SDK | **10.0** | ✓ 10.0.302 |
 | WebView2 Runtime | 任意近期版本 | 150.0.4078.99 ✓ |
 | Node.js | 18+(仅修改 PageAgent / chat-web 时需要) | v24.14.0 ✓ |
 | Git | — | 2.42.0 ✓ |

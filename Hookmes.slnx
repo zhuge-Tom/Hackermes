@@ -7,6 +7,10 @@
     <Project Path="src/Hookmes.Dock/Hookmes.Dock.csproj" />
     <Project Path="src/Hookmes.Browser/Hookmes.Browser.csproj" />
     <Project Path="src/Hookmes.Inspector/Hookmes.Inspector.csproj" />
+    <Project Path="src/Hookmes.Automation/Hookmes.Automation.csproj" />
+    <Project Path="src/Hookmes.Terminal/Hookmes.Terminal.csproj" />
+    <Project Path="src/Hookmes.AiPanel/Hookmes.AiPanel.csproj" />
+    <Project Path="src/Hookmes.Traffic/Hookmes.Traffic.csproj" />
     <Project Path="src/Hookmes.App/Hookmes.App.csproj" />
   </Folder>
 </Solution>

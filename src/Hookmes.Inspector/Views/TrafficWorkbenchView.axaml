@@ -1,0 +1,52 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hookmes.Inspector.ViewModels"
+             x:Class="Hookmes.Inspector.Views.TrafficWorkbenchView"
+             x:DataType="vm:TrafficWorkbenchViewModel">
+  <Grid RowDefinitions="Auto,2*,3*">
+    <Border Grid.Row="0" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
+      <Grid ColumnDefinitions="Auto,240,Auto,*,Auto,Auto">
+        <Button Grid.Column="0" Content="Refresh" Command="{Binding ReloadCommand}" />
+        <TextBox Grid.Column="1" Margin="8,0" Watermark="Filter URL / method / status" Text="{Binding FilterText, Mode=TwoWay}" />
+        <CheckBox Grid.Column="2" Content="Held only" VerticalAlignment="Center" IsChecked="{Binding OnlyIntercepted, Mode=TwoWay}" />
+        <TextBlock Grid.Column="3" Margin="12,0" VerticalAlignment="Center" Opacity="0.65" Text="{Binding Summary}" />
+        <TextBlock Grid.Column="4" VerticalAlignment="Center" Text="Intercept" FontWeight="SemiBold" />
+        <ToggleSwitch Grid.Column="5" Margin="8,0,0,0" IsChecked="{Binding IsInterceptEnabled, Mode=TwoWay}" />
+      </Grid>
+    </Border>
+
+    <DataGrid Grid.Row="1" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+              AutoGenerateColumns="False" IsReadOnly="True" GridLinesVisibility="Horizontal" FontSize="11">
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="Time" Width="92" Binding="{Binding TimeText}" x:DataType="vm:TrafficExchange" />
+        <DataGridTextColumn Header="Method" Width="70" Binding="{Binding Method}" x:DataType="vm:TrafficExchange" />
+        <DataGridTextColumn Header="Host" Width="160" Binding="{Binding Host}" x:DataType="vm:TrafficExchange" />
+        <DataGridTextColumn Header="Path" Width="*" Binding="{Binding Path}" x:DataType="vm:TrafficExchange" />
+        <DataGridTextColumn Header="Status" Width="70" Binding="{Binding StatusText}" x:DataType="vm:TrafficExchange" />
+      </DataGrid.Columns>
+    </DataGrid>
+
+    <Grid Grid.Row="2" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
+      <TabControl Grid.Row="0" Grid.Column="0" Margin="0,4,2,0">
+        <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" /></TabItem>
+        <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>
+      </TabControl>
+      <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
+        <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>
+        <TabItem Header="Response pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedResponse}" /></TabItem>
+      </TabControl>
+      <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="8,5" Background="{DynamicResource SemiColorFill0}">
+        <SelectableTextBlock Text="{Binding Analysis}" TextWrapping="Wrap" />
+      </Border>
+      <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8" Margin="8,6">
+        <Button Content="Analyze" Command="{Binding AnalyzeCommand}" />
+        <Button Content="Replay" Command="{Binding ReplayCommand}" />
+        <Border Width="1" Margin="5,0" Background="{DynamicResource SemiColorBorder}" />
+        <Button Content="Continue" Command="{Binding ContinueCommand}" />
+        <Button Content="Drop" Command="{Binding DropCommand}" />
+        <Button Content="Fulfill edited response" Command="{Binding FulfillCommand}" />
+        <TextBlock VerticalAlignment="Center" Opacity="0.6" Text="Working…" IsVisible="{Binding IsBusy}" />
+      </StackPanel>
+    </Grid>
+  </Grid>
+</UserControl>

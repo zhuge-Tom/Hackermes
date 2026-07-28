@@ -1,0 +1,70 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hookmes.Terminal.ViewModels"
+             x:Class="Hookmes.Terminal.Views.ConsoleReplView"
+             x:DataType="vm:ConsoleReplViewModel">
+
+  <DockPanel LastChildFill="True">
+
+    <!-- 输入行 -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="6,4"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource SemiColorBorder}">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0"
+                   VerticalAlignment="Center"
+                   Margin="2,0,6,0"
+                   FontSize="11"
+                   Opacity="0.55"
+                   MaxWidth="180"
+                   TextTrimming="CharacterEllipsis"
+                   Text="{Binding Prompt}"
+                   ToolTip.Tip="命令作用的页面" />
+
+        <TextBox Grid.Column="1"
+                 Name="PART_Input"
+                 FontFamily="Consolas,monospace"
+                 FontSize="12"
+                 PlaceholderText="输入命令,help 查看全部"
+                 Text="{Binding Input, Mode=TwoWay}"
+                 IsEnabled="{Binding !IsBusy}">
+          <TextBox.KeyBindings>
+            <KeyBinding Gesture="Enter" Command="{Binding SubmitCommand}" />
+          </TextBox.KeyBindings>
+        </TextBox>
+
+        <TextBlock Grid.Column="2"
+                   VerticalAlignment="Center"
+                   Margin="8,0,2,0"
+                   FontSize="11"
+                   Opacity="0.6"
+                   Text="执行中…"
+                   IsVisible="{Binding IsBusy}" />
+      </Grid>
+    </Border>
+
+    <!-- 输出区 -->
+    <ScrollViewer Name="PART_Scroll" Padding="8,6">
+      <ItemsControl ItemsSource="{Binding Lines}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:ReplLine">
+            <SelectableTextBlock Text="{Binding Text}"
+                                 FontFamily="Consolas,monospace"
+                                 FontSize="12"
+                                 TextWrapping="Wrap"
+                                 Margin="0,1">
+              <SelectableTextBlock.Styles>
+                <!-- 按行类型着色。输入行加重,错误用红,提示用弱化灰 -->
+                <Style Selector="SelectableTextBlock">
+                  <Setter Property="Foreground" Value="{DynamicResource SemiColorText0}" />
+                </Style>
+              </SelectableTextBlock.Styles>
+            </SelectableTextBlock>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+  </DockPanel>
+</UserControl>

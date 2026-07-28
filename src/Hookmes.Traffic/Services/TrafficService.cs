@@ -1,0 +1,223 @@
+using Hookmes.Base.Diagnostics;
+using Hookmes.Cdp.Session;
+using Hookmes.Traffic.Models;
+using Hookmes.Traffic.Rules;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Hookmes.Traffic.Services;
+
+public interface ITrafficService : IAsyncDisposable
+{
+    bool ModificationsEnabled { get; }
+    void SetModificationsEnabled(bool enabled);
+    Task StartCaptureAsync(string pageId, TrafficCaptureOptions? options = null, CancellationToken cancellationToken = default);
+    Task StopCaptureAsync(string pageId, CancellationToken cancellationToken = default);
+    Task ContinueAsync(string id, TrafficRequestEdit? edit = null, CancellationToken cancellationToken = default);
+    Task FailAsync(string id, string reason = "BlockedByClient", CancellationToken cancellationToken = default);
+    Task FulfillAsync(string id, TrafficResponseEdit response, CancellationToken cancellationToken = default);
+    Task<TrafficReplayResult> ReplayAsync(string id, TrafficRequestEdit? edit = null, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Shared, UI-independent HTTP traffic engine backed by the CDP Fetch domain.</summary>
+public sealed class TrafficService : ITrafficService
+{
+    private readonly ICdpSessionRegistry _registry;
+    private readonly TrafficStore _store;
+    private readonly ITrafficRuleSet _rules;
+    private readonly IAppLogger _logger;
+    private readonly ConcurrentDictionary<string, CaptureContext> _contexts = new(StringComparer.Ordinal);
+    private int _modificationsEnabled;
+
+    public TrafficService(ICdpSessionRegistry registry, TrafficStore store, ITrafficRuleSet rules, IAppLogger logger)
+    {
+        _registry = registry;
+        _store = store;
+        _rules = rules;
+        _logger = logger.ForCategory(nameof(TrafficService));
+    }
+
+    public bool ModificationsEnabled => Volatile.Read(ref _modificationsEnabled) != 0;
+    public void SetModificationsEnabled(bool enabled) => Volatile.Write(ref _modificationsEnabled, enabled ? 1 : 0);
+
+    public async Task StartCaptureAsync(string pageId, TrafficCaptureOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        if (_contexts.ContainsKey(pageId)) return;
+        var session = GetSession(pageId);
+        options ??= new TrafficCaptureOptions();
+        var patterns = new List<object> { new { urlPattern = "*", requestStage = "Request" } };
+        if (options.CaptureResponseBodies || options.PauseResponses)
+            patterns.Add(new { urlPattern = "*", requestStage = "Response" });
+        var subscription = await session.SubscribeAsync("Fetch.requestPaused", e => _ = OnPausedAsync(session, options, e), cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await session.SendAsync("Fetch.enable", JsonSerializer.Serialize(new { patterns }), cancellationToken).ConfigureAwait(false);
+            if (!_contexts.TryAdd(pageId, new CaptureContext(session, subscription)))
+                subscription.Dispose();
+        }
+        catch { subscription.Dispose(); throw; }
+    }
+
+    public async Task StopCaptureAsync(string pageId, CancellationToken cancellationToken = default)
+    {
+        if (!_contexts.TryRemove(pageId, out var context)) return;
+        try { await context.Session.SendAsync("Fetch.disable", null, cancellationToken).ConfigureAwait(false); }
+        finally { context.Subscription.Dispose(); }
+    }
+
+    public Task ContinueAsync(string id, TrafficRequestEdit? edit = null, CancellationToken cancellationToken = default)
+    {
+        EnsureModificationAllowed(edit is not null);
+        return ResolvePausedAsync(id, "Fetch.continueRequest", edit is null ? new { requestId = FetchId(id) } : new
+        {
+            requestId = FetchId(id), url = edit.Url, method = edit.Method,
+            postData = edit.Body is null ? null : Convert.ToBase64String(edit.Body),
+            headers = edit.Headers?.Select(HeaderObject).ToArray()
+        }, TrafficState.Continued, cancellationToken);
+    }
+
+    public Task FailAsync(string id, string reason = "BlockedByClient", CancellationToken cancellationToken = default)
+    {
+        EnsureModificationAllowed(true);
+        return ResolvePausedAsync(id, "Fetch.failRequest", new { requestId = FetchId(id), errorReason = reason }, TrafficState.Failed, cancellationToken);
+    }
+
+    public Task FulfillAsync(string id, TrafficResponseEdit response, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(response); EnsureModificationAllowed(true);
+        return ResolvePausedAsync(id, "Fetch.fulfillRequest", new
+        {
+            requestId = FetchId(id), responseCode = response.Status, responsePhrase = response.StatusText,
+            responseHeaders = response.Headers?.Select(HeaderObject).ToArray(),
+            body = response.Body is null ? null : Convert.ToBase64String(response.Body)
+        }, TrafficState.Fulfilled, cancellationToken);
+    }
+
+    public async Task<TrafficReplayResult> ReplayAsync(string id, TrafficRequestEdit? edit = null, CancellationToken cancellationToken = default)
+    {
+        EnsureModificationAllowed(edit is not null);
+        var source = _store.Get(id) ?? throw new KeyNotFoundException($"Traffic item '{id}' was not found.");
+        var session = GetSession(source.PageId);
+        var method = edit?.Method ?? source.Method;
+        var url = edit?.Url ?? source.Url;
+        var headers = edit?.Headers ?? source.RequestHeaders;
+        var body = edit?.Body ?? source.RequestBody;
+        var script = BuildReplayScript(method, url, headers, body);
+        var json = await session.SendAsync("Runtime.evaluate", JsonSerializer.Serialize(new
+        {
+            expression = script, awaitPromise = true, returnByValue = true
+        }), cancellationToken).ConfigureAwait(false);
+        var value = ReadPath(json, "result", "value") ?? throw new InvalidOperationException("Replay returned no result.");
+        var status = value.GetProperty("status").GetInt32();
+        var statusText = value.TryGetProperty("statusText", out var st) ? st.GetString() : null;
+        var responseHeaders = value.GetProperty("headers").EnumerateArray().Select(ReadHeader).ToArray();
+        var responseBody = Convert.FromBase64String(value.GetProperty("body").GetString() ?? string.Empty);
+        return new TrafficReplayResult(status, statusText, responseHeaders, responseBody);
+    }
+
+    private async Task OnPausedAsync(ICdpSession session, TrafficCaptureOptions options, CdpEventArgs args)
+    {
+        string? fetchId = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(args.ParametersJson);
+            var root = doc.RootElement;
+            fetchId = root.GetProperty("requestId").GetString();
+            if (fetchId is null) return;
+            var id = session.PageId + ":" + fetchId;
+            var request = root.GetProperty("request");
+            var responseStage = root.TryGetProperty("responseStatusCode", out var statusEl);
+            var old = _store.Get(id);
+            byte[]? responseBody = old?.ResponseBody;
+            if (responseStage && options.CaptureResponseBodies)
+            {
+                try
+                {
+                    var bodyJson = await session.SendAsync("Fetch.getResponseBody", JsonSerializer.Serialize(new { requestId = fetchId })).ConfigureAwait(false);
+                    using var bodyDoc = JsonDocument.Parse(bodyJson);
+                    var result = bodyDoc.RootElement;
+                    var raw = result.GetProperty("body").GetString() ?? string.Empty;
+                    responseBody = result.TryGetProperty("base64Encoded", out var b64) && b64.GetBoolean() ? Convert.FromBase64String(raw) : Encoding.UTF8.GetBytes(raw);
+                }
+                catch (Exception ex) { _logger.Warn($"Response body unavailable for {id}: {ex.Message}"); }
+            }
+            var message = new TrafficMessage(id, session.PageId, responseStage ? TrafficStage.Response : TrafficStage.Request,
+                TrafficState.Paused, request.GetProperty("method").GetString() ?? "GET", request.GetProperty("url").GetString() ?? string.Empty,
+                ReadRequestHeaders(request), ReadPostData(request) ?? old?.RequestBody,
+                responseStage ? statusEl.GetInt32() : old?.ResponseStatus,
+                root.TryGetProperty("responseStatusText", out var phrase) ? phrase.GetString() : old?.ResponseStatusText,
+                root.TryGetProperty("responseHeaders", out var rhs) ? rhs.EnumerateArray().Select(ReadHeader).ToArray() : old?.ResponseHeaders ?? [],
+                responseBody, root.TryGetProperty("resourceType", out var rt) ? rt.GetString() ?? string.Empty : old?.ResourceType ?? string.Empty,
+                old?.CapturedAt ?? DateTimeOffset.UtcNow);
+            _store.Put(message);
+
+            var rule = ModificationsEnabled ? _rules.Match(message) : null;
+            if (rule is not null)
+            {
+                _store.Put(message with { AppliedRuleId = rule.Id });
+                if (rule.Pause) return;
+                if (rule.Fail) { await FailAsync(id, rule.FailureReason).ConfigureAwait(false); return; }
+                if (responseStage && rule.ResponseEdit is not null) { await FulfillAsync(id, rule.ResponseEdit).ConfigureAwait(false); return; }
+                if (!responseStage && rule.RequestEdit is not null) { await ContinueAsync(id, rule.RequestEdit).ConfigureAwait(false); return; }
+            }
+            if ((responseStage && options.PauseResponses) || (!responseStage && options.PauseRequests)) return;
+            await ContinueInternalAsync(session, id, fetchId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("Failed to process Fetch.requestPaused.", ex);
+            if (fetchId is not null) try { await session.SendAsync("Fetch.continueRequest", JsonSerializer.Serialize(new { requestId = fetchId })).ConfigureAwait(false); } catch { }
+        }
+    }
+
+    private async Task ContinueInternalAsync(ICdpSession session, string id, string fetchId)
+    {
+        await session.SendAsync("Fetch.continueRequest", JsonSerializer.Serialize(new { requestId = fetchId })).ConfigureAwait(false);
+        UpdateState(id, TrafficState.Continued);
+    }
+
+    private async Task ResolvePausedAsync(string id, string method, object parameters, TrafficState state, CancellationToken ct)
+    {
+        var item = _store.Get(id) ?? throw new KeyNotFoundException($"Traffic item '{id}' was not found.");
+        if (item.State != TrafficState.Paused) throw new InvalidOperationException($"Traffic item '{id}' is not paused.");
+        await GetSession(item.PageId).SendAsync(method, JsonSerializer.Serialize(parameters), ct).ConfigureAwait(false);
+        UpdateState(id, state);
+    }
+
+    private void UpdateState(string id, TrafficState state)
+    {
+        var item = _store.Get(id); if (item is not null) _store.Put(item with { State = state });
+    }
+
+    private ICdpSession GetSession(string pageId) => _registry.Get(pageId) ?? throw new InvalidOperationException($"No live CDP session for page '{pageId}'.");
+    private void EnsureModificationAllowed(bool modifying) { if (modifying && !ModificationsEnabled) throw new InvalidOperationException("Traffic modifications are disabled. Enable them explicitly first."); }
+    private static string FetchId(string id) { var split = id.IndexOf(':'); return split < 0 ? id : id[(split + 1)..]; }
+    private static object HeaderObject(TrafficHeader h) => new { name = h.Name, value = h.Value };
+    private static TrafficHeader ReadHeader(JsonElement h) => new(h.GetProperty("name").GetString() ?? string.Empty, h.GetProperty("value").GetString() ?? string.Empty);
+    private static TrafficHeader[] ReadRequestHeaders(JsonElement request) => request.GetProperty("headers").EnumerateObject().Select(x => new TrafficHeader(x.Name, x.Value.GetString() ?? x.Value.ToString())).ToArray();
+    private static byte[]? ReadPostData(JsonElement request) => request.TryGetProperty("postData", out var p) ? Encoding.UTF8.GetBytes(p.GetString() ?? string.Empty) : null;
+    private static JsonElement? ReadPath(string json, params string[] path) { using var d = JsonDocument.Parse(json); var e = d.RootElement; foreach (var p in path) if (!e.TryGetProperty(p, out e)) return null; return e.Clone(); }
+
+    private static string BuildReplayScript(string method, string url, IReadOnlyList<TrafficHeader> headers, byte[]? body)
+    {
+        var normalizedHeaders = headers.GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => string.Join(", ", x.Select(h => h.Value)), StringComparer.OrdinalIgnoreCase);
+        var init = JsonSerializer.Serialize(new { method, headers = normalizedHeaders });
+        var target = JsonSerializer.Serialize(url);
+        var bodyExpression = body is null ? "undefined" : $"Uint8Array.from(atob('{Convert.ToBase64String(body)}'),c=>c.charCodeAt(0))";
+        return $"(async()=>{{const i={init};i.body={bodyExpression};const r=await fetch({target},i);const b=new Uint8Array(await r.arrayBuffer());let s='';for(let n=0;n<b.length;n+=32768)s+=String.fromCharCode(...b.subarray(n,n+32768));return {{status:r.status,statusText:r.statusText,headers:[...r.headers].map(x=>({{name:x[0],value:x[1]}})),body:btoa(s)}};}})()";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var pageId in _contexts.Keys.ToArray()) try { await StopCaptureAsync(pageId).ConfigureAwait(false); } catch { }
+    }
+
+    private sealed record CaptureContext(ICdpSession Session, IDisposable Subscription);
+}

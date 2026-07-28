@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Hookmes Self Test</title></head>
+<body>
+  <h1>Hookmes Self Test</h1>
+  <button id="test-btn" type="button">测试点击</button>
+  <span id="btn-result">未点击</span>
+  <label>输入 <input id="test-input"></label>
+  <span id="input-echo"></span>
+  <button id="disabled-btn" disabled>禁用</button>
+  <script>
+    document.querySelector('#test-btn').addEventListener('click', () => {
+      document.querySelector('#btn-result').textContent = '点击成功';
+    });
+    document.querySelector('#test-input').addEventListener('input', event => {
+      document.querySelector('#input-echo').textContent = event.target.value;
+    });
+    console.info('hookmes-selftest-ready');
+    fetch('selftest-page.html?probe=1').then(() => console.info('hookmes-selftest-fetch-ok'));
+  </script>
+</body>
+</html>

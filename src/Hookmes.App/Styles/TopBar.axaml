@@ -1,0 +1,69 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    顶栏按钮。整体克制:默认无背景无边框,只有悬停与激活才有视觉反馈。
+    工具栏上七八个控件如果各自带边框和实色背景,会把注意力从内容上抢走。
+  -->
+
+  <Style Selector="Button.toolbar">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="8,5" />
+    <Setter Property="Foreground" Value="{DynamicResource SemiColorText1}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.toolbar:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource SemiColorFill0}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource SemiColorText0}" />
+  </Style>
+
+  <Style Selector="Button.toolbar:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource SemiColorFill1}" />
+  </Style>
+
+  <!-- 纯图标按钮:方形,内容居中 -->
+  <Style Selector="Button.iconOnly">
+    <Setter Property="Padding" Value="6" />
+    <Setter Property="Width" Value="30" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <!--
+    面板开关的激活态用前景色而非填充背景。
+    实心色块在深色主题下过于刺眼,而且三个开关并排时会连成一片。
+  -->
+  <Style Selector="Button.panelToggle">
+    <Setter Property="Foreground" Value="{DynamicResource SemiColorText3}" />
+  </Style>
+
+  <Style Selector="Button.panelToggle.active">
+    <Setter Property="Foreground" Value="{DynamicResource SemiColorPrimary}" />
+  </Style>
+
+  <Style Selector="Button.panelToggle.active /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource SemiColorFill0}" />
+  </Style>
+
+  <!-- 顶栏里的分隔线 -->
+  <Style Selector="Border.toolbarSeparator">
+    <Setter Property="Width" Value="1" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Margin" Value="6,0" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Background" Value="{DynamicResource SemiColorBorder}" />
+  </Style>
+
+  <!-- 产品标识 -->
+  <Style Selector="TextBlock.brand">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="6,0,4,0" />
+  </Style>
+
+</Styles>

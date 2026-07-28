@@ -4,6 +4,7 @@ using Hookmes.Inspector.Services;
 using Hookmes.Inspector.ViewModels;
 using Hookmes.Inspector.Views;
 using Hookmes.Platform.Registries;
+using Hookmes.Platform.Services;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Linq;
@@ -25,6 +26,8 @@ public sealed class InspectorModule : IModule
     {
         services.AddSingleton<NetworkStore>();
         services.AddSingleton<ConsoleStore>();
+        services.AddSingleton<INetworkQueryService>(sp => sp.GetRequiredService<NetworkStore>());
+        services.AddSingleton<IConsoleQueryService>(sp => sp.GetRequiredService<ConsoleStore>());
     }
 
     public void Initialize(IServiceProvider serviceProvider)

@@ -1,0 +1,104 @@
+using Hookmes.AiPanel.Tools;
+using Hookmes.Automation.Commands;
+using Hookmes.Automation.Packet;
+using System;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Hookmes.App;
+
+/// <summary>Agent-facing packet tools with per-operation risk classification.</summary>
+internal static class TrafficAiToolRegistrar
+{
+    public static void Register(IAiToolRegistry registry, IPacketCommandService packets)
+    {
+        Register(registry, packets, "packet_list", "List captured HTTP packets. Values are not returned.",
+            AiToolRisk.ReadOnly, "filter", false, a => Args("ls", Optional(a, "filter")));
+        Register(registry, packets, "packet_show", "Show a captured HTTP request or response. Sensitive header values are redacted.",
+            AiToolRisk.ReadOnly, "id", true, a => Args("show", Required(a, "id"), Optional(a, "side", "request")));
+        Register(registry, packets, "packet_analyze", "Analyze an HTTP packet for protocol anomalies and sensitive fields.",
+            AiToolRisk.ReadOnly, "id", true, a => Args("analyze", Required(a, "id"), Optional(a, "side", "request")));
+        Register(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
+            AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
+        Register(registry, packets, "packet_replay", "Replay a captured HTTP request in its browser session.",
+            AiToolRisk.Mutating, "id", true, a => Args("replay", Required(a, "id")));
+        Register(registry, packets, "packet_intercept", "Enable or disable holding browser requests for inspection.",
+            AiToolRisk.Mutating, "enabled", true, a => Args("intercept", Required(a, "enabled") == "true" ? "on" : "off"));
+        Register(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
+            AiToolRisk.Mutating, "id", true, a => Args("continue", Required(a, "id")));
+        Register(registry, packets, "packet_drop", "Drop a held HTTP request.",
+            AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
+        Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
+            AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+    }
+
+    private static void Register(IAiToolRegistry registry, IPacketCommandService packets, string name,
+        string description, AiToolRisk risk, string primary, bool required,
+        Func<JsonElement, string> arguments)
+    {
+        var schema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                id = new { type = "string" }, leftId = new { type = "string" }, rightId = new { type = "string" },
+                side = new { type = "string", @enum = new[] { "request", "response" } },
+                filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" }
+            },
+            required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
+            additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition(name, description, schema, risk,
+            async (invocation, ct) => await ExecuteAsync(packets, arguments(invocation.Arguments), name == "packet_show", ct)));
+    }
+
+    private static string[] RequiredFields(string name, string primary) => name switch
+    {
+        "packet_diff" => ["leftId", "rightId"],
+        "packet_edit" => ["id", "side", "rawHttp"],
+        _ => [primary]
+    };
+
+    private static async ValueTask<ToolResult> ExecuteAsync(
+        IPacketCommandService packets, string args, bool redact, CancellationToken ct)
+    {
+        var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var context = new CommandContext
+        {
+            Args = tokens,
+            PageId = null,
+            RawInput = "packet " + args,
+            RawArguments = args
+        };
+        var result = await PacketCommandRegistrar.ExecuteAsync(packets, context, ct).ConfigureAwait(false);
+        var output = redact ? Redact(result.Output) : result.Output;
+        return result.Success ? ToolResult.Ok(output) : ToolResult.Fail(output);
+    }
+
+    private static string Required(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) ? property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? string.Empty : property.GetRawText() : throw new ArgumentException($"Missing {name}.");
+    private static string Optional(JsonElement value, string name, string fallback = "") =>
+        value.TryGetProperty(name, out var property) ? property.GetString() ?? fallback : fallback;
+    private static string Args(params string[] values) => string.Join(' ', values);
+    private static string EscapeRaw(string raw) => raw.Replace("\r\n", "\\r\\n", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal);
+
+    private static string Redact(string raw)
+    {
+        var lines = raw.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var separator = lines[i].IndexOf(':');
+            if (separator <= 0) continue;
+            var name = lines[i][..separator].Trim();
+            if (name.Equals("Authorization", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("X-Api-Key", StringComparison.OrdinalIgnoreCase))
+                lines[i] = lines[i][..(separator + 1)] + " <redacted>\r";
+        }
+        return string.Join('\n', lines);
+    }
+}

@@ -7,47 +7,74 @@
 
   <DockPanel LastChildFill="True">
 
-    <!-- 顶栏。阶段 2 拆成独立的 TopBarView,届时接入地址栏、设备模拟、拾取器、录制 -->
+    <!-- 顶栏 -->
     <Border DockPanel.Dock="Top"
-            Height="40"
+            Height="42"
             Padding="8,0"
             Background="{DynamicResource PanelBackgroundBrush}"
             BorderBrush="{DynamicResource SemiColorBorder}"
             BorderThickness="0,0,0,1">
       <Grid ColumnDefinitions="Auto,*,Auto">
 
-        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-          <TextBlock Text="Hookmes"
-                     FontWeight="SemiBold"
-                     VerticalAlignment="Center"
-                     Margin="4,0,12,0" />
-          <Button Content="打开文件夹"
-                  Classes="Tertiary"
-                  Command="{Binding OpenFolderCommand}" />
-          <Button Content="新建标签页"
-                  Command="{Binding NewBrowserTabCommand}"
-                  ToolTip.Tip="打开一个内置浏览器标签页" />
+        <!-- 左:标识与主要操作 -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Classes="brand" Text="Hookmes" />
+          <Border Classes="toolbarSeparator" />
+
+          <Button Classes="toolbar" Command="{Binding OpenFolderCommand}" ToolTip.Tip="打开工作区目录">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Width="15" Height="15" Data="{StaticResource IconFolder}" />
+              <TextBlock Text="打开" FontSize="12" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <Button Classes="toolbar" Command="{Binding NewBrowserTabCommand}" ToolTip.Tip="新建浏览器标签页">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Width="13" Height="13" Data="{StaticResource IconPlus}" />
+              <TextBlock Text="新标签页" FontSize="12" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
         </StackPanel>
 
+        <!-- 中:当前工作区 -->
         <TextBlock Grid.Column="1"
                    Text="{Binding WorkspaceName}"
                    VerticalAlignment="Center"
                    HorizontalAlignment="Center"
-                   Opacity="0.6"
-                   FontSize="12" />
+                   Opacity="0.5"
+                   FontSize="12"
+                   TextTrimming="CharacterEllipsis" />
 
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-          <ToggleButton Content="左"
-                        IsChecked="{Binding DockLayout.Left.IsVisible, Mode=TwoWay}"
-                        ToolTip.Tip="切换左侧面板" />
-          <ToggleButton Content="下"
-                        IsChecked="{Binding DockLayout.Bottom.IsVisible, Mode=TwoWay}"
-                        ToolTip.Tip="切换底部面板" />
-          <ToggleButton Content="右"
-                        IsChecked="{Binding DockLayout.Right.IsVisible, Mode=TwoWay}"
-                        ToolTip.Tip="切换右侧面板" />
-          <Button Content="主题"
-                  Command="{Binding ToggleThemeCommand}" />
+        <!-- 右:布局与外观 -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="1" VerticalAlignment="Center">
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Left.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Left"
+                  ToolTip.Tip="左侧面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelLeft}" />
+          </Button>
+
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Bottom.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Bottom"
+                  ToolTip.Tip="底部面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelBottom}" />
+          </Button>
+
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Right.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Right"
+                  ToolTip.Tip="右侧面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelRight}" />
+          </Button>
+
+          <Border Classes="toolbarSeparator" />
+
+          <Button Classes="toolbar iconOnly"
+                  Command="{Binding ToggleThemeCommand}"
+                  ToolTip.Tip="切换明暗主题">
+            <PathIcon Width="15" Height="15" Data="{StaticResource IconTheme}" />
+          </Button>
         </StackPanel>
 
       </Grid>

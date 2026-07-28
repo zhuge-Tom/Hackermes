@@ -63,21 +63,7 @@ public sealed class CoreModule : IModule
 
         // 底部区已由 Inspector 模块的网络/控制台面板接管,这里不再放占位页。
 
-        dock.RegisterTab(new DockTabRegistration
-        {
-            Region = DockPosition.Right,
-            TabId = "ai",
-            Title = "AI 助手",
-            IconKey = "SemiIconComment",
-            IsClosable = false,
-            Order = 0,
-            CreateTab = () => new DockTabItemViewModel
-            {
-                Id = "ai",
-                Title = "AI 助手",
-                Content = BuildPlaceholder("AI 助手", "阶段 4 由 AiPanel 模块接管")
-            }
-        });
+        // 右侧区域由 AiPanel 模块直接注册，不再保留阶段 0 占位页。
     }
 
     private static Control BuildWelcomeView()
