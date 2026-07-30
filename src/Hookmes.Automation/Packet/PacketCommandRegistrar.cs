@@ -37,7 +37,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -58,6 +58,9 @@ public static class PacketCommandRegistrar
                 "body-info" => await BodyInfoAsync(service, context, ct),
                 "body-read" => await BodyReadAsync(service, context, ct),
                 "body-edit" => await BodyEditAsync(service, context, ct),
+                "draft-list" => await DraftListAsync(service, ct),
+                "draft-show" => await DraftShowAsync(service, context, ct),
+                "draft-discard" => await DraftDiscardAsync(service, context, ct),
                 "replay" => await Mutate(() => service.ReplayAsync(Require(context, 1, "id"), ct), "Packet replayed."),
                 "intercept" => await InterceptAsync(service, Require(context, 1, "on|off"), ct),
                 "intercept-mode" => await InterceptionModeAsync(service, Require(context, 1, "request|response|both|off"), ct),
@@ -66,7 +69,7 @@ public static class PacketCommandRegistrar
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
+                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
@@ -166,6 +169,37 @@ public static class PacketCommandRegistrar
         if (service is not IPacketBodyReadService bodies) return CommandResult.Fail("This packet backend does not support ranged body reads.");
         var result = await bodies.DescribeBodyAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
         return CommandResult.Ok($"length={result.Length}\tsha256={result.Sha256}\tcontent-type={result.ContentType ?? "-"}\tcharset={result.Charset ?? "-"}");
+    }
+
+    private static async Task<CommandResult> DraftListAsync(IPacketCommandService service, CancellationToken ct)
+    {
+        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
+        var items = await drafts.ListPendingEditsAsync(ct);
+        return CommandResult.Ok(items.Count == 0 ? "No pending packet edits." : string.Join(Environment.NewLine,
+            items.Select(FormatDraft)));
+    }
+
+    private static async Task<CommandResult> DraftShowAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
+        var item = await drafts.GetPendingEditAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
+        return item is null ? CommandResult.Fail("Pending packet edit was not found.") : CommandResult.Ok(FormatDraft(item));
+    }
+
+    private static async Task<CommandResult> DraftDiscardAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
+        var discarded = await drafts.DiscardPendingEditAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
+        return discarded ? CommandResult.Ok("Pending packet edit discarded.") : CommandResult.Fail("Pending packet edit was not found.");
+    }
+
+    private static string FormatDraft(PacketEditDraftStatus draft)
+    {
+        var failure = draft.LastCommitFailure is null ? "-" :
+            $"attempts={draft.LastCommitFailure.Attempts}:{draft.LastCommitFailure.Message}";
+        return $"{draft.Id}\t{draft.Side}\tpending={draft.Pending}\t" +
+            $"before={draft.Before.Length}/{draft.Before.Sha256}/cl:{draft.Before.ContentLength ?? "-"}\t" +
+            $"after={draft.After.Length}/{draft.After.Sha256}/cl:{draft.After.ContentLength ?? "-"}\tfailure={failure}";
     }
 
     private static async Task<CommandResult> ParameterListAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)

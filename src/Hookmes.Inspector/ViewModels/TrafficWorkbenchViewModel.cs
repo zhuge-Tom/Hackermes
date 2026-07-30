@@ -30,6 +30,8 @@ public interface ITrafficWorkbenchService
         string data, string encoding, CancellationToken cancellationToken);
     Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count,
         string encoding, CancellationToken cancellationToken);
+    Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken);
+    Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken);
     Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken);
     IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket);
@@ -84,7 +86,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     public ObservableCollection<TrafficParameterItem> Parameters { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private TrafficExchange? _selected;
     [ObservableProperty] private string _filterText = string.Empty;
     [ObservableProperty] private string _methodFilter = string.Empty;
@@ -109,6 +111,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _binaryCount = "0";
     [ObservableProperty] private string _binaryEncoding = "hex";
     [ObservableProperty] private string _binaryData = string.Empty;
+    [ObservableProperty] private string _binaryDraftStatus = "No pending binary edit.";
     [ObservableProperty] private string _archivePath = "traffic.har";
     [ObservableProperty] private string _archiveFilter = string.Empty;
     [ObservableProperty] private string _parameterSide = "request";
@@ -189,6 +192,19 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
             throw new ArgumentException("Binary offset and count must be integers.");
         Analysis = await _service.EditBinaryBodyAsync(Selected!.Id, BinarySide, BinaryKind,
             offset, count, BinaryData, BinaryEncoding, ct);
+        await LoadBinaryDraftStatusAsync(ct);
+    });
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task RefreshBinaryDraftAsync() => ExecuteAsync(LoadBinaryDraftStatusAsync);
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task DiscardBinaryDraftAsync() => ExecuteAsync(async ct =>
+    {
+        var discarded = await _service.DiscardBinaryDraftAsync(Selected!.Id, BinarySide, ct);
+        BinaryDraftStatus = discarded ? "Pending binary edit discarded; original body and headers restored." : "No pending binary edit.";
+        Analysis = BinaryDraftStatus;
+        if (discarded) Refresh();
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
@@ -297,6 +313,12 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     {
         if (Selected is null) { ApplyAnnotation(null); return; }
         ApplyAnnotation(_service.GetAnnotation(Selected.Id));
+    }
+
+    private async Task LoadBinaryDraftStatusAsync(CancellationToken cancellationToken)
+    {
+        BinaryDraftStatus = await _service.GetBinaryDraftStatusAsync(Selected!.Id, BinarySide, cancellationToken)
+            ?? "No pending binary edit.";
     }
 
     private void ApplyAnnotation(TrafficAnnotationItem? value)

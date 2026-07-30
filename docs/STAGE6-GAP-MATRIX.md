@@ -8,18 +8,18 @@
 |---|---:|---:|---:|---|---|
 | 捕获、筛选、分页和查看原始请求/响应 | ✅ | ✅ | ✅ | Traffic Workbench；`packet ls/show`；`packet_list/show` | Agent `list` 结果不支持与 UI 相同的结构化复合筛选/分页 |
 | 协议异常、敏感字段分析 | ✅ | ✅ | ✅ | Analyze；`packet analyze`；`packet_analyze` | 规则集固定，缺少可扩展分析器与发现项定位到编辑器 |
-| 语义 Diff | ✅ | ✅ | ✅ | Comparer；`packet diff` / `compare`；`packet_diff` / `packet_compare_structured`；持久 Session 已有 `compare-session` 与 `comparison_session_*` CRUD | UI 仍需手输 packet id，且尚未提供持久 Session 的完整 CRUD 与 Traffic/Repeater 当前选择直填 |
+| 语义 Diff | ✅ | ✅ | ✅ | Comparer 支持 Traffic/Repeater 来源直填与持久 Session CRUD；`packet diff` / `compare` / `compare-session`；`packet_diff` / `packet_compare_structured` / `comparison_session_*` | Repeater 来源仍需显式刷新后选择；后续可增加从其他工作台一键发送到左右槽位 |
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | Request Intercept；`packet intercept/continue/drop`；对应 Agent 工具 | 已具备基本对等性 |
 | 响应拦截与 Fulfill | ✅ | ✅ | ✅ | UI 有独立 Response Intercept；CLI `packet intercept-mode request|response|both|off`；Agent `packet_intercept_mode`；均复用同一捕获服务 | `packet intercept on|off` 保留为仅控制请求拦截的兼容入口 |
 | 原始 HTTP 文本编辑并应用 | ✅ | ✅ | ✅ | Request/Response editor；`packet edit`；`packet_edit` | 需补编辑前后 Content-Length/Transfer-Encoding 一致性提示 |
 | 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters` 页读取/修改 query、form 和顶层 JSON；`packet param-list/param-set`；`packet_parameters/packet_parameter_set`（只读结果遮蔽敏感值，修改为 Dangerous） | UI 修改先应用到文本编辑器、CLI/Agent `param-set` 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON、multipart、Cookie 和 Header 参数 |
 | 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor；`body-info/body-read`；`packet_body_info/chunk` | UI 缺少长度/SHA-256 固定摘要、分块导航与 offset 进度视图 |
-| Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | Binary editor；`packet body-edit`；`packet_body_edit`；`TrafficIntegrationService` 以 `_binaryEdited` 跟踪暂存修改，Continue 对请求提交 `TrafficRequestEdit`、对响应提交 `Fulfill`，成功后才清标记 | 三端已有实际提交路径；仍缺显式的暂存状态/放弃修改 UI，以及真实 echo 对修改后字节的回归断言 |
+| Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | `IPacketEditDraftService` 保存首次快照、前后长度/SHA-256/Content-Length和最近失败；Binary editor 可 Refresh/Discard；CLI `draft-list/show/discard`；Agent `packet_edit_drafts/draft/discard`；提交失败保留可重试 | 仍需真实 echo 对修改后字节、响应 Fulfill 与 CDP 失败重试执行验收；提交结果尚未形成持久审计记录 |
 | 请求重放 | ✅ | ✅ | ✅ | Replay；`packet replay`；`packet_replay` | 已具备基本对等性；后续应支持显式超时和取消结果 |
 | Repeater 草稿与多轮历史 | ✅ | ✅ | ✅ | Repeater Workbench；`repeater ls/create/send/rename/delete/clear`；Agent `repeater_list/create/send/rename/delete/clear_history` | UI 只显示最新响应，不能逐轮选择和比较 |
 | 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 支持路径型 JSON export 与 replace/merge import；`rule ...`；`traffic_rule_list/change`；UI 适配层直接调用 `ITrafficRuleManager.ExportJson/ImportJson` | UI 仍缺系统文件选择器；复杂 request/response edit 规则没有完整表单 |
 | 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
-| HAR / Hookmes JSON 导入导出 | ✅ | ✅ | — | Traffic Workbench `Archive` 路径栏与 Import/Export；`packet export/import`；UI 适配层复用 `PacketArchiveCodec` 与 `IPacketArchiveService` | UI 仍缺系统文件选择器和覆盖确认；Agent 没有受限路径/附件式归档工具 |
+| HAR / Hookmes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench `Archive`；`packet export/import`；Agent `packet_archive_export/import` 只收发内容、不接受路径，复用 `PacketArchiveCodec/IPacketArchiveService`，限制 500 entries / 2 MiB；批量导出为 Dangerous、导入为 Mutating | UI 仍缺系统文件选择器和覆盖确认；Agent 大归档需先过滤、分批交换，且导出内容可能包含 body secrets |
 | 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用 Traffic Store 和版本化持久化服务 | 缺保留期、容量、清理和存储占用管理入口 |
 | 操作安全与审计 | △ | △ | ✅ | Agent 风险分级；CLI 根命令标记 mutating；持久化原子替换/备份 | 人工/CLI 缺统一的操作审计记录、撤销和修改前后 hash |
 
@@ -27,13 +27,13 @@
 
 ### P0：固化“更改包”的一致提交语义
 
-当前源码已经避免“只改 Store、Continue 发送旧 body”：二进制修改由 `_binaryEdited` 标记，Request Continue 携带更新后的 body/headers，Response Continue 转为 Fulfill；标记仅在 CDP 操作成功后清除。UI 的文本 Continue/Replay/Fulfill 路径也会优先合并暂存的二进制 body。
+编辑草稿已升级为 `IPacketEditDraftService` 公共契约：首次编辑保存原 body/header 快照，三端可查看 pending 的前后长度、SHA-256、Content-Length和最近提交失败，也可 Discard 精确恢复原状态。Request Continue 携带草稿 body/headers，Response Continue 转为 Fulfill；只有 CDP 成功后才清草稿，失败保留并累计 attempts。
 
-下一步不是重新实现提交，而是把已存在的语义固化为公共契约：
+剩余 P0 工作以执行证据和审计为主：
 
-1. 将 `_binaryEdited` 的隐式标记升级为可查询的编辑草稿状态，允许三端显示 pending/committed/failed。
-2. 补 `discard-draft`；将现有 Continue/Fulfill 明确命名或返回为 `apply-and-continue` / `apply-and-fulfill` 结果。
-3. 操作返回旧/新长度、SHA-256、Content-Length 变化和最终 TrafficState；失败时保留暂存标记以便重试。
+1. 为 apply-and-continue / apply-and-fulfill 返回最终 TrafficState 和可持久追踪的操作结果。
+2. 在 loopback 与真实 CDP 验收中断言服务端/浏览器实际收到的字节。
+3. 将失败重试、Discard 和成功提交纳入统一审计日志。
 
 验收：同一个暂停请求分别从 UI、CLI、Agent 修改二进制 body 后继续，本地 echo 服务收到完全相同的新字节；响应 body 修改走 Fulfill 并返回新字节；模拟 CDP 失败后暂存标记仍存在且可重试。
 
@@ -41,8 +41,7 @@
 
 - CLI/Agent 独立 request/response/both/off 拦截模式已有源码入口，等待统一构建与真实 CDP 验收。
 - UI：为现有 HAR/Hookmes JSON 与规则导入导出路径栏补系统文件选择器、覆盖确认和最近路径。
-- UI：Repeater 逐轮历史选择/比较；持久 Comparison Session 的 list/create/rename/recalculate/delete，并能从 Traffic/Repeater 当前选择直接填充左右来源。
-- Agent：为 HAR/Hookmes JSON 提供受限路径或附件式归档入口。
+- UI：Repeater 逐轮历史选择/比较；为归档与规则路径栏补系统文件选择器、覆盖确认和最近路径。
 
 验收：每项公共服务能力至少有一个人工入口、一个 CLI 命令和一个具备正确风险等级的 Agent 工具；契约测试验证三者调用相同服务结果，而不是复制逻辑。
 

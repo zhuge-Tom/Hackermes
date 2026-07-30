@@ -37,8 +37,74 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
         Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
             AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+        if (packets is IPacketEditDraftService)
+        {
+            Register(registry, packets, "packet_edit_drafts", "List pending binary edits with before/after length, SHA-256, Content-Length and last commit failure.",
+                AiToolRisk.ReadOnly, "id", false, _ => "draft-list");
+            Register(registry, packets, "packet_edit_draft", "Inspect one pending binary edit and its latest commit failure.",
+                AiToolRisk.ReadOnly, "id", true, a => Args("draft-show", Required(a, "id"), Optional(a, "side", "request")));
+            Register(registry, packets, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
+                AiToolRisk.Mutating, "id", true, a => Args("draft-discard", Required(a, "id"), Optional(a, "side", "request")));
+        }
         if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
         if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
+        if (packets is IPacketArchiveService archive) RegisterArchiveTools(registry, archive);
+    }
+
+    private static void RegisterArchiveTools(IAiToolRegistry registry, IPacketArchiveService archive)
+    {
+        var exportSchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                format = new { type = "string", @enum = new[] { "hookmesJson", "har" } },
+                filter = new { type = "string" }
+            }, required = new[] { "format" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_archive_export",
+            $"Export up to {PacketArchiveContent.MaximumEntries} filtered packets as bounded JSON/HAR content. " +
+            "No filesystem path is accepted. Bulk packet data may contain secrets and requires explicit confirmation.",
+            exportSchema, AiToolRisk.Dangerous, async (invocation, ct) =>
+            {
+                try
+                {
+                    var args = invocation.Arguments;
+                    var formatText = Required(args, "format");
+                    var entries = await archive.ExportArchiveAsync(Optional(args, "filter", null!), ct).ConfigureAwait(false);
+                    var content = PacketArchiveContent.Serialize(entries, PacketArchiveContent.ParseFormat(formatText));
+                    return ToolResult.Ok(JsonSerializer.Serialize(new { format = formatText, count = entries.Count, content }));
+                }
+                catch (Exception ex) when (ex is ArgumentException or System.IO.InvalidDataException)
+                {
+                    return ToolResult.Fail(ex.Message);
+                }
+            }));
+
+        var importSchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                format = new { type = "string", @enum = new[] { "hookmesJson", "har" } },
+                content = new { type = "string", maxLength = PacketArchiveContent.MaximumUtf8Bytes }
+            }, required = new[] { "format", "content" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_archive_import",
+            $"Import bounded JSON/HAR content into packet history (maximum {PacketArchiveContent.MaximumEntries} entries). " +
+            "No filesystem path is accepted.", importSchema, AiToolRisk.Mutating, async (invocation, ct) =>
+            {
+                try
+                {
+                    var args = invocation.Arguments;
+                    var entries = PacketArchiveContent.Deserialize(Required(args, "content"),
+                        PacketArchiveContent.ParseFormat(Required(args, "format")));
+                    var count = await archive.ImportArchiveAsync(entries, ct).ConfigureAwait(false);
+                    return ToolResult.Ok($"Imported {count} packet(s) from bounded archive content.");
+                }
+                catch (Exception ex) when (ex is ArgumentException or System.IO.InvalidDataException or JsonException)
+                {
+                    return ToolResult.Fail(ex.Message);
+                }
+            }));
     }
 
     private static void RegisterParameterSetTool(IAiToolRegistry registry, IPacketCommandService packets)

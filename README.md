@@ -92,6 +92,10 @@ rec start
 
 新增的三端对等入口包括四态拦截 `packet intercept-mode` / `packet_intercept_mode`、持久比较会话 `compare-session` / `comparison_session_*`、Repeater rename/clear-history，以及 Agent 标注组合查询与 prune。
 
+二进制编辑现在以公共草稿契约保存首次编辑前快照、前后长度/SHA-256/Content-Length 和最近提交失败；人工 Binary editor、CLI `packet draft-*` 与 Agent `packet_edit_*` 均可查询或 Discard，提交失败时保留草稿供重试。Comparer 工作台也已支持从当前 Traffic/Repeater 来源创建、重命名、重算和删除持久 Session。
+
+Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2 MiB 的 Hookmes JSON/HAR 内容，不接受任意文件路径；批量导出可能包含敏感包数据，按 Dangerous 确认，导入按 Mutating 确认。
+
 冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
 
 ### 项目构成

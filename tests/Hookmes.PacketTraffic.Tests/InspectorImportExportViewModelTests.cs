@@ -46,6 +46,23 @@ public sealed class InspectorImportExportViewModelTests
         Assert.Contains("merge", model.Status);
     }
 
+    [Fact]
+    public async Task Binary_editor_exposes_and_discards_pending_draft()
+    {
+        var service = new ArchiveWorkbenchFake { DraftStatus = "Pending request: before -> after", DiscardResult = true };
+        var model = new TrafficWorkbenchViewModel(service)
+        {
+            Selected = new TrafficExchange("packet-1", DateTimeOffset.UtcNow, "POST", "https://example.test/", null, "POST / HTTP/1.1\r\n\r\n", ""),
+            BinarySide = "request"
+        };
+
+        await model.RefreshBinaryDraftCommand.ExecuteAsync(null);
+        Assert.Contains("before -> after", model.BinaryDraftStatus);
+        await model.DiscardBinaryDraftCommand.ExecuteAsync(null);
+        Assert.Contains("restored", model.BinaryDraftStatus);
+        Assert.Equal(("packet-1", "request"), service.Discarded);
+    }
+
     private sealed class RulesWorkbenchFake : ITrafficRuleWorkbenchService
     {
         public IReadOnlyList<TrafficRuleItem> Rules => [];
@@ -68,6 +85,9 @@ public sealed class InspectorImportExportViewModelTests
         public event Action? Changed;
         public (string Path, string? Filter)? Exported { get; private set; }
         public string? ImportedPath { get; private set; }
+        public string? DraftStatus { get; init; }
+        public bool DiscardResult { get; init; }
+        public (string Id, string Side)? Discarded { get; private set; }
         public TrafficExchangePage Query(TrafficExchangeFilter filter) => new([], 0, filter.Offset, filter.Limit);
         public Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken) { Exported = (path, filter); return Task.FromResult(7); }
         public Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken) { ImportedPath = path; return Task.FromResult(3); }
@@ -79,6 +99,8 @@ public sealed class InspectorImportExportViewModelTests
         public Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken) => Task.FromResult("draft");
         public Task<string> EditBinaryBodyAsync(string exchangeId, string side, string kind, long offset, long count, string data, string encoding, CancellationToken cancellationToken) => Task.FromResult("ok");
         public Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count, string encoding, CancellationToken cancellationToken) => Task.FromResult("");
+        public Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken) => Task.FromResult(DraftStatus);
+        public Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken) { Discarded = (exchangeId, side); return Task.FromResult(DiscardResult); }
         public IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket) => [];
         public string SetParameter(string rawPacket, string location, string name, int occurrence, string value) => rawPacket;
         public TrafficAnnotationItem? GetAnnotation(string exchangeId) => null;

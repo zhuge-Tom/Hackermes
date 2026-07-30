@@ -624,7 +624,7 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 **阶段 6 — 专业化流量工程与可验证性（进行中）**
 在阶段 5 的单次内存工作流上增加持久规则、请求/响应独立拦截、人工与 CLI 共用 codec 的 HAR/Hookmes JSON 历史交换、人工规则 JSON replace/merge import 与 export、范围分块 body 读取与 Hex/Base64 局部编辑、query/form/顶层 JSON 结构化参数编辑、跨三端的持久 analyst annotation、独立 Repeater、结构化 Comparer、历史复合查询/分页和跨重启持久化，以及 Packet/Traffic/loopback HTTP 和真实桌面 WebView2/CDP 自动化验收。参数和标注均已有人工、CLI、Agent 入口；当前源码等待统一构建验收后再把本阶段标记完成。
 
-三种操作入口的当前对等程度、剩余缺口和逐项验收门槛见 [`STAGE6-GAP-MATRIX.md`](STAGE6-GAP-MATRIX.md)。二进制修改已通过暂存标记接入请求 Continue 与响应 Fulfill；下一步是把这套隐式提交行为固化为可查询、可放弃、可审计的公共契约，并用 loopback echo 断言 CDP 实际发送的字节。
+三种操作入口的当前对等程度、剩余缺口和逐项验收门槛见 [`STAGE6-GAP-MATRIX.md`](STAGE6-GAP-MATRIX.md)。二进制修改已由 `IPacketEditDraftService` 固化为可查询、可放弃、失败可重试的草稿契约，并由人工、CLI、Agent 共享；下一步是加入持久审计并用 loopback echo 断言 CDP 实际发送的字节。Comparer 的 Traffic/Repeater 来源选择和持久 Session CRUD 已进入人工工作台。Agent 归档边界不暴露文件系统路径，只允许显式格式的有限 JSON/HAR 内容（500 条、2 MiB），并按批量敏感导出 Dangerous、历史导入 Mutating 分级。
 
 ---
 

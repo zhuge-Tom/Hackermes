@@ -19,7 +19,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService,
+    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -30,7 +30,7 @@ public sealed class TrafficIntegrationService :
     private readonly IRepeaterService _repeater;
     private readonly ITrafficAnnotationService _annotations;
     private readonly SemaphoreSlim _captureGate = new(1, 1);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _binaryEdited = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, EditDraftState> _editDrafts = new(StringComparer.Ordinal);
     private readonly IDisposable _activeSubscription;
     private string? _activePageId;
     private bool _intercept;
@@ -318,13 +318,53 @@ public sealed class TrafficIntegrationService :
             throw new ArgumentException("Side must be request or response.");
         var source = (response ? item.ResponseBody : item.RequestBody) ?? [];
         var edited = BinaryBodyEditor.Apply(source, edit);
+        var key = id + ":" + side.ToLowerInvariant();
+        var originalBody = response ? item.ResponseBody : item.RequestBody;
+        var createdDraft = new EditDraftState(id, response ? "response" : "request",
+            originalBody?.ToArray(), (response ? item.ResponseHeaders : item.RequestHeaders).ToArray());
+        var draft = _editDrafts.GetOrAdd(key, createdDraft);
+        var addedDraft = ReferenceEquals(draft, createdDraft);
         var updated = response
             ? item with { ResponseBody = edited, ResponseHeaders = NormalizeContentLength(item.ResponseHeaders, edited.LongLength) }
             : item with { RequestBody = edited, RequestHeaders = NormalizeContentLength(item.RequestHeaders, edited.LongLength) };
-        _store.Import(updated);
-        _binaryEdited[id + ":" + side.ToLowerInvariant()] = 0;
+        try { _store.Import(updated); }
+        catch
+        {
+            if (addedDraft) _editDrafts.TryRemove(key, out _);
+            throw;
+        }
+        Interlocked.Exchange(ref draft.FailedAttempts, 0);
+        draft.LastFailure = null;
         var (_, contentType, charset) = GetBody(id, side);
         return Task.FromResult(PacketBodyChunker.Describe(edited, contentType, charset));
+    }
+
+    public Task<IReadOnlyList<PacketEditDraftStatus>> ListPendingEditsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<PacketEditDraftStatus>>(_editDrafts.Values
+            .Select(ToDraftStatus).OrderBy(item => item.Id, StringComparer.Ordinal).ThenBy(item => item.Side, StringComparer.Ordinal).ToArray());
+    }
+
+    public Task<PacketEditDraftStatus?> GetPendingEditAsync(string id, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateSide(side);
+        return Task.FromResult(_editDrafts.TryGetValue(DraftKey(id, side), out var state) ? ToDraftStatus(state) : null);
+    }
+
+    public Task<bool> DiscardPendingEditAsync(string id, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateSide(side);
+        var key = DraftKey(id, side);
+        if (!_editDrafts.TryGetValue(key, out var draft)) return Task.FromResult(false);
+        var item = Required(id);
+        _store.Import(draft.Side == "response"
+            ? item with { ResponseBody = draft.OriginalBody?.ToArray(), ResponseHeaders = draft.OriginalHeaders.ToArray() }
+            : item with { RequestBody = draft.OriginalBody?.ToArray(), RequestHeaders = draft.OriginalHeaders.ToArray() });
+        _editDrafts.TryRemove(key, out _);
+        return Task.FromResult(true);
     }
 
     public async Task<string> EditBinaryBodyAsync(
@@ -352,6 +392,21 @@ public sealed class TrafficIntegrationService :
             ? BinaryBodyCodec.Format(bytes, BinaryTextEncoding.Hex)
             : BinaryBodyCodec.Format(bytes, BinaryTextEncoding.Base64);
     }
+
+    public async Task<string?> GetBinaryDraftStatusAsync(
+        string exchangeId, string side, CancellationToken cancellationToken)
+    {
+        var draft = await GetPendingEditAsync(exchangeId, side, cancellationToken).ConfigureAwait(false);
+        if (draft is null) return null;
+        var failure = draft.LastCommitFailure is null ? "none" :
+            $"{draft.LastCommitFailure.Attempts} attempt(s), {draft.LastCommitFailure.Message}";
+        return $"Pending {draft.Side}: {draft.Before.Length} B / {draft.Before.Sha256} / CL {draft.Before.ContentLength ?? "-"} → " +
+               $"{draft.After.Length} B / {draft.After.Sha256} / CL {draft.After.ContentLength ?? "-"}; last failure: {failure}";
+    }
+
+    public Task<bool> DiscardBinaryDraftAsync(
+        string exchangeId, string side, CancellationToken cancellationToken) =>
+        DiscardPendingEditAsync(exchangeId, side, cancellationToken);
 
     public IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket) =>
         HttpPacketParameters.Read(HttpPacketCodec.Parse(rawPacket))
@@ -397,34 +452,47 @@ public sealed class TrafficIntegrationService :
         var source = Required(id);
         var side = source.Stage == TrafficStage.Response ? "response" : "request";
         var key = id + ":" + side;
-        if (!_binaryEdited.ContainsKey(key))
+        if (!_editDrafts.ContainsKey(key))
         {
             await _traffic.ContinueAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        if (source.Stage == TrafficStage.Response)
-            await _traffic.FulfillAsync(id, new TrafficResponseEdit(source.ResponseStatus ?? 200,
-                source.ResponseStatusText, source.ResponseHeaders, source.ResponseBody), cancellationToken).ConfigureAwait(false);
-        else
-            await _traffic.ContinueAsync(id, new TrafficRequestEdit(source.Url, source.Method,
-                source.RequestHeaders, source.RequestBody), cancellationToken).ConfigureAwait(false);
-        _binaryEdited.TryRemove(key, out _);
+        try
+        {
+            if (source.Stage == TrafficStage.Response)
+                await _traffic.FulfillAsync(id, new TrafficResponseEdit(source.ResponseStatus ?? 200,
+                    source.ResponseStatusText, source.ResponseHeaders, source.ResponseBody), cancellationToken).ConfigureAwait(false);
+            else
+                await _traffic.ContinueAsync(id, new TrafficRequestEdit(source.Url, source.Method,
+                    source.RequestHeaders, source.RequestBody), cancellationToken).ConfigureAwait(false);
+            ClearDraft(key);
+        }
+        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
     }
 
-    public Task DropAsync(string id, CancellationToken cancellationToken) =>
-        _traffic.FailAsync(id, cancellationToken: cancellationToken);
+    public async Task DropAsync(string id, CancellationToken cancellationToken)
+    {
+        await _traffic.FailAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+        ClearDraft(DraftKey(id, "request"));
+        ClearDraft(DraftKey(id, "response"));
+    }
 
     public async Task EditAsync(string id, string side, string rawPacket, CancellationToken cancellationToken)
     {
         var source = Required(id);
         var packet = HttpPacketCodec.Parse(rawPacket);
-        if (side.Equals("response", StringComparison.OrdinalIgnoreCase))
-            await _traffic.FulfillAsync(id, ToResponseEdit(packet), cancellationToken).ConfigureAwait(false);
-        else if (side.Equals("request", StringComparison.OrdinalIgnoreCase))
-            await _traffic.ContinueAsync(id, ToRequestEdit(packet, source), cancellationToken).ConfigureAwait(false);
-        else
-            throw new ArgumentException("Side must be request or response.");
+        ValidateSide(side);
+        var key = DraftKey(id, side);
+        try
+        {
+            if (side.Equals("response", StringComparison.OrdinalIgnoreCase))
+                await _traffic.FulfillAsync(id, ToResponseEdit(packet), cancellationToken).ConfigureAwait(false);
+            else
+                await _traffic.ContinueAsync(id, ToRequestEdit(packet, source), cancellationToken).ConfigureAwait(false);
+            ClearDraft(key);
+        }
+        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
     }
 
     public Task<TrafficOperationResult> AnalyzeAsync(
@@ -445,7 +513,7 @@ public sealed class TrafficIntegrationService :
     {
         var source = Required(exchangeId);
         var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
-        if (_binaryEdited.ContainsKey(exchangeId + ":request"))
+        if (_editDrafts.ContainsKey(exchangeId + ":request"))
             edit = edit with
             {
                 Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
@@ -466,20 +534,24 @@ public sealed class TrafficIntegrationService :
         }
         var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
         var key = exchangeId + ":request";
-        if (_binaryEdited.ContainsKey(key)) edit = edit with
+        if (_editDrafts.ContainsKey(key)) edit = edit with
         {
             Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
             Body = source.RequestBody
         };
-        await _traffic.ContinueAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
-        _binaryEdited.TryRemove(key, out _);
+        try
+        {
+            await _traffic.ContinueAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
+            ClearDraft(key);
+        }
+        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
     }
 
     public async Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken)
     {
         var edit = ToResponseEdit(HttpPacketCodec.Parse(response));
         var key = exchangeId + ":response";
-        if (_binaryEdited.ContainsKey(key))
+        if (_editDrafts.ContainsKey(key))
         {
             var source = Required(exchangeId);
             edit = edit with
@@ -488,8 +560,12 @@ public sealed class TrafficIntegrationService :
                 Body = source.ResponseBody
             };
         }
-        await _traffic.FulfillAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
-        _binaryEdited.TryRemove(key, out _);
+        try
+        {
+            await _traffic.FulfillAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
+            ClearDraft(key);
+        }
+        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
     }
 
     private void OnStoreChanged(TrafficMessage _) => Changed?.Invoke();
@@ -517,6 +593,38 @@ public sealed class TrafficIntegrationService :
         if (!inserted)
             normalized.Add(new TrafficHeader("Content-Length", bodyLength.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         return normalized;
+    }
+
+    private PacketEditDraftStatus ToDraftStatus(EditDraftState draft)
+    {
+        var current = Required(draft.Id);
+        var body = draft.Side == "response" ? current.ResponseBody ?? [] : current.RequestBody ?? [];
+        var headers = draft.Side == "response" ? current.ResponseHeaders : current.RequestHeaders;
+        return new PacketEditDraftStatus(draft.Id, draft.Side, true,
+            ToEditVersion(draft.OriginalBody ?? [], draft.OriginalHeaders), ToEditVersion(body, headers), draft.LastFailure);
+    }
+
+    private static PacketEditVersion ToEditVersion(byte[] body, IReadOnlyList<TrafficHeader> headers) =>
+        new(body.LongLength, PacketBodyChunker.Describe(body).Sha256,
+            headers.FirstOrDefault(header => header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))?.Value);
+
+    private void RecordCommitFailure(string key, Exception exception)
+    {
+        if (!_editDrafts.TryGetValue(key, out var draft)) return;
+        var attempts = Interlocked.Increment(ref draft.FailedAttempts);
+        draft.LastFailure = new PacketEditCommitFailure(exception.Message, DateTimeOffset.UtcNow, attempts);
+    }
+
+    private void ClearDraft(string key)
+    {
+        _editDrafts.TryRemove(key, out _);
+    }
+
+    private static string DraftKey(string id, string side) => id + ":" + side.ToLowerInvariant();
+    private static void ValidateSide(string side)
+    {
+        if (!side.Equals("request", StringComparison.OrdinalIgnoreCase) && !side.Equals("response", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Side must be request or response.");
     }
 
     private void OnRulesChanged(TrafficRuleChange _)
@@ -695,5 +803,15 @@ public sealed class TrafficIntegrationService :
         _annotations.Changed -= OnAnnotationChanged;
         _activeSubscription.Dispose();
         _captureGate.Dispose();
+    }
+
+    private sealed class EditDraftState(string id, string side, byte[]? originalBody, IReadOnlyList<TrafficHeader> originalHeaders)
+    {
+        public string Id { get; } = id;
+        public string Side { get; } = side;
+        public byte[]? OriginalBody { get; } = originalBody;
+        public IReadOnlyList<TrafficHeader> OriginalHeaders { get; } = originalHeaders;
+        public int FailedAttempts;
+        public PacketEditCommitFailure? LastFailure;
     }
 }
