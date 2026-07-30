@@ -1,5 +1,6 @@
 using Hookmes.AiPanel.Tools;
 using Hookmes.Automation.Commands;
+using Hookmes.Automation.Traffic;
 using Hookmes.Traffic.Comparison;
 using System;
 using System.Text.Json;
@@ -12,6 +13,7 @@ internal static class TrafficComparisonToolRegistrar
 {
     public static void Register(CommandRegistry commands, IAiToolRegistry tools, ITrafficComparisonService comparisons)
     {
+        ComparisonSessionCommandRegistrar.Register(commands, comparisons);
         commands.Register(new CommandDefinition
         {
             Name = "compare", Summary = "Compare captured HTTP packets without corrupting binary bodies",
@@ -35,7 +37,42 @@ internal static class TrafficComparisonToolRegistrar
                 var result = await CompareAsync(comparisons, context, ct).ConfigureAwait(false);
                 return result.Success ? ToolResult.Ok(result.Output) : ToolResult.Fail(result.Output);
             }));
+        RegisterSessionTools(tools, comparisons);
     }
+
+    private static void RegisterSessionTools(IAiToolRegistry tools, ITrafficComparisonService comparisons)
+    {
+        tools.Register(new AiToolDefinition("comparison_session_list", "List persistent named comparison sessions.",
+            SessionSchema(new { }), AiToolRisk.ReadOnly,
+            (invocation, ct) => ExecuteSessionTool(comparisons, "list", ct)));
+        tools.Register(new AiToolDefinition("comparison_session_create",
+            "Save a named comparison. Sources use traffic-request:<packetId>, traffic-response:<packetId>, repeater-request:<draftId>:<sendId>, or repeater-response:<draftId>:<sendId>.",
+            SessionSchema(new { left = new { type = "string" }, right = new { type = "string" }, name = new { type = "string" } }, ["left", "right", "name"]),
+            AiToolRisk.Mutating, (invocation, ct) => ExecuteSessionTool(comparisons,
+                $"create {Get(invocation.Arguments, "left")} {Get(invocation.Arguments, "right")} {Get(invocation.Arguments, "name")}", ct)));
+        tools.Register(new AiToolDefinition("comparison_session_rename", "Rename a persistent comparison session.",
+            SessionSchema(new { id = new { type = "string" }, name = new { type = "string" } }, ["id", "name"]),
+            AiToolRisk.Mutating, (invocation, ct) => ExecuteSessionTool(comparisons,
+                $"rename {Get(invocation.Arguments, "id")} {Get(invocation.Arguments, "name")}", ct)));
+        tools.Register(new AiToolDefinition("comparison_session_recalculate", "Recalculate a saved session from its current packet or Repeater sources.",
+            SessionSchema(new { id = new { type = "string" } }, ["id"]), AiToolRisk.Mutating,
+            (invocation, ct) => ExecuteSessionTool(comparisons, $"recalculate {Get(invocation.Arguments, "id")}", ct)));
+        tools.Register(new AiToolDefinition("comparison_session_delete", "Permanently delete a saved comparison session.",
+            SessionSchema(new { id = new { type = "string" } }, ["id"]), AiToolRisk.Dangerous,
+            (invocation, ct) => ExecuteSessionTool(comparisons, $"delete {Get(invocation.Arguments, "id")}", ct)));
+    }
+
+    private static async ValueTask<ToolResult> ExecuteSessionTool(
+        ITrafficComparisonService comparisons, string arguments, CancellationToken ct)
+    {
+        var result = await ComparisonSessionCommandRegistrar.ExecuteAsync(comparisons, Context(arguments), ct).ConfigureAwait(false);
+        return result.Success ? ToolResult.Ok(result.Output) : ToolResult.Fail(result.Output);
+    }
+
+    private static JsonElement SessionSchema(object properties, string[]? required = null) => JsonSerializer.SerializeToElement(new
+    {
+        type = "object", properties, required = required ?? Array.Empty<string>(), additionalProperties = false
+    });
 
     private static Task<CommandResult> CompareAsync(ITrafficComparisonService comparisons, CommandContext context, CancellationToken ct)
     {

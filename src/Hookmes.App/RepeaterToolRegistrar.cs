@@ -30,6 +30,13 @@ internal static class RepeaterToolRegistrar
         tools.Register(new AiToolDefinition("repeater_send", "Send a Repeater draft and record response metrics.",
             Schema(new { id = new { type = "string" } }, ["id"]), AiToolRisk.Mutating,
             (invocation, ct) => WrapAsync(repeater, Context($"send {Get(invocation.Arguments, "id")}"), ct)));
+        tools.Register(new AiToolDefinition("repeater_rename", "Rename a persistent Repeater draft.",
+            Schema(new { id = new { type = "string" }, name = new { type = "string" } }, ["id", "name"]),
+            AiToolRisk.Mutating, (invocation, ct) => WrapAsync(repeater,
+                Context($"rename {Get(invocation.Arguments, "id")} {Get(invocation.Arguments, "name")}"), ct)));
+        tools.Register(new AiToolDefinition("repeater_clear_history", "Clear all recorded send rounds for a Repeater draft.",
+            Schema(new { id = new { type = "string" } }, ["id"]), AiToolRisk.Dangerous,
+            (invocation, ct) => WrapAsync(repeater, Context($"clear {Get(invocation.Arguments, "id")}"), ct)));
         tools.Register(new AiToolDefinition("repeater_delete", "Delete a Repeater draft and its history.",
             Schema(new { id = new { type = "string" } }, ["id"]), AiToolRisk.Dangerous,
             (invocation, ct) => WrapAsync(repeater, Context($"delete {Get(invocation.Arguments, "id")}"), ct)));

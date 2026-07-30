@@ -22,13 +22,22 @@ public interface IPacketCommandService
     Task EditAsync(string id, string side, string rawPacket, CancellationToken cancellationToken);
 }
 
+public enum PacketInterceptionMode { Off, Request, Response, Both }
+
+/// <summary>Optional independent request/response interception control.</summary>
+public interface IPacketInterceptionModeService
+{
+    PacketInterceptionMode InterceptionMode { get; }
+    Task SetInterceptionModeAsync(PacketInterceptionMode mode, CancellationToken cancellationToken);
+}
+
 public static class PacketCommandRegistrar
 {
     public static void Register(CommandRegistry registry, IPacketCommandService service) => registry.Register(new CommandDefinition
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -51,12 +60,13 @@ public static class PacketCommandRegistrar
                 "body-edit" => await BodyEditAsync(service, context, ct),
                 "replay" => await Mutate(() => service.ReplayAsync(Require(context, 1, "id"), ct), "Packet replayed."),
                 "intercept" => await InterceptAsync(service, Require(context, 1, "on|off"), ct),
+                "intercept-mode" => await InterceptionModeAsync(service, Require(context, 1, "request|response|both|off"), ct),
                 "continue" => await Mutate(() => service.ContinueAsync(Require(context, 1, "id"), ct), "Packet continued."),
                 "drop" => await Mutate(() => service.DropAsync(Require(context, 1, "id"), ct), "Packet dropped."),
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...")
+                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
@@ -103,6 +113,24 @@ public static class PacketCommandRegistrar
             return CommandResult.Fail("Usage: packet intercept <on|off>");
         await service.SetInterceptionAsync(enabled, ct);
         return CommandResult.Ok($"Interception {(enabled ? "enabled" : "disabled")}.");
+    }
+
+    private static async Task<CommandResult> InterceptionModeAsync(IPacketCommandService service, string value, CancellationToken ct)
+    {
+        if (service is not IPacketInterceptionModeService modes)
+            return CommandResult.Fail("This packet backend does not support independent request/response interception.");
+        var parsed = value.Trim().ToLowerInvariant() switch
+        {
+            "request" => PacketInterceptionMode.Request,
+            "response" => PacketInterceptionMode.Response,
+            "both" => PacketInterceptionMode.Both,
+            "off" => PacketInterceptionMode.Off,
+            _ => (PacketInterceptionMode?)null
+        };
+        if (parsed is not { } mode)
+            return CommandResult.Fail("Usage: packet intercept-mode <request|response|both|off>");
+        await modes.SetInterceptionModeAsync(mode, ct);
+        return CommandResult.Ok($"Interception mode set to {mode.ToString().ToLowerInvariant()}.");
     }
 
     private static async Task<CommandResult> EditAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)

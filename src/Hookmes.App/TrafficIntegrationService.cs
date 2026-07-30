@@ -19,7 +19,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService,
+    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -118,6 +118,23 @@ public sealed class TrafficIntegrationService :
         return Task.CompletedTask;
     }
 
+    public async Task ExportRulesFileAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
+        var fullPath = System.IO.Path.GetFullPath(path);
+        var directory = System.IO.Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory)) System.IO.Directory.CreateDirectory(directory);
+        await System.IO.File.WriteAllTextAsync(fullPath, _rules.ExportJson(), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int> ImportRulesFileAsync(string path, bool merge, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var json = await System.IO.File.ReadAllTextAsync(System.IO.Path.GetFullPath(path), cancellationToken).ConfigureAwait(false);
+        return _rules.ImportJson(json, merge ? TrafficRuleImportMode.Merge : TrafficRuleImportMode.Replace);
+    }
+
     public Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -173,6 +190,24 @@ public sealed class TrafficIntegrationService :
             _ = RestartAllAsync();
             Changed?.Invoke();
         }
+    }
+
+    public PacketInterceptionMode InterceptionMode => (_intercept, _responseIntercept) switch
+    {
+        (true, true) => PacketInterceptionMode.Both,
+        (true, false) => PacketInterceptionMode.Request,
+        (false, true) => PacketInterceptionMode.Response,
+        _ => PacketInterceptionMode.Off
+    };
+
+    public async Task SetInterceptionModeAsync(PacketInterceptionMode mode, CancellationToken cancellationToken)
+    {
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
+        _intercept = mode is PacketInterceptionMode.Request or PacketInterceptionMode.Both;
+        _responseIntercept = mode is PacketInterceptionMode.Response or PacketInterceptionMode.Both;
+        UpdateModificationGate();
+        await RestartAllAsync(cancellationToken).ConfigureAwait(false);
+        Changed?.Invoke();
     }
 
     public Task<IReadOnlyList<PacketSummary>> ListAsync(string? filter, CancellationToken cancellationToken)
@@ -231,6 +266,29 @@ public sealed class TrafficIntegrationService :
             imported++;
         }
         return Task.FromResult(imported);
+    }
+
+    public async Task<int> ExportArchiveFileAsync(
+        string path, string? filter, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var entries = await ExportArchiveAsync(filter, cancellationToken).ConfigureAwait(false);
+        var fullPath = System.IO.Path.GetFullPath(path);
+        var directory = System.IO.Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory)) System.IO.Directory.CreateDirectory(directory);
+        await System.IO.File.WriteAllTextAsync(fullPath,
+            PacketArchiveCodec.Serialize(entries, PacketArchiveCodec.DetectFormat(fullPath)), cancellationToken).ConfigureAwait(false);
+        return entries.Count;
+    }
+
+    public async Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = System.IO.Path.GetFullPath(path);
+        var entries = PacketArchiveCodec.Deserialize(
+            await System.IO.File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false),
+            PacketArchiveCodec.DetectFormat(fullPath));
+        return await ImportArchiveAsync(entries, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<PacketBodyDescriptor> DescribeBodyAsync(

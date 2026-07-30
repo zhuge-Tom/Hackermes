@@ -23,13 +23,14 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
         Register(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
             AiToolRisk.ReadOnly, "id", true, a => Args("param-list", Required(a, "id"), Optional(a, "side", "request")));
-        Register(registry, packets, "packet_parameter_set", "Set one structured parameter occurrence and submit the held packet. Requires confirmation.",
-            AiToolRisk.Dangerous, "id", true, a => Args("param-set", Required(a, "id"), Required(a, "side"),
-                Required(a, "location"), Required(a, "name"), Required(a, "occurrence"), Required(a, "value")));
+        RegisterParameterSetTool(registry, packets);
         Register(registry, packets, "packet_replay", "Replay a captured HTTP request in its browser session.",
             AiToolRisk.Mutating, "id", true, a => Args("replay", Required(a, "id")));
         Register(registry, packets, "packet_intercept", "Enable or disable holding browser requests for inspection.",
             AiToolRisk.Mutating, "enabled", true, a => Args("intercept", Required(a, "enabled") == "true" ? "on" : "off"));
+        if (packets is IPacketInterceptionModeService)
+            Register(registry, packets, "packet_intercept_mode", "Set independent request/response interception: request, response, both or off.",
+                AiToolRisk.Mutating, "mode", true, a => Args("intercept-mode", Required(a, "mode")));
         Register(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
             AiToolRisk.Mutating, "id", true, a => Args("continue", Required(a, "id")));
         Register(registry, packets, "packet_drop", "Drop a held HTTP request.",
@@ -38,6 +39,37 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
         if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
         if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
+    }
+
+    private static void RegisterParameterSetTool(IAiToolRegistry registry, IPacketCommandService packets)
+    {
+        var schema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
+                location = new { type = "string", @enum = new[] { "query", "form", "json" } },
+                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" }
+            }, required = new[] { "id", "side", "location", "name", "occurrence", "value" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_parameter_set",
+            "Set one structured parameter occurrence and submit the held packet. Requires confirmation.",
+            schema, AiToolRisk.Dangerous, async (invocation, ct) =>
+            {
+                var args = invocation.Arguments;
+                var id = Required(args, "id");
+                var side = Required(args, "side");
+                if (side is not ("request" or "response"))
+                    return ToolResult.Fail("Side must be request or response.");
+                var raw = await packets.GetRawAsync(id, side, ct).ConfigureAwait(false);
+                if (raw is null) return ToolResult.Fail($"Packet '{id}' has no {side}.");
+                if (!Enum.TryParse<HttpParameterLocation>(Required(args, "location"), true, out var location))
+                    return ToolResult.Fail("Parameter location must be query, form or json.");
+                var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(raw), location,
+                    Required(args, "name"), args.GetProperty("occurrence").GetInt32(), Required(args, "value"));
+                await packets.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct).ConfigureAwait(false);
+                return ToolResult.Ok("Parameter updated and packet submitted.");
+            }));
     }
 
     private static void RegisterBodyEditTool(IAiToolRegistry registry, IPacketBodyEditService editor)
@@ -123,7 +155,8 @@ internal static class TrafficAiToolRegistrar
                 side = new { type = "string", @enum = new[] { "request", "response" } },
                 filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
                 location = new { type = "string", @enum = new[] { "query", "form", "json" } },
-                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" }
+                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" },
+                mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } }
             },
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false

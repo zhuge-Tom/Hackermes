@@ -30,6 +30,8 @@ public interface ITrafficWorkbenchService
         string data, string encoding, CancellationToken cancellationToken);
     Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count,
         string encoding, CancellationToken cancellationToken);
+    Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken);
+    Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken);
     IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket);
     string SetParameter(string rawPacket, string location, string name, int occurrence, string value);
     TrafficAnnotationItem? GetAnnotation(string exchangeId);
@@ -107,6 +109,8 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _binaryCount = "0";
     [ObservableProperty] private string _binaryEncoding = "hex";
     [ObservableProperty] private string _binaryData = string.Empty;
+    [ObservableProperty] private string _archivePath = "traffic.har";
+    [ObservableProperty] private string _archiveFilter = string.Empty;
     [ObservableProperty] private string _parameterSide = "request";
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ApplyParameterCommand))]
@@ -148,6 +152,17 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     partial void OnSelectedParameterChanged(TrafficParameterItem? value) => ParameterValue = value?.Value ?? string.Empty;
 
     [RelayCommand] private void Reload() => Refresh();
+    [RelayCommand] private Task ExportArchiveAsync() => ExecuteAsync(async ct =>
+    {
+        var count = await _service.ExportArchiveFileAsync(ArchivePath.Trim(),
+            string.IsNullOrWhiteSpace(ArchiveFilter) ? null : ArchiveFilter.Trim(), ct);
+        Analysis = $"Exported {count} packet(s) to {ArchivePath.Trim()}.";
+    });
+    [RelayCommand] private Task ImportArchiveAsync() => ExecuteAsync(async ct =>
+    {
+        var count = await _service.ImportArchiveFileAsync(ArchivePath.Trim(), ct);
+        Analysis = $"Imported {count} packet(s) from {ArchivePath.Trim()}.";
+    });
     [RelayCommand] private void PreviousPage() { if (PageIndex > 0) { PageIndex--; Refresh(); } }
     [RelayCommand] private void NextPage()
     {

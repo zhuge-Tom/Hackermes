@@ -31,7 +31,7 @@ public interface ITrafficRuleManager
     TrafficRule SetEnabled(string id, bool enabled);
     void Move(string id, int targetIndex);
     string ExportJson();
-    void ImportJson(string json, TrafficRuleImportMode mode = TrafficRuleImportMode.Replace);
+    int ImportJson(string json, TrafficRuleImportMode mode = TrafficRuleImportMode.Replace);
     void Reload();
 }
 
@@ -170,7 +170,7 @@ public sealed class TrafficRuleManager : ITrafficRuleManager
             return Serialize(_rules);
     }
 
-    public void ImportJson(string json, TrafficRuleImportMode mode = TrafficRuleImportMode.Replace)
+    public int ImportJson(string json, TrafficRuleImportMode mode = TrafficRuleImportMode.Replace)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         var imported = Deserialize(json);
@@ -197,6 +197,7 @@ public sealed class TrafficRuleManager : ITrafficRuleManager
 
             Commit(next, "import", null);
         }
+        return imported.Count;
     }
 
     public void Reload()

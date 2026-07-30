@@ -25,12 +25,19 @@ internal static class TrafficAnnotationToolRegistrar
         tools.Register(new AiToolDefinition("packet_annotation_get",
             "Get persistent bookmark, tags, note and review status for one packet.", GetSchema(),
             AiToolRisk.ReadOnly, (invocation, _) => ValueTask.FromResult(Get(annotations, invocation.Arguments))));
+        tools.Register(new AiToolDefinition("packet_annotation_list",
+            "Query persistent packet annotations by tag, review status, bookmark and text.", ListSchema(),
+            AiToolRisk.ReadOnly, (invocation, _) => ValueTask.FromResult(List(annotations, invocation.Arguments))));
         tools.Register(new AiToolDefinition("packet_annotation_set",
             "Persist bookmark, tags, note and review status for one captured packet.", SetSchema(),
             AiToolRisk.Mutating, (invocation, _) => ValueTask.FromResult(Set(annotations, invocation.Arguments))));
         tools.Register(new AiToolDefinition("packet_annotation_delete",
             "Delete persistent analyst annotation for one packet.", GetSchema(),
             AiToolRisk.Mutating, (invocation, _) => ValueTask.FromResult(Delete(annotations, invocation.Arguments))));
+        tools.Register(new AiToolDefinition("packet_annotation_prune",
+            "Delete annotations whose captured packet no longer exists.", EmptySchema(),
+            AiToolRisk.Mutating, (_, _) => ValueTask.FromResult(
+                ToolResult.Ok($"Pruned {annotations.PruneMissingPackets()} annotation(s)."))));
     }
 
     private static CommandResult ExecuteCommand(ITrafficAnnotationService service, CommandContext context)
@@ -73,6 +80,17 @@ internal static class TrafficAnnotationToolRegistrar
     private static ToolResult Get(ITrafficAnnotationService service, JsonElement args) =>
         ToolResult.Ok(JsonSerializer.Serialize(service.Get(Required(args, "id"))));
 
+    private static ToolResult List(ITrafficAnnotationService service, JsonElement args)
+    {
+        var status = args.TryGetProperty("status", out var statusElement)
+            ? Enum.Parse<TrafficReviewStatus>(statusElement.GetString()!, true) : null;
+        var query = new TrafficAnnotationQuery(
+            Optional(args, "tag"), status,
+            args.TryGetProperty("starred", out var starred) ? starred.GetBoolean() : null,
+            Optional(args, "text"));
+        return ToolResult.Ok(JsonSerializer.Serialize(service.Query(query)));
+    }
+
     private static ToolResult Set(ITrafficAnnotationService service, JsonElement args)
     {
         var tags = args.TryGetProperty("tags", out var tagsElement)
@@ -108,6 +126,22 @@ internal static class TrafficAnnotationToolRegistrar
         required = new[] { "id" }, additionalProperties = false
     });
 
+    private static JsonElement ListSchema() => JsonSerializer.SerializeToElement(new
+    {
+        type = "object",
+        properties = new
+        {
+            tag = new { type = "string" }, text = new { type = "string" }, starred = new { type = "boolean" },
+            status = new { type = "string", @enum = new[] { "unreviewed", "inReview", "resolved", "ignored" } }
+        },
+        additionalProperties = false
+    });
+
+    private static JsonElement EmptySchema() => JsonSerializer.SerializeToElement(new
+    {
+        type = "object", properties = new { }, additionalProperties = false
+    });
+
     private static string Format(System.Collections.Generic.IReadOnlyList<TrafficAnnotation> values) =>
         values.Count == 0 ? "No annotations." : string.Join(Environment.NewLine, values.Select(FormatOne));
 
@@ -121,4 +155,5 @@ internal static class TrafficAnnotationToolRegistrar
     private static string? NullIfKeep(string? value) => string.IsNullOrWhiteSpace(value) || value.Equals("keep", StringComparison.OrdinalIgnoreCase) || value == "-" ? null : value;
     private static string Required(CommandContext context, int index, string name) => context.Arg(index) ?? throw new ArgumentException($"Missing {name}.");
     private static string Required(JsonElement args, string name) => args.TryGetProperty(name, out var value) ? value.GetString() ?? string.Empty : throw new ArgumentException($"Missing {name}.");
+    private static string? Optional(JsonElement args, string name) => args.TryGetProperty(name, out var value) ? value.GetString() : null;
 }

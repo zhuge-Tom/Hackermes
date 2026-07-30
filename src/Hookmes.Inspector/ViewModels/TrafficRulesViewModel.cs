@@ -23,6 +23,8 @@ public interface ITrafficRuleWorkbenchService
     Task SetRuleEnabledAsync(string id, bool enabled, CancellationToken cancellationToken);
     Task RemoveRuleAsync(string id, CancellationToken cancellationToken);
     Task MoveRuleAsync(string id, int targetIndex, CancellationToken cancellationToken);
+    Task ExportRulesFileAsync(string path, CancellationToken cancellationToken);
+    Task<int> ImportRulesFileAsync(string path, bool merge, CancellationToken cancellationToken);
 }
 
 public partial class TrafficRulesViewModel : ViewModelBase
@@ -46,6 +48,8 @@ public partial class TrafficRulesViewModel : ViewModelBase
     [ObservableProperty] private string _method = string.Empty;
     [ObservableProperty] private string _stage = "request";
     [ObservableProperty] private string _behavior = "pause";
+    [ObservableProperty] private string _rulesFilePath = "traffic-rules.json";
+    [ObservableProperty] private bool _mergeImport;
     [ObservableProperty] private string _status = "Persistent rules are evaluated in list order.";
     [ObservableProperty] private bool _isBusy;
 
@@ -62,6 +66,20 @@ public partial class TrafficRulesViewModel : ViewModelBase
             string.IsNullOrWhiteSpace(Method) ? null : Method.Trim(), Stage, Behavior), ct);
         Status = $"Rule '{Id.Trim()}' added.";
         Id = string.Empty;
+    });
+
+    [RelayCommand]
+    private Task ExportRulesAsync() => ExecuteAsync(async ct =>
+    {
+        await _service.ExportRulesFileAsync(RulesFilePath.Trim(), ct);
+        Status = $"Rules exported to {RulesFilePath.Trim()}.";
+    });
+
+    [RelayCommand]
+    private Task ImportRulesAsync() => ExecuteAsync(async ct =>
+    {
+        var count = await _service.ImportRulesFileAsync(RulesFilePath.Trim(), MergeImport, ct);
+        Status = $"Imported {count} rule(s) from {RulesFilePath.Trim()} ({(MergeImport ? "merge" : "replace")}).";
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]

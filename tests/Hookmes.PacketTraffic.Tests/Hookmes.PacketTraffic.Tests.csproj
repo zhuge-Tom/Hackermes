@@ -16,5 +16,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Hookmes.Automation\Hookmes.Automation.csproj" />
     <ProjectReference Include="..\..\src\Hookmes.Traffic\Hookmes.Traffic.csproj" />
+    <ProjectReference Include="..\..\src\Hookmes.Inspector\Hookmes.Inspector.csproj" />
   </ItemGroup>
 </Project>

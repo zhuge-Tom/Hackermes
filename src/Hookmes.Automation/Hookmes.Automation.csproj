@@ -14,6 +14,7 @@
     <ProjectReference Include="..\Hookmes.Base\Hookmes.Base.csproj" />
     <ProjectReference Include="..\Hookmes.Platform\Hookmes.Platform.csproj" />
     <ProjectReference Include="..\Hookmes.Cdp\Hookmes.Cdp.csproj" />
+    <ProjectReference Include="..\Hookmes.Traffic\Hookmes.Traffic.csproj" />
   </ItemGroup>
 
 </Project>

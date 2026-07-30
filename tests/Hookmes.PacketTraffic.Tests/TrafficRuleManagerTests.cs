@@ -46,12 +46,12 @@ public sealed class TrafficRuleManagerTests : IDisposable
         imported.Add(new TrafficRule("existing", "updated", Pause: true));
         imported.Add(new TrafficRule("new", "new"));
 
-        manager.ImportJson(imported.ExportJson(), TrafficRuleImportMode.Merge);
+        Assert.Equal(2, manager.ImportJson(imported.ExportJson(), TrafficRuleImportMode.Merge));
         Assert.Equal(["existing", "new"], manager.GetAll().Select(x => x.Id));
         Assert.Equal("updated", manager.Get("existing")!.UrlPattern);
 
         imported.Remove("existing");
-        manager.ImportJson(imported.ExportJson(), TrafficRuleImportMode.Replace);
+        Assert.Equal(1, manager.ImportJson(imported.ExportJson(), TrafficRuleImportMode.Replace));
         Assert.Equal(["new"], manager.GetAll().Select(x => x.Id));
     }
 

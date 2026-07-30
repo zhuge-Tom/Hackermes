@@ -3,7 +3,7 @@
              xmlns:vm="using:Hookmes.Inspector.ViewModels"
              x:Class="Hookmes.Inspector.Views.TrafficWorkbenchView"
              x:DataType="vm:TrafficWorkbenchViewModel">
-  <Grid RowDefinitions="Auto,2*,3*">
+  <Grid RowDefinitions="Auto,Auto,2*,3*">
     <Border Grid.Row="0" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
       <Grid ColumnDefinitions="Auto,180,80,70,90,Auto,*,Auto,Auto,Auto,Auto">
         <Button Grid.Column="0" Content="Refresh" Command="{Binding ReloadCommand}" />
@@ -20,7 +20,19 @@
       </Grid>
     </Border>
 
-    <DataGrid Grid.Row="1" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+    <Border Grid.Row="1" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
+      <Grid ColumnDefinitions="Auto,260,180,Auto,Auto,*">
+        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Archive" FontWeight="SemiBold" />
+        <TextBox Grid.Column="1" Margin="8,0" PlaceholderText="Path ending in .har or .json" Text="{Binding ArchivePath}" />
+        <TextBox Grid.Column="2" Margin="0,0,8,0" PlaceholderText="Optional URL/method filter" Text="{Binding ArchiveFilter}" />
+        <Button Grid.Column="3" Content="Export" Command="{Binding ExportArchiveCommand}" />
+        <Button Grid.Column="4" Margin="6,0,0,0" Content="Import" Command="{Binding ImportArchiveCommand}" />
+        <TextBlock Grid.Column="5" Margin="10,0,0,0" VerticalAlignment="Center" Opacity="0.6"
+                   Text="Hookmes JSON / HAR 1.2; binary bodies remain lossless" />
+      </Grid>
+    </Border>
+
+    <DataGrid Grid.Row="2" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected, Mode=TwoWay}"
               AutoGenerateColumns="False" IsReadOnly="True" GridLinesVisibility="Horizontal" FontSize="11">
       <DataGrid.Columns>
         <DataGridTextColumn Header="Time" Width="92" Binding="{Binding TimeText}" x:DataType="vm:TrafficExchange" />
@@ -31,7 +43,7 @@
       </DataGrid.Columns>
     </DataGrid>
 
-    <Grid Grid.Row="2" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
+    <Grid Grid.Row="3" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
       <TabControl Grid.Row="0" Grid.Column="0" Margin="0,4,2,0">
         <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>

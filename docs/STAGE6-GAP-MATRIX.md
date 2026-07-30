@@ -8,18 +8,18 @@
 |---|---:|---:|---:|---|---|
 | 捕获、筛选、分页和查看原始请求/响应 | ✅ | ✅ | ✅ | Traffic Workbench；`packet ls/show`；`packet_list/show` | Agent `list` 结果不支持与 UI 相同的结构化复合筛选/分页 |
 | 协议异常、敏感字段分析 | ✅ | ✅ | ✅ | Analyze；`packet analyze`；`packet_analyze` | 规则集固定，缺少可扩展分析器与发现项定位到编辑器 |
-| 语义 Diff | ✅ | ✅ | ✅ | Comparer；`packet diff` / `compare`；`packet_diff` / `packet_compare_structured` | UI 需手输 packet id；持久 Comparison Session 尚无 UI/CLI/Agent CRUD |
+| 语义 Diff | ✅ | ✅ | ✅ | Comparer；`packet diff` / `compare`；`packet_diff` / `packet_compare_structured`；持久 Session 已有 `compare-session` 与 `comparison_session_*` CRUD | UI 仍需手输 packet id，且尚未提供持久 Session 的完整 CRUD 与 Traffic/Repeater 当前选择直填 |
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | Request Intercept；`packet intercept/continue/drop`；对应 Agent 工具 | 已具备基本对等性 |
-| 响应拦截与 Fulfill | ✅ | △ | △ | UI 有独立 Response Intercept 与 Fulfill；CLI/Agent 只有通用 `edit response` | CLI/Agent 无独立响应拦截开关，无法清晰表达 request/response/both 模式 |
+| 响应拦截与 Fulfill | ✅ | ✅ | ✅ | UI 有独立 Response Intercept；CLI `packet intercept-mode request|response|both|off`；Agent `packet_intercept_mode`；均复用同一捕获服务 | `packet intercept on|off` 保留为仅控制请求拦截的兼容入口 |
 | 原始 HTTP 文本编辑并应用 | ✅ | ✅ | ✅ | Request/Response editor；`packet edit`；`packet_edit` | 需补编辑前后 Content-Length/Transfer-Encoding 一致性提示 |
 | 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters` 页读取/修改 query、form 和顶层 JSON；`packet param-list/param-set`；`packet_parameters/packet_parameter_set`（只读结果遮蔽敏感值，修改为 Dangerous） | UI 修改先应用到文本编辑器、CLI/Agent `param-set` 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON、multipart、Cookie 和 Header 参数 |
 | 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor；`body-info/body-read`；`packet_body_info/chunk` | UI 缺少长度/SHA-256 固定摘要、分块导航与 offset 进度视图 |
 | Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | Binary editor；`packet body-edit`；`packet_body_edit`；`TrafficIntegrationService` 以 `_binaryEdited` 跟踪暂存修改，Continue 对请求提交 `TrafficRequestEdit`、对响应提交 `Fulfill`，成功后才清标记 | 三端已有实际提交路径；仍缺显式的暂存状态/放弃修改 UI，以及真实 echo 对修改后字节的回归断言 |
 | 请求重放 | ✅ | ✅ | ✅ | Replay；`packet replay`；`packet_replay` | 已具备基本对等性；后续应支持显式超时和取消结果 |
-| Repeater 草稿与多轮历史 | ✅ | ✅ | △ | Repeater Workbench；`repeater ls/create/send/rename/delete/clear`；Agent list/create/send/delete | Agent 缺 rename、clear-history；UI 只显示最新响应，不能逐轮选择和比较 |
-| 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench；`rule ...`；`traffic_rule_list/change` | UI 缺规则 JSON import/export；复杂 request/response edit 规则没有完整表单 |
-| 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/set/delete`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | Agent 缺 list/query/prune，UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
-| HAR / Hookmes JSON 导入导出 | — | ✅ | — | `packet export/import` | 人工没有文件入口；Agent 没有受限路径/附件式归档工具 |
+| Repeater 草稿与多轮历史 | ✅ | ✅ | ✅ | Repeater Workbench；`repeater ls/create/send/rename/delete/clear`；Agent `repeater_list/create/send/rename/delete/clear_history` | UI 只显示最新响应，不能逐轮选择和比较 |
+| 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 支持路径型 JSON export 与 replace/merge import；`rule ...`；`traffic_rule_list/change`；UI 适配层直接调用 `ITrafficRuleManager.ExportJson/ImportJson` | UI 仍缺系统文件选择器；复杂 request/response edit 规则没有完整表单 |
+| 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
+| HAR / Hookmes JSON 导入导出 | ✅ | ✅ | — | Traffic Workbench `Archive` 路径栏与 Import/Export；`packet export/import`；UI 适配层复用 `PacketArchiveCodec` 与 `IPacketArchiveService` | UI 仍缺系统文件选择器和覆盖确认；Agent 没有受限路径/附件式归档工具 |
 | 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用 Traffic Store 和版本化持久化服务 | 缺保留期、容量、清理和存储占用管理入口 |
 | 操作安全与审计 | △ | △ | ✅ | Agent 风险分级；CLI 根命令标记 mutating；持久化原子替换/备份 | 人工/CLI 缺统一的操作审计记录、撤销和修改前后 hash |
 
@@ -39,10 +39,10 @@
 
 ### P1：补齐三端功能对等
 
-- CLI/Agent：独立选择 request、response 或 both 拦截模式。
-- UI：HAR/Hookmes JSON 导入导出、规则导入导出。
-- Agent：Repeater rename/clear-history。
-- 三端：持久 Comparison Session 的 list/create/rename/recalculate/delete，并能从 Traffic/Repeater 当前选择直接填充左右来源。
+- CLI/Agent 独立 request/response/both/off 拦截模式已有源码入口，等待统一构建与真实 CDP 验收。
+- UI：为现有 HAR/Hookmes JSON 与规则导入导出路径栏补系统文件选择器、覆盖确认和最近路径。
+- UI：Repeater 逐轮历史选择/比较；持久 Comparison Session 的 list/create/rename/recalculate/delete，并能从 Traffic/Repeater 当前选择直接填充左右来源。
+- Agent：为 HAR/Hookmes JSON 提供受限路径或附件式归档入口。
 
 验收：每项公共服务能力至少有一个人工入口、一个 CLI 命令和一个具备正确风险等级的 Agent 工具；契约测试验证三者调用相同服务结果，而不是复制逻辑。
 
