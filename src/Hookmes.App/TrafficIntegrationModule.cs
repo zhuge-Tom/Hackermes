@@ -8,6 +8,7 @@ using Hookmes.Platform.Registries;
 using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Comparison;
+using Hookmes.Traffic.Annotations;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 
@@ -48,6 +49,10 @@ public sealed class TrafficIntegrationModule : IModule
             serviceProvider.GetRequiredService<CommandRegistry>(),
             serviceProvider.GetRequiredService<IAiToolRegistry>(),
             serviceProvider.GetRequiredService<ITrafficComparisonService>());
+        TrafficAnnotationToolRegistrar.Register(
+            serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<IAiToolRegistry>(),
+            serviceProvider.GetRequiredService<ITrafficAnnotationService>());
 
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {

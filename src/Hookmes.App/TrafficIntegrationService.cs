@@ -7,6 +7,7 @@ using Hookmes.Traffic.Models;
 using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Services;
+using Hookmes.Traffic.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,6 +28,7 @@ public sealed class TrafficIntegrationService :
     private readonly ICdpSessionRegistry _sessions;
     private readonly ITrafficRuleManager _rules;
     private readonly IRepeaterService _repeater;
+    private readonly ITrafficAnnotationService _annotations;
     private readonly SemaphoreSlim _captureGate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _binaryEdited = new(StringComparer.Ordinal);
     private readonly IDisposable _activeSubscription;
@@ -36,18 +38,21 @@ public sealed class TrafficIntegrationService :
 
     public TrafficIntegrationService(
         ITrafficService traffic, ITrafficStore store, ICdpSessionRegistry sessions,
-        ITrafficRuleManager rules, IRepeaterService repeater, IEventBus eventBus)
+        ITrafficRuleManager rules, IRepeaterService repeater,
+        ITrafficAnnotationService annotations, IEventBus eventBus)
     {
         _traffic = traffic;
         _store = store;
         _sessions = sessions;
         _rules = rules;
         _repeater = repeater;
+        _annotations = annotations;
         _store.Changed += OnStoreChanged;
         _sessions.SessionOpened += OnSessionOpened;
         _sessions.SessionClosed += OnSessionClosed;
         _rules.Changed += OnRulesChanged;
         _repeater.Changed += OnRepeaterChanged;
+        _annotations.Changed += OnAnnotationChanged;
         _activeSubscription = eventBus.SubscribeDisposable<ActiveContentTabChangedEvent>(e =>
             _activePageId = e.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal) ? id : null);
         UpdateModificationGate();
@@ -290,6 +295,34 @@ public sealed class TrafficIntegrationService :
             : BinaryBodyCodec.Format(bytes, BinaryTextEncoding.Base64);
     }
 
+    public IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket) =>
+        HttpPacketParameters.Read(HttpPacketCodec.Parse(rawPacket))
+            .Select(item => new TrafficParameterItem(item.Location.ToString().ToLowerInvariant(),
+                item.Name, item.Value, item.Occurrence)).ToArray();
+
+    public string SetParameter(string rawPacket, string location, string name, int occurrence, string value)
+    {
+        if (!Enum.TryParse<HttpParameterLocation>(location, true, out var parsed))
+            throw new ArgumentException("Location must be query, form or json.");
+        var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(rawPacket), parsed, name, occurrence, value);
+        return HttpPacketCodec.Format(updated, false);
+    }
+
+    public TrafficAnnotationItem? GetAnnotation(string exchangeId) =>
+        _annotations.Get(exchangeId) is { } value ? ToAnnotationItem(value) : null;
+
+    public Task<TrafficAnnotationItem> SaveAnnotationAsync(string exchangeId, bool starred, string tags,
+        string note, string status, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Enum.TryParse<TrafficReviewStatus>(status, true, out var reviewStatus))
+            throw new ArgumentException("Status must be Unreviewed, InReview, Resolved or Ignored.");
+        var values = tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var changed = _annotations.Update(exchangeId,
+            new TrafficAnnotationUpdate(starred, values, note, ReplaceNote: true, reviewStatus));
+        return Task.FromResult(ToAnnotationItem(changed));
+    }
+
     public async Task ReplayAsync(string id, CancellationToken cancellationToken) =>
         _ = await _traffic.ReplayAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -434,6 +467,7 @@ public sealed class TrafficIntegrationService :
         RulesChanged?.Invoke();
     }
     private void OnRepeaterChanged(RepeaterChangedEvent _) => RepeaterChanged?.Invoke();
+    private void OnAnnotationChanged(TrafficAnnotationChanged _) => Changed?.Invoke();
     private void OnSessionOpened(ICdpSession session) => _ = StartForPageAsync(session.PageId);
     private void OnSessionClosed(string pageId) => _ = _traffic.StopCaptureAsync(pageId);
 
@@ -589,6 +623,10 @@ public sealed class TrafficIntegrationService :
 
     private static string DecodeBody(byte[]? body) => body is null ? string.Empty : Encoding.UTF8.GetString(body);
 
+    private static TrafficAnnotationItem ToAnnotationItem(TrafficAnnotation value) => new(
+        value.Starred, string.Join(", ", value.Tags), value.Note ?? string.Empty,
+        value.Status.ToString(), value.Revision);
+
     public void Dispose()
     {
         _store.Changed -= OnStoreChanged;
@@ -596,6 +634,7 @@ public sealed class TrafficIntegrationService :
         _sessions.SessionClosed -= OnSessionClosed;
         _rules.Changed -= OnRulesChanged;
         _repeater.Changed -= OnRepeaterChanged;
+        _annotations.Changed -= OnAnnotationChanged;
         _activeSubscription.Dispose();
         _captureGate.Dispose();
     }

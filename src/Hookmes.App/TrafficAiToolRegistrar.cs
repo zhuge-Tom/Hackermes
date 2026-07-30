@@ -21,6 +21,11 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.ReadOnly, "id", true, a => Args("analyze", Required(a, "id"), Optional(a, "side", "request")));
         Register(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
             AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
+        Register(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
+            AiToolRisk.ReadOnly, "id", true, a => Args("param-list", Required(a, "id"), Optional(a, "side", "request")));
+        Register(registry, packets, "packet_parameter_set", "Set one structured parameter occurrence and submit the held packet. Requires confirmation.",
+            AiToolRisk.Dangerous, "id", true, a => Args("param-set", Required(a, "id"), Required(a, "side"),
+                Required(a, "location"), Required(a, "name"), Required(a, "occurrence"), Required(a, "value")));
         Register(registry, packets, "packet_replay", "Replay a captured HTTP request in its browser session.",
             AiToolRisk.Mutating, "id", true, a => Args("replay", Required(a, "id")));
         Register(registry, packets, "packet_intercept", "Enable or disable holding browser requests for inspection.",
@@ -116,7 +121,9 @@ internal static class TrafficAiToolRegistrar
             {
                 id = new { type = "string" }, leftId = new { type = "string" }, rightId = new { type = "string" },
                 side = new { type = "string", @enum = new[] { "request", "response" } },
-                filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" }
+                filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
+                location = new { type = "string", @enum = new[] { "query", "form", "json" } },
+                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" }
             },
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false
@@ -129,6 +136,7 @@ internal static class TrafficAiToolRegistrar
     {
         "packet_diff" => ["leftId", "rightId"],
         "packet_edit" => ["id", "side", "rawHttp"],
+        "packet_parameter_set" => ["id", "side", "location", "name", "occurrence", "value"],
         _ => [primary]
     };
 
@@ -144,7 +152,7 @@ internal static class TrafficAiToolRegistrar
             RawArguments = args
         };
         var result = await PacketCommandRegistrar.ExecuteAsync(packets, context, ct).ConfigureAwait(false);
-        var output = redact ? Redact(result.Output) : result.Output;
+        var output = redact || args.StartsWith("param-list ", StringComparison.Ordinal) ? Redact(result.Output) : result.Output;
         return result.Success ? ToolResult.Ok(output) : ToolResult.Fail(output);
     }
 
@@ -161,6 +169,13 @@ internal static class TrafficAiToolRegistrar
         var lines = raw.Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
+            var columns = lines[i].Split('\t');
+            if (columns.Length >= 3 && IsSensitiveName(columns[1]))
+            {
+                columns[2] = "<redacted>";
+                lines[i] = string.Join('\t', columns);
+                continue;
+            }
             var separator = lines[i].IndexOf(':');
             if (separator <= 0) continue;
             var name = lines[i][..separator].Trim();
@@ -173,4 +188,12 @@ internal static class TrafficAiToolRegistrar
         }
         return string.Join('\n', lines);
     }
+
+    private static bool IsSensitiveName(string name) =>
+        name.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("passwd", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("api_key", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("apikey", StringComparison.OrdinalIgnoreCase);
 }

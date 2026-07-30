@@ -30,7 +30,15 @@ public interface ITrafficWorkbenchService
         string data, string encoding, CancellationToken cancellationToken);
     Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count,
         string encoding, CancellationToken cancellationToken);
+    IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket);
+    string SetParameter(string rawPacket, string location, string name, int occurrence, string value);
+    TrafficAnnotationItem? GetAnnotation(string exchangeId);
+    Task<TrafficAnnotationItem> SaveAnnotationAsync(string exchangeId, bool starred, string tags,
+        string note, string status, CancellationToken cancellationToken);
 }
+
+public sealed record TrafficParameterItem(string Location, string Name, string Value, int Occurrence);
+public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
 
 public sealed record TrafficExchange(
     string Id,
@@ -71,9 +79,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     }
 
     public ObservableCollection<TrafficExchange> Visible { get; } = [];
+    public ObservableCollection<TrafficParameterItem> Parameters { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private TrafficExchange? _selected;
     [ObservableProperty] private string _filterText = string.Empty;
     [ObservableProperty] private string _methodFilter = string.Empty;
@@ -98,6 +107,15 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _binaryCount = "0";
     [ObservableProperty] private string _binaryEncoding = "hex";
     [ObservableProperty] private string _binaryData = string.Empty;
+    [ObservableProperty] private string _parameterSide = "request";
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ApplyParameterCommand))]
+    private TrafficParameterItem? _selectedParameter;
+    [ObservableProperty] private string _parameterValue = string.Empty;
+    [ObservableProperty] private bool _annotationStarred;
+    [ObservableProperty] private string _annotationTags = string.Empty;
+    [ObservableProperty] private string _annotationNote = string.Empty;
+    [ObservableProperty] private string _annotationStatus = "Unreviewed";
     private const int PageSize = 200;
 
     public bool HasSelection => Selected is not null;
@@ -110,6 +128,8 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         FormattedRequest = FormatMessage(RequestEditor);
         FormattedResponse = FormatMessage(ResponseEditor);
         Analysis = value is null ? "Select a request, edit it, then Analyze or Replay." : $"{value.Method} {value.Url}";
+        LoadParameters();
+        LoadAnnotation();
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(CanResolveIntercept));
     }
@@ -122,8 +142,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     partial void OnIsBusyChanged(bool value) => OnPropertyChanged(nameof(CanResolveIntercept));
     partial void OnIsInterceptEnabledChanged(bool value) => _service.IsInterceptEnabled = value;
     partial void OnIsResponseInterceptEnabledChanged(bool value) => _service.IsResponseInterceptEnabled = value;
-    partial void OnRequestEditorChanged(string value) => FormattedRequest = FormatMessage(value);
-    partial void OnResponseEditorChanged(string value) => FormattedResponse = FormatMessage(value);
+    partial void OnRequestEditorChanged(string value) { FormattedRequest = FormatMessage(value); if (ParameterSide == "request") LoadParameters(); }
+    partial void OnResponseEditorChanged(string value) { FormattedResponse = FormatMessage(value); if (ParameterSide == "response") LoadParameters(); }
+    partial void OnParameterSideChanged(string value) => LoadParameters();
+    partial void OnSelectedParameterChanged(TrafficParameterItem? value) => ParameterValue = value?.Value ?? string.Empty;
 
     [RelayCommand] private void Reload() => Refresh();
     [RelayCommand] private void PreviousPage() { if (PageIndex > 0) { PageIndex--; Refresh(); } }
@@ -162,6 +184,30 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         if (count <= 0) count = 64 * 1024;
         BinaryData = await _service.ReadBinaryBodyAsync(Selected!.Id, BinarySide, offset, count, BinaryEncoding, ct);
         Analysis = $"Loaded binary chunk at offset {offset}.";
+    });
+
+    private bool CanApplyParameter => Selected is not null && SelectedParameter is not null;
+
+    [RelayCommand(CanExecute = nameof(CanApplyParameter))]
+    private Task ApplyParameterAsync() => ExecuteAsync(_ =>
+    {
+        var parameter = SelectedParameter ?? throw new InvalidOperationException("Select a parameter first.");
+        var raw = ParameterSide.Equals("response", StringComparison.OrdinalIgnoreCase) ? ResponseEditor : RequestEditor;
+        var updated = _service.SetParameter(raw, parameter.Location, parameter.Name,
+            parameter.Occurrence, ParameterValue);
+        if (ParameterSide.Equals("response", StringComparison.OrdinalIgnoreCase)) ResponseEditor = updated;
+        else RequestEditor = updated;
+        Analysis = $"Updated {parameter.Location} parameter {parameter.Name}[{parameter.Occurrence}]. Submit with Continue, Fulfill or Replay.";
+        return Task.CompletedTask;
+    });
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task SaveAnnotationAsync() => ExecuteAsync(async ct =>
+    {
+        var saved = await _service.SaveAnnotationAsync(Selected!.Id, AnnotationStarred, AnnotationTags,
+            AnnotationNote, AnnotationStatus, ct);
+        ApplyAnnotation(saved);
+        Analysis = $"Annotation saved (revision {saved.Revision}).";
     });
 
     [RelayCommand(CanExecute = nameof(CanResolveIntercept))]
@@ -222,6 +268,29 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     private TrafficExchangeFilter CreateFilter() => new(
         NullIfEmpty(FilterText), NullIfEmpty(MethodFilter), int.TryParse(StatusFilter, out var status) ? status : null,
         NullIfEmpty(ResourceTypeFilter), OnlyIntercepted, PageIndex * PageSize, PageSize);
+
+    private void LoadParameters()
+    {
+        Parameters.Clear();
+        if (Selected is null) return;
+        var raw = ParameterSide.Equals("response", StringComparison.OrdinalIgnoreCase) ? ResponseEditor : RequestEditor;
+        try { foreach (var item in _service.ReadParameters(raw)) Parameters.Add(item); }
+        catch (Exception) { }
+    }
+
+    private void LoadAnnotation()
+    {
+        if (Selected is null) { ApplyAnnotation(null); return; }
+        ApplyAnnotation(_service.GetAnnotation(Selected.Id));
+    }
+
+    private void ApplyAnnotation(TrafficAnnotationItem? value)
+    {
+        AnnotationStarred = value?.Starred ?? false;
+        AnnotationTags = value?.Tags ?? string.Empty;
+        AnnotationNote = value?.Note ?? string.Empty;
+        AnnotationStatus = value?.Status ?? "Unreviewed";
+    }
     private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string FormatMessage(string raw)

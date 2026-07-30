@@ -2,6 +2,7 @@ using Hookmes.Base;
 using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Comparison;
+using Hookmes.Traffic.Annotations;
 using Hookmes.Traffic.Services;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -28,6 +29,8 @@ public sealed class TrafficModule : IModule
         services.AddSingleton<IRepeaterService>(sp => sp.GetRequiredService<RepeaterService>());
         services.AddSingleton<TrafficComparisonService>();
         services.AddSingleton<ITrafficComparisonService>(sp => sp.GetRequiredService<TrafficComparisonService>());
+        services.AddSingleton<TrafficAnnotationService>();
+        services.AddSingleton<ITrafficAnnotationService>(sp => sp.GetRequiredService<TrafficAnnotationService>());
     }
 
     public void Initialize(IServiceProvider serviceProvider)

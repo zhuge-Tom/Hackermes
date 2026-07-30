@@ -48,6 +48,39 @@
                      PlaceholderText="Encoded hex or base64 data (empty for delete)" Text="{Binding BinaryData}" />
           </Grid>
         </TabItem>
+        <TabItem Header="Parameters">
+          <Grid RowDefinitions="Auto,*,Auto" Margin="6">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock VerticalAlignment="Center" Text="Side" />
+              <TextBox Width="100" PlaceholderText="request/response" Text="{Binding ParameterSide}" />
+              <TextBlock VerticalAlignment="Center" Opacity="0.65" Text="Query, form and top-level JSON parameters" />
+            </StackPanel>
+            <DataGrid Grid.Row="1" ItemsSource="{Binding Parameters}" SelectedItem="{Binding SelectedParameter, Mode=TwoWay}"
+                      AutoGenerateColumns="False" IsReadOnly="True" Margin="0,6">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Location" Width="90" Binding="{Binding Location}" x:DataType="vm:TrafficParameterItem" />
+                <DataGridTextColumn Header="Name" Width="160" Binding="{Binding Name}" x:DataType="vm:TrafficParameterItem" />
+                <DataGridTextColumn Header="#" Width="45" Binding="{Binding Occurrence}" x:DataType="vm:TrafficParameterItem" />
+                <DataGridTextColumn Header="Value" Width="*" Binding="{Binding Value}" x:DataType="vm:TrafficParameterItem" />
+              </DataGrid.Columns>
+            </DataGrid>
+            <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
+              <TextBox Grid.Column="0" Watermark="New parameter value" Text="{Binding ParameterValue}" />
+              <Button Grid.Column="1" Margin="6,0,0,0" Content="Apply to editor" Command="{Binding ApplyParameterCommand}" />
+            </Grid>
+          </Grid>
+        </TabItem>
+        <TabItem Header="Annotation">
+          <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="Auto,*" Margin="6">
+            <CheckBox Grid.Row="0" Grid.Column="0" Margin="0,0,12,6" Content="Starred" IsChecked="{Binding AnnotationStarred}" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,6" Watermark="Status: Unreviewed / InReview / Resolved / Ignored" Text="{Binding AnnotationStatus}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,6" VerticalAlignment="Center" Text="Tags" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,6" Watermark="comma,separated,tags" Text="{Binding AnnotationTags}" />
+            <TextBox Grid.Row="2" Grid.ColumnSpan="2" AcceptsReturn="True" Watermark="Analyst note" Text="{Binding AnnotationNote}" />
+            <Button Grid.Row="3" Grid.ColumnSpan="2" HorizontalAlignment="Right" Margin="0,6,0,0"
+                    Content="Save annotation" Command="{Binding SaveAnnotationCommand}" />
+          </Grid>
+        </TabItem>
       </TabControl>
       <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
         <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>

@@ -28,7 +28,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -44,6 +44,8 @@ public static class PacketCommandRegistrar
                 "show" => await ShowAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", true, ct),
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
                 "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
+                "param-list" => await ParameterListAsync(service, context, ct),
+                "param-set" => await ParameterSetAsync(service, context, ct),
                 "body-info" => await BodyInfoAsync(service, context, ct),
                 "body-read" => await BodyReadAsync(service, context, ct),
                 "body-edit" => await BodyEditAsync(service, context, ct),
@@ -54,7 +56,7 @@ public static class PacketCommandRegistrar
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|replay|intercept|continue|drop|edit|export|import> ...")
+                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
@@ -136,6 +138,31 @@ public static class PacketCommandRegistrar
         if (service is not IPacketBodyReadService bodies) return CommandResult.Fail("This packet backend does not support ranged body reads.");
         var result = await bodies.DescribeBodyAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
         return CommandResult.Ok($"length={result.Length}\tsha256={result.Sha256}\tcontent-type={result.ContentType ?? "-"}\tcharset={result.Charset ?? "-"}");
+    }
+
+    private static async Task<CommandResult> ParameterListAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        var side = context.Arg(2) ?? "request";
+        var packet = HttpPacketCodec.Parse(await GetRequiredAsync(service, Require(context, 1, "id"), side, ct));
+        var parameters = HttpPacketParameters.Read(packet);
+        return CommandResult.Ok(parameters.Count == 0 ? "No structured parameters." : string.Join(Environment.NewLine,
+            parameters.Select(parameter => $"{parameter.Location.ToString().ToLowerInvariant()}[{parameter.Occurrence}]\t{parameter.Name}\t{parameter.Value}")));
+    }
+
+    private static async Task<CommandResult> ParameterSetAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        var id = Require(context, 1, "id");
+        var side = context.Arg(2) ?? "request";
+        if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json"), true, out var location))
+            return CommandResult.Fail("Parameter location must be query, form or json.");
+        var name = Require(context, 4, "name");
+        if (!int.TryParse(Require(context, 5, "occurrence"), out var occurrence))
+            return CommandResult.Fail("Parameter occurrence must be an integer.");
+        if (context.Args.Count < 7) return CommandResult.Fail("Missing parameter value.");
+        var packet = HttpPacketCodec.Parse(await GetRequiredAsync(service, id, side, ct));
+        var updated = HttpPacketParameters.Set(packet, location, name, occurrence, context.Rest(6));
+        await service.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct);
+        return CommandResult.Ok("Parameter updated and packet submitted.");
     }
 
     private static async Task<CommandResult> BodyReadAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
