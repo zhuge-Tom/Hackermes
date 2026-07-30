@@ -16,13 +16,20 @@ namespace Hookmes.Inspector.ViewModels;
 public interface ITrafficWorkbenchService
 {
     IReadOnlyList<TrafficExchange> Exchanges { get; }
+    TrafficExchangePage Query(TrafficExchangeFilter filter);
     bool IsInterceptEnabled { get; set; }
+    bool IsResponseInterceptEnabled { get; set; }
     event Action? Changed;
     Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task DropAsync(string exchangeId, CancellationToken cancellationToken);
     Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken);
+    Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken);
+    Task<string> EditBinaryBodyAsync(string exchangeId, string side, string kind, long offset, long count,
+        string data, string encoding, CancellationToken cancellationToken);
+    Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count,
+        string encoding, CancellationToken cancellationToken);
 }
 
 public sealed record TrafficExchange(
@@ -33,7 +40,8 @@ public sealed record TrafficExchange(
     int? Status,
     string RequestText,
     string ResponseText,
-    bool IsIntercepted = false)
+    bool IsIntercepted = false,
+    bool IsResponseStage = false)
 {
     public string Host => Uri.TryCreate(Url, UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
     public string Path => Uri.TryCreate(Url, UriKind.Absolute, out var uri) ? uri.PathAndQuery : Url;
@@ -42,6 +50,11 @@ public sealed record TrafficExchange(
 }
 
 public sealed record TrafficOperationResult(bool Success, string Summary, string? ResponseText = null);
+public sealed record TrafficExchangeFilter(
+    string? Text, string? Method, int? Status, string? ResourceType,
+    bool OnlyIntercepted, int Offset, int Limit);
+public sealed record TrafficExchangePage(
+    IReadOnlyList<TrafficExchange> Items, int Total, int Offset, int Limit);
 
 public partial class TrafficWorkbenchViewModel : ViewModelBase
 {
@@ -53,17 +66,22 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         _service = service;
         _service.Changed += OnServiceChanged;
         _isInterceptEnabled = service.IsInterceptEnabled;
+        _isResponseInterceptEnabled = service.IsResponseInterceptEnabled;
         Refresh();
     }
 
     public ObservableCollection<TrafficExchange> Visible { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private TrafficExchange? _selected;
     [ObservableProperty] private string _filterText = string.Empty;
+    [ObservableProperty] private string _methodFilter = string.Empty;
+    [ObservableProperty] private string _statusFilter = string.Empty;
+    [ObservableProperty] private string _resourceTypeFilter = string.Empty;
     [ObservableProperty] private bool _onlyIntercepted;
     [ObservableProperty] private bool _isInterceptEnabled;
+    [ObservableProperty] private bool _isResponseInterceptEnabled;
     [ObservableProperty] private string _requestEditor = string.Empty;
     [ObservableProperty] private string _responseEditor = string.Empty;
     [ObservableProperty] private string _formattedRequest = string.Empty;
@@ -73,6 +91,14 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private bool _isBusy;
+    [ObservableProperty] private int _pageIndex;
+    [ObservableProperty] private string _binarySide = "request";
+    [ObservableProperty] private string _binaryKind = "replace";
+    [ObservableProperty] private string _binaryOffset = "0";
+    [ObservableProperty] private string _binaryCount = "0";
+    [ObservableProperty] private string _binaryEncoding = "hex";
+    [ObservableProperty] private string _binaryData = string.Empty;
+    private const int PageSize = 200;
 
     public bool HasSelection => Selected is not null;
     public bool CanResolveIntercept => Selected?.IsIntercepted == true && !IsBusy;
@@ -88,20 +114,55 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanResolveIntercept));
     }
 
-    partial void OnFilterTextChanged(string value) => Refresh();
-    partial void OnOnlyInterceptedChanged(bool value) => Refresh();
+    partial void OnFilterTextChanged(string value) { PageIndex = 0; Refresh(); }
+    partial void OnMethodFilterChanged(string value) { PageIndex = 0; Refresh(); }
+    partial void OnStatusFilterChanged(string value) { PageIndex = 0; Refresh(); }
+    partial void OnResourceTypeFilterChanged(string value) { PageIndex = 0; Refresh(); }
+    partial void OnOnlyInterceptedChanged(bool value) { PageIndex = 0; Refresh(); }
     partial void OnIsBusyChanged(bool value) => OnPropertyChanged(nameof(CanResolveIntercept));
     partial void OnIsInterceptEnabledChanged(bool value) => _service.IsInterceptEnabled = value;
+    partial void OnIsResponseInterceptEnabledChanged(bool value) => _service.IsResponseInterceptEnabled = value;
     partial void OnRequestEditorChanged(string value) => FormattedRequest = FormatMessage(value);
     partial void OnResponseEditorChanged(string value) => FormattedResponse = FormatMessage(value);
 
     [RelayCommand] private void Reload() => Refresh();
+    [RelayCommand] private void PreviousPage() { if (PageIndex > 0) { PageIndex--; Refresh(); } }
+    [RelayCommand] private void NextPage()
+    {
+        if ((PageIndex + 1) * PageSize < _service.Query(CreateFilter()).Total) { PageIndex++; Refresh(); }
+    }
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private Task AnalyzeAsync() => RunAsync(ct => _service.AnalyzeAsync(Selected!.Id, RequestEditor, ct), applyResponse: false);
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private Task ReplayAsync() => RunAsync(ct => _service.ReplayAsync(Selected!.Id, RequestEditor, ct), applyResponse: true);
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task SendToRepeaterAsync() => ExecuteAsync(async ct =>
+    {
+        var id = await _service.CreateRepeaterAsync(Selected!.Id, ct);
+        Analysis = $"Created Repeater draft: {id}";
+    });
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task ApplyBinaryEditAsync() => ExecuteAsync(async ct =>
+    {
+        if (!long.TryParse(BinaryOffset, out var offset) || !long.TryParse(BinaryCount, out var count))
+            throw new ArgumentException("Binary offset and count must be integers.");
+        Analysis = await _service.EditBinaryBodyAsync(Selected!.Id, BinarySide, BinaryKind,
+            offset, count, BinaryData, BinaryEncoding, ct);
+    });
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task LoadBinaryChunkAsync() => ExecuteAsync(async ct =>
+    {
+        if (!long.TryParse(BinaryOffset, out var offset) || !int.TryParse(BinaryCount, out var count))
+            throw new ArgumentException("Binary offset and count must be integers.");
+        if (count <= 0) count = 64 * 1024;
+        BinaryData = await _service.ReadBinaryBodyAsync(Selected!.Id, BinarySide, offset, count, BinaryEncoding, ct);
+        Analysis = $"Loaded binary chunk at offset {offset}.";
+    });
 
     [RelayCommand(CanExecute = nameof(CanResolveIntercept))]
     private Task ContinueAsync() => ResolveAsync(ct => _service.ContinueAsync(Selected!.Id, RequestEditor, ct), "Request continued");
@@ -150,20 +211,18 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     private void Refresh()
     {
         var selectedId = Selected?.Id;
-        var filter = FilterText.Trim();
-        IEnumerable<TrafficExchange> query = _service.Exchanges;
-        if (OnlyIntercepted) query = query.Where(x => x.IsIntercepted);
-        if (filter.Length > 0)
-            query = query.Where(x => x.Url.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || x.Method.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || x.StatusText.Contains(filter, StringComparison.OrdinalIgnoreCase));
-
-        var items = query.OrderByDescending(x => x.Timestamp).ToArray();
+        var page = _service.Query(CreateFilter());
+        var items = page.Items.ToArray();
         Visible.Clear();
         foreach (var item in items) Visible.Add(item);
         if (selectedId is not null) Selected = items.FirstOrDefault(x => x.Id == selectedId);
-        Summary = $"{items.Length} shown / {_service.Exchanges.Count} total";
+        Summary = $"{items.Length} shown / {page.Total} total · page {PageIndex + 1}";
     }
+
+    private TrafficExchangeFilter CreateFilter() => new(
+        NullIfEmpty(FilterText), NullIfEmpty(MethodFilter), int.TryParse(StatusFilter, out var status) ? status : null,
+        NullIfEmpty(ResourceTypeFilter), OnlyIntercepted, PageIndex * PageSize, PageSize);
+    private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string FormatMessage(string raw)
     {

@@ -4,6 +4,8 @@ using Hookmes.Cdp.Session;
 using Hookmes.Inspector.ViewModels;
 using Hookmes.Platform.Events;
 using Hookmes.Traffic.Models;
+using Hookmes.Traffic.Rules;
+using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Services;
 using System;
 using System.Collections.Generic;
@@ -15,34 +17,132 @@ using System.Threading.Tasks;
 namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
-public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficWorkbenchService, IDisposable
+public sealed class TrafficIntegrationService :
+    IPacketCommandService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService,
+    ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
+    IRepeaterWorkbenchService, IDisposable
 {
     private readonly ITrafficService _traffic;
     private readonly ITrafficStore _store;
     private readonly ICdpSessionRegistry _sessions;
+    private readonly ITrafficRuleManager _rules;
+    private readonly IRepeaterService _repeater;
     private readonly SemaphoreSlim _captureGate = new(1, 1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _binaryEdited = new(StringComparer.Ordinal);
     private readonly IDisposable _activeSubscription;
     private string? _activePageId;
     private bool _intercept;
+    private bool _responseIntercept;
 
     public TrafficIntegrationService(
-        ITrafficService traffic, ITrafficStore store, ICdpSessionRegistry sessions, IEventBus eventBus)
+        ITrafficService traffic, ITrafficStore store, ICdpSessionRegistry sessions,
+        ITrafficRuleManager rules, IRepeaterService repeater, IEventBus eventBus)
     {
         _traffic = traffic;
         _store = store;
         _sessions = sessions;
+        _rules = rules;
+        _repeater = repeater;
         _store.Changed += OnStoreChanged;
         _sessions.SessionOpened += OnSessionOpened;
         _sessions.SessionClosed += OnSessionClosed;
+        _rules.Changed += OnRulesChanged;
+        _repeater.Changed += OnRepeaterChanged;
         _activeSubscription = eventBus.SubscribeDisposable<ActiveContentTabChangedEvent>(e =>
             _activePageId = e.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal) ? id : null);
+        UpdateModificationGate();
         foreach (var session in sessions.All) _ = StartForPageAsync(session.PageId);
     }
 
     public event Action? Changed;
+    public event Action? RulesChanged;
+    public event Action? RepeaterChanged;
 
     public IReadOnlyList<TrafficExchange> Exchanges => _store.Read(5000)
         .Select(ToExchange).ToArray();
+
+    public TrafficExchangePage Query(TrafficExchangeFilter filter)
+    {
+        var result = _store.Query(new TrafficQuery(
+            null, filter.Text, filter.Method, filter.Status, filter.ResourceType,
+            filter.OnlyIntercepted ? TrafficState.Paused : null,
+            Offset: filter.Offset, Limit: filter.Limit));
+        return new TrafficExchangePage(result.Items.Select(ToExchange).ToArray(), result.Total, result.Offset, result.Limit);
+    }
+
+    public IReadOnlyList<TrafficRuleItem> Rules => _rules.GetAll().Select(rule => new TrafficRuleItem(
+        rule.Id, rule.UrlPattern, rule.Method ?? "*",
+        rule.Stage?.ToString().ToLowerInvariant() ?? "any",
+        rule.Fail ? "drop" : rule.Pause ? "pause" : rule.ResponseEdit is not null ? "fulfill" : "edit",
+        rule.Enabled)).ToArray();
+
+    public IReadOnlyList<RepeaterDraftItem> Drafts => _repeater.GetAll().Select(ToRepeaterItem).ToArray();
+
+    public Task AddRuleAsync(TrafficRuleDraft draft, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(draft.Id)) throw new ArgumentException("Rule id is required.");
+        if (!Enum.TryParse<TrafficStage>(draft.Stage, true, out var stage))
+            throw new ArgumentException("Stage must be request or response.");
+        var behavior = draft.Behavior.Trim().ToLowerInvariant();
+        if (behavior is not ("pause" or "drop")) throw new ArgumentException("Behavior must be pause or drop.");
+        _rules.Add(new TrafficRule(draft.Id.Trim(), draft.UrlPattern.Trim(),
+            string.IsNullOrWhiteSpace(draft.Method) || draft.Method == "*" ? null : draft.Method.Trim(),
+            stage, Fail: behavior == "drop", Pause: behavior == "pause"));
+        return Task.CompletedTask;
+    }
+
+    public Task SetRuleEnabledAsync(string id, bool enabled, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _rules.SetEnabled(id, enabled);
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveRuleAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _rules.Remove(id);
+        return Task.CompletedTask;
+    }
+
+    public Task MoveRuleAsync(string id, int targetIndex, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _rules.Move(id, targetIndex);
+        return Task.CompletedTask;
+    }
+
+    public Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_repeater.CreateFromPacket(exchangeId).Id);
+    }
+
+    public async Task<RepeaterDraftItem> SendAsync(
+        string id, string name, string request, CancellationToken cancellationToken)
+    {
+        var draft = _repeater.Get(id) ?? throw new KeyNotFoundException($"Repeater draft '{id}' was not found.");
+        var source = Required(draft.SourcePacketId);
+        var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
+        _repeater.Update(id, new RepeaterDraftUpdate(name, edit.Method, edit.Url, edit.Headers, edit.Body, true));
+        await _repeater.SendAsync(id, cancellationToken).ConfigureAwait(false);
+        return ToRepeaterItem(_repeater.Get(id)!);
+    }
+
+    public Task DeleteAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _repeater.Delete(id);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearHistoryAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _repeater.ClearHistory(id);
+        return Task.CompletedTask;
+    }
 
     public bool IsInterceptEnabled
     {
@@ -51,7 +151,20 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         {
             if (_intercept == value) return;
             _intercept = value;
-            _traffic.SetModificationsEnabled(value);
+            UpdateModificationGate();
+            _ = RestartAllAsync();
+            Changed?.Invoke();
+        }
+    }
+
+    public bool IsResponseInterceptEnabled
+    {
+        get => _responseIntercept;
+        set
+        {
+            if (_responseIntercept == value) return;
+            _responseIntercept = value;
+            UpdateModificationGate();
             _ = RestartAllAsync();
             Changed?.Invoke();
         }
@@ -75,19 +188,138 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         return Task.FromResult(item is null ? null : side == "response" ? FormatResponse(item) : FormatRequest(item));
     }
 
+    public Task<IReadOnlyList<PacketArchiveEntry>> ExportArchiveAsync(
+        string? filter, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IEnumerable<TrafficMessage> items = _store.Read(5000, _activePageId);
+        if (!string.IsNullOrWhiteSpace(filter))
+            items = items.Where(item => item.Url.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || item.Method.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult<IReadOnlyList<PacketArchiveEntry>>(items.Select(item =>
+            new PacketArchiveEntry(item.Id, item.CapturedAt, FormatArchiveRequest(item),
+                item.ResponseStatus is null ? null : FormatResponse(item),
+                ToArchiveBody(item.RequestBody, item.RequestHeaders),
+                ToArchiveBody(item.ResponseBody, item.ResponseHeaders))).ToArray());
+    }
+
+    public Task<int> ImportArchiveAsync(
+        IReadOnlyList<PacketArchiveEntry> entries, CancellationToken cancellationToken)
+    {
+        var imported = 0;
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = HttpPacketCodec.Parse(entry.Request);
+            if (request.Kind != HttpPacketKind.Request) continue;
+            var response = entry.Response is null ? null : HttpPacketCodec.Parse(entry.Response);
+            var url = ResolveArchiveUrl(request);
+            var id = $"archive:{Guid.NewGuid():N}";
+            _store.Import(new TrafficMessage(id, "archive", response is null ? TrafficStage.Request : TrafficStage.Response,
+                TrafficState.Continued, request.Method ?? "GET", url,
+                request.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray(),
+                entry.RequestBody?.GetBytes() ?? Encoding.UTF8.GetBytes(request.Body),
+                response?.StatusCode, response?.ReasonPhrase,
+                response?.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray() ?? [],
+                response is null ? null : entry.ResponseBody?.GetBytes() ?? Encoding.UTF8.GetBytes(response.Body),
+                "Archive", entry.CapturedAt));
+            imported++;
+        }
+        return Task.FromResult(imported);
+    }
+
+    public Task<PacketBodyDescriptor> DescribeBodyAsync(
+        string id, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (body, contentType, charset) = GetBody(id, side);
+        return Task.FromResult(PacketBodyChunker.Describe(body, contentType, charset));
+    }
+
+    public Task<PacketBodyChunk> ReadBodyChunkAsync(
+        string id, string side, long offset, int count,
+        PacketBodyChunkEncoding preferredEncoding, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (body, _, _) = GetBody(id, side);
+        return Task.FromResult(PacketBodyChunker.Read(body, offset, count, preferredEncoding));
+    }
+
+    public Task<PacketBodyDescriptor> EditBodyAsync(
+        string id, string side, BinaryBodyEdit edit, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var item = Required(id);
+        var response = side.Equals("response", StringComparison.OrdinalIgnoreCase);
+        if (!response && !side.Equals("request", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Side must be request or response.");
+        var source = (response ? item.ResponseBody : item.RequestBody) ?? [];
+        var edited = BinaryBodyEditor.Apply(source, edit);
+        var updated = response
+            ? item with { ResponseBody = edited, ResponseHeaders = NormalizeContentLength(item.ResponseHeaders, edited.LongLength) }
+            : item with { RequestBody = edited, RequestHeaders = NormalizeContentLength(item.RequestHeaders, edited.LongLength) };
+        _store.Import(updated);
+        _binaryEdited[id + ":" + side.ToLowerInvariant()] = 0;
+        var (_, contentType, charset) = GetBody(id, side);
+        return Task.FromResult(PacketBodyChunker.Describe(edited, contentType, charset));
+    }
+
+    public async Task<string> EditBinaryBodyAsync(
+        string exchangeId, string side, string kind, long offset, long count,
+        string data, string encoding, CancellationToken cancellationToken)
+    {
+        if (!Enum.TryParse<BinaryEditKind>(kind, true, out var editKind))
+            throw new ArgumentException("Kind must be replace, insert or delete.");
+        if (!Enum.TryParse<BinaryTextEncoding>(encoding, true, out var dataEncoding))
+            throw new ArgumentException("Encoding must be hex or base64.");
+        var result = await EditBodyAsync(exchangeId, side,
+            new BinaryBodyEdit(editKind, offset, count, editKind == BinaryEditKind.Delete ? null : data, dataEncoding),
+            cancellationToken).ConfigureAwait(false);
+        return $"Binary body updated: {result.Length} bytes · sha256 {result.Sha256}";
+    }
+
+    public async Task<string> ReadBinaryBodyAsync(
+        string exchangeId, string side, long offset, int count, string encoding,
+        CancellationToken cancellationToken)
+    {
+        var chunk = await ReadBodyChunkAsync(exchangeId, side, offset, count,
+            PacketBodyChunkEncoding.Base64, cancellationToken).ConfigureAwait(false);
+        var bytes = PacketBodyChunker.Decode(chunk);
+        return encoding.Equals("hex", StringComparison.OrdinalIgnoreCase)
+            ? BinaryBodyCodec.Format(bytes, BinaryTextEncoding.Hex)
+            : BinaryBodyCodec.Format(bytes, BinaryTextEncoding.Base64);
+    }
+
     public async Task ReplayAsync(string id, CancellationToken cancellationToken) =>
         _ = await _traffic.ReplayAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
 
     public async Task SetInterceptionAsync(bool enabled, CancellationToken cancellationToken)
     {
         _intercept = enabled;
-        _traffic.SetModificationsEnabled(enabled);
+        UpdateModificationGate();
         await RestartAllAsync(cancellationToken).ConfigureAwait(false);
         Changed?.Invoke();
     }
 
-    public Task ContinueAsync(string id, CancellationToken cancellationToken) =>
-        _traffic.ContinueAsync(id, cancellationToken: cancellationToken);
+    public async Task ContinueAsync(string id, CancellationToken cancellationToken)
+    {
+        var source = Required(id);
+        var side = source.Stage == TrafficStage.Response ? "response" : "request";
+        var key = id + ":" + side;
+        if (!_binaryEdited.ContainsKey(key))
+        {
+            await _traffic.ContinueAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (source.Stage == TrafficStage.Response)
+            await _traffic.FulfillAsync(id, new TrafficResponseEdit(source.ResponseStatus ?? 200,
+                source.ResponseStatusText, source.ResponseHeaders, source.ResponseBody), cancellationToken).ConfigureAwait(false);
+        else
+            await _traffic.ContinueAsync(id, new TrafficRequestEdit(source.Url, source.Method,
+                source.RequestHeaders, source.RequestBody), cancellationToken).ConfigureAwait(false);
+        _binaryEdited.TryRemove(key, out _);
+    }
 
     public Task DropAsync(string id, CancellationToken cancellationToken) =>
         _traffic.FailAsync(id, cancellationToken: cancellationToken);
@@ -96,10 +328,12 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
     {
         var source = Required(id);
         var packet = HttpPacketCodec.Parse(rawPacket);
-        if (side == "response")
+        if (side.Equals("response", StringComparison.OrdinalIgnoreCase))
             await _traffic.FulfillAsync(id, ToResponseEdit(packet), cancellationToken).ConfigureAwait(false);
-        else
+        else if (side.Equals("request", StringComparison.OrdinalIgnoreCase))
             await _traffic.ContinueAsync(id, ToRequestEdit(packet, source), cancellationToken).ConfigureAwait(false);
+        else
+            throw new ArgumentException("Side must be request or response.");
     }
 
     public Task<TrafficOperationResult> AnalyzeAsync(
@@ -119,20 +353,87 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         string exchangeId, string request, CancellationToken cancellationToken)
     {
         var source = Required(exchangeId);
-        var result = await _traffic.ReplayAsync(exchangeId,
-            ToRequestEdit(HttpPacketCodec.Parse(request), source), cancellationToken).ConfigureAwait(false);
+        var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
+        if (_binaryEdited.ContainsKey(exchangeId + ":request"))
+            edit = edit with
+            {
+                Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
+                Body = source.RequestBody
+            };
+        var result = await _traffic.ReplayAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
         var response = FormatResponse(result);
         return new TrafficOperationResult(true, $"重放完成: HTTP {result.Status}", response);
     }
 
-    public Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken) =>
-        _traffic.ContinueAsync(exchangeId,
-            ToRequestEdit(HttpPacketCodec.Parse(request), Required(exchangeId)), cancellationToken);
+    public async Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken)
+    {
+        var source = Required(exchangeId);
+        if (source.Stage == TrafficStage.Response)
+        {
+            await ContinueAsync(exchangeId, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
+        var key = exchangeId + ":request";
+        if (_binaryEdited.ContainsKey(key)) edit = edit with
+        {
+            Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
+            Body = source.RequestBody
+        };
+        await _traffic.ContinueAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
+        _binaryEdited.TryRemove(key, out _);
+    }
 
-    public Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken) =>
-        _traffic.FulfillAsync(exchangeId, ToResponseEdit(HttpPacketCodec.Parse(response)), cancellationToken);
+    public async Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken)
+    {
+        var edit = ToResponseEdit(HttpPacketCodec.Parse(response));
+        var key = exchangeId + ":response";
+        if (_binaryEdited.ContainsKey(key))
+        {
+            var source = Required(exchangeId);
+            edit = edit with
+            {
+                Headers = NormalizeContentLength(edit.Headers ?? [], source.ResponseBody?.LongLength ?? 0),
+                Body = source.ResponseBody
+            };
+        }
+        await _traffic.FulfillAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
+        _binaryEdited.TryRemove(key, out _);
+    }
 
     private void OnStoreChanged(TrafficMessage _) => Changed?.Invoke();
+
+    private static IReadOnlyList<TrafficHeader> NormalizeContentLength(
+        IReadOnlyList<TrafficHeader> headers, long bodyLength)
+    {
+        var normalized = new List<TrafficHeader>(headers.Count + 1);
+        var inserted = false;
+        foreach (var header in headers)
+        {
+            if (header.Name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized.Add(header);
+                continue;
+            }
+
+            if (inserted) continue;
+            normalized.Add(new TrafficHeader("Content-Length", bodyLength.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            inserted = true;
+        }
+
+        if (!inserted)
+            normalized.Add(new TrafficHeader("Content-Length", bodyLength.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        return normalized;
+    }
+
+    private void OnRulesChanged(TrafficRuleChange _)
+    {
+        UpdateModificationGate();
+        RulesChanged?.Invoke();
+    }
+    private void OnRepeaterChanged(RepeaterChangedEvent _) => RepeaterChanged?.Invoke();
     private void OnSessionOpened(ICdpSession session) => _ = StartForPageAsync(session.PageId);
     private void OnSessionClosed(string pageId) => _ = _traffic.StopCaptureAsync(pageId);
 
@@ -141,7 +442,7 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         try
         {
             await _traffic.StartCaptureAsync(pageId,
-                new TrafficCaptureOptions(PauseRequests: _intercept, PauseResponses: false, CaptureResponseBodies: true), ct)
+                new TrafficCaptureOptions(PauseRequests: _intercept, PauseResponses: _responseIntercept, CaptureResponseBodies: true), ct)
                 .ConfigureAwait(false);
         }
         catch { /* 页面可能已在异步启动过程中关闭；不影响浏览器本身。 */ }
@@ -155,6 +456,7 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
             foreach (var session in _sessions.All)
             {
                 await _traffic.StopCaptureAsync(session.PageId, ct).ConfigureAwait(false);
+                _store.MarkPausedContinued(session.PageId);
                 await StartForPageAsync(session.PageId, ct).ConfigureAwait(false);
             }
         }
@@ -166,7 +468,32 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
 
     private static TrafficExchange ToExchange(TrafficMessage item) => new(
         item.Id, item.CapturedAt, item.Method, item.Url, item.ResponseStatus,
-        FormatRequest(item), FormatResponse(item), item.State == TrafficState.Paused);
+        FormatRequest(item), FormatResponse(item), item.State == TrafficState.Paused,
+        item.Stage == TrafficStage.Response);
+
+    private static RepeaterDraftItem ToRepeaterItem(RepeaterDraft draft)
+    {
+        var request = HttpPacketCodec.Format(new HttpPacket
+        {
+            Kind = HttpPacketKind.Request, ProtocolVersion = "HTTP/1.1", Method = draft.Request.Method,
+            Target = draft.Request.Url, Headers = draft.Request.Headers.Select(h => new HttpHeader(h.Name, h.Value)).ToArray(),
+            Body = DecodeBody(draft.Request.Body)
+        });
+        var latest = draft.History.LastOrDefault();
+        var response = latest?.ResponseStatus is null ? string.Empty : HttpPacketCodec.Format(new HttpPacket
+        {
+            Kind = HttpPacketKind.Response, ProtocolVersion = "HTTP/1.1", StatusCode = latest.ResponseStatus,
+            ReasonPhrase = latest.ResponseStatusText, Headers = latest.ResponseHeaders.Select(h => new HttpHeader(h.Name, h.Value)).ToArray(),
+            Body = DecodeBody(latest.ResponseBody)
+        });
+        var metrics = latest is null ? "Not sent" :
+            $"{latest.DurationMilliseconds} ms · {latest.RequestSize} B → {latest.ResponseSize} B";
+        return new RepeaterDraftItem(draft.Id, draft.Name, request, draft.Revision, draft.History.Count,
+            latest?.Status.ToString() ?? "Draft", metrics, response);
+    }
+
+    private void UpdateModificationGate() =>
+        _traffic.SetModificationsEnabled(_intercept || _responseIntercept || _rules.GetAll().Any(rule => rule.Enabled));
 
     private static string FormatRequest(TrafficMessage item)
     {
@@ -180,6 +507,46 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
             Kind = HttpPacketKind.Request, ProtocolVersion = "HTTP/1.1", Method = item.Method,
             Target = target, Headers = headers, Body = DecodeBody(item.RequestBody)
         });
+    }
+
+    private static string FormatArchiveRequest(TrafficMessage item)
+    {
+        var packet = HttpPacketCodec.Parse(FormatRequest(item));
+        return HttpPacketCodec.Format(packet with { Target = item.Url }, false);
+    }
+
+    private static string ResolveArchiveUrl(HttpPacket request)
+    {
+        if (Uri.TryCreate(request.Target, UriKind.Absolute, out var absolute)) return absolute.ToString();
+        var host = request.HeaderValues("Host").FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(host)) return request.Target ?? "/";
+        return new Uri(new Uri("https://" + host), request.Target ?? "/").ToString();
+    }
+
+    private static PacketBody? ToArchiveBody(byte[]? body, IReadOnlyList<TrafficHeader> headers)
+    {
+        if (body is null) return null;
+        var contentType = headers.FirstOrDefault(header =>
+            header.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))?.Value;
+        return PacketBody.FromBytes(body, contentType);
+    }
+
+    private (byte[] Body, string? ContentType, string? Charset) GetBody(string id, string side)
+    {
+        var item = Required(id);
+        var response = side.Equals("response", StringComparison.OrdinalIgnoreCase);
+        if (!response && !side.Equals("request", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Side must be request or response.");
+        var body = (response ? item.ResponseBody : item.RequestBody) ?? [];
+        var headers = response ? item.ResponseHeaders : item.RequestHeaders;
+        var contentType = headers.FirstOrDefault(h => h.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))?.Value;
+        string? charset = null;
+        if (contentType is not null)
+        {
+            var marker = contentType.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
+            if (marker >= 0) charset = contentType[(marker + 8)..].Split(';')[0].Trim().Trim('"');
+        }
+        return (body, contentType, charset);
     }
 
     private static string FormatResponse(TrafficMessage item)
@@ -207,15 +574,17 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         if (packet.Kind != HttpPacketKind.Request) throw new HttpPacketParseException("需要 HTTP 请求。");
         var url = Uri.TryCreate(packet.Target, UriKind.Absolute, out var absolute)
             ? absolute.ToString() : new Uri(new Uri(source.Url), packet.Target ?? "/").ToString();
-        return new TrafficRequestEdit(url, packet.Method,
-            packet.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray(), Encoding.UTF8.GetBytes(packet.Body));
+        var body = Encoding.UTF8.GetBytes(packet.Body);
+        return new TrafficRequestEdit(url, packet.Method, NormalizeContentLength(
+            packet.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray(), body.LongLength), body);
     }
 
     private static TrafficResponseEdit ToResponseEdit(HttpPacket packet)
     {
         if (packet.Kind != HttpPacketKind.Response) throw new HttpPacketParseException("需要 HTTP 响应。");
-        return new TrafficResponseEdit(packet.StatusCode ?? 200, packet.ReasonPhrase,
-            packet.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray(), Encoding.UTF8.GetBytes(packet.Body));
+        var body = Encoding.UTF8.GetBytes(packet.Body);
+        return new TrafficResponseEdit(packet.StatusCode ?? 200, packet.ReasonPhrase, NormalizeContentLength(
+            packet.Headers.Select(h => new TrafficHeader(h.Name, h.Value)).ToArray(), body.LongLength), body);
     }
 
     private static string DecodeBody(byte[]? body) => body is null ? string.Empty : Encoding.UTF8.GetString(body);
@@ -225,6 +594,8 @@ public sealed class TrafficIntegrationService : IPacketCommandService, ITrafficW
         _store.Changed -= OnStoreChanged;
         _sessions.SessionOpened -= OnSessionOpened;
         _sessions.SessionClosed -= OnSessionClosed;
+        _rules.Changed -= OnRulesChanged;
+        _repeater.Changed -= OnRepeaterChanged;
         _activeSubscription.Dispose();
         _captureGate.Dispose();
     }

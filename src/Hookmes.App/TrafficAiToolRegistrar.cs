@@ -31,6 +31,78 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
         Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
             AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+        if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
+        if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
+    }
+
+    private static void RegisterBodyEditTool(IAiToolRegistry registry, IPacketBodyEditService editor)
+    {
+        var schema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
+                kind = new { type = "string", @enum = new[] { "replace", "insert", "delete" } },
+                offset = new { type = "integer", minimum = 0 }, count = new { type = "integer", minimum = 0 },
+                data = new { type = "string" }, encoding = new { type = "string", @enum = new[] { "hex", "base64" } }
+            }, required = new[] { "id", "side", "kind", "offset" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_body_edit",
+            "Apply a bounded hex/base64 replace, insert or delete to a captured body. Requires confirmation.",
+            schema, AiToolRisk.Dangerous, async (invocation, ct) =>
+            {
+                var args = invocation.Arguments;
+                var kind = Enum.Parse<BinaryEditKind>(Required(args, "kind"), true);
+                var encoding = args.TryGetProperty("encoding", out var encodingElement) && encodingElement.GetString() == "base64"
+                    ? BinaryTextEncoding.Base64 : BinaryTextEncoding.Hex;
+                var edit = new BinaryBodyEdit(kind, args.GetProperty("offset").GetInt64(),
+                    args.TryGetProperty("count", out var count) ? count.GetInt64() : 0,
+                    args.TryGetProperty("data", out var data) ? data.GetString() : null, encoding);
+                var result = await editor.EditBodyAsync(Required(args, "id"), Required(args, "side"), edit, ct).ConfigureAwait(false);
+                return ToolResult.Ok(JsonSerializer.Serialize(result));
+            }));
+    }
+
+    private static void RegisterBodyTools(IAiToolRegistry registry, IPacketBodyReadService bodies)
+    {
+        var infoSchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } }
+            }, required = new[] { "id", "side" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_body_info",
+            "Get packet body byte length, SHA-256 and content metadata without returning the body.", infoSchema,
+            AiToolRisk.ReadOnly, async (invocation, ct) =>
+            {
+                var result = await bodies.DescribeBodyAsync(Required(invocation.Arguments, "id"),
+                    Required(invocation.Arguments, "side"), ct).ConfigureAwait(false);
+                return ToolResult.Ok(JsonSerializer.Serialize(result));
+            }));
+
+        var chunkSchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
+                offset = new { type = "integer", minimum = 0 }, count = new { type = "integer", minimum = 1, maximum = PacketBodyChunker.MaximumChunkSize },
+                encoding = new { type = "string", @enum = new[] { "base64", "safeText" } }
+            }, required = new[] { "id", "side", "offset" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_body_chunk",
+            "Read one bounded packet body byte range. Unsafe text automatically falls back to base64.", chunkSchema,
+            AiToolRisk.ReadOnly, async (invocation, ct) =>
+            {
+                var args = invocation.Arguments;
+                var offset = args.GetProperty("offset").GetInt64();
+                var count = args.TryGetProperty("count", out var countElement) ? countElement.GetInt32() : PacketBodyChunker.DefaultChunkSize;
+                var encoding = args.TryGetProperty("encoding", out var encodingElement) && encodingElement.GetString() == "safeText"
+                    ? PacketBodyChunkEncoding.SafeText : PacketBodyChunkEncoding.Base64;
+                var result = await bodies.ReadBodyChunkAsync(Required(args, "id"), Required(args, "side"), offset, count, encoding, ct)
+                    .ConfigureAwait(false);
+                return ToolResult.Ok(JsonSerializer.Serialize(result));
+            }));
     }
 
     private static void Register(IAiToolRegistry registry, IPacketCommandService packets, string name,

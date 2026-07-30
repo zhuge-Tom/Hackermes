@@ -5,13 +5,18 @@
              x:DataType="vm:TrafficWorkbenchViewModel">
   <Grid RowDefinitions="Auto,2*,3*">
     <Border Grid.Row="0" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
-      <Grid ColumnDefinitions="Auto,240,Auto,*,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,180,80,70,90,Auto,*,Auto,Auto,Auto,Auto">
         <Button Grid.Column="0" Content="Refresh" Command="{Binding ReloadCommand}" />
         <TextBox Grid.Column="1" Margin="8,0" Watermark="Filter URL / method / status" Text="{Binding FilterText, Mode=TwoWay}" />
-        <CheckBox Grid.Column="2" Content="Held only" VerticalAlignment="Center" IsChecked="{Binding OnlyIntercepted, Mode=TwoWay}" />
-        <TextBlock Grid.Column="3" Margin="12,0" VerticalAlignment="Center" Opacity="0.65" Text="{Binding Summary}" />
-        <TextBlock Grid.Column="4" VerticalAlignment="Center" Text="Intercept" FontWeight="SemiBold" />
-        <ToggleSwitch Grid.Column="5" Margin="8,0,0,0" IsChecked="{Binding IsInterceptEnabled, Mode=TwoWay}" />
+        <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="Method" Text="{Binding MethodFilter}" />
+        <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="Status" Text="{Binding StatusFilter}" />
+        <TextBox Grid.Column="4" Margin="0,0,6,0" PlaceholderText="Type" Text="{Binding ResourceTypeFilter}" />
+        <CheckBox Grid.Column="5" Content="Held" VerticalAlignment="Center" IsChecked="{Binding OnlyIntercepted, Mode=TwoWay}" />
+        <TextBlock Grid.Column="6" Margin="12,0" VerticalAlignment="Center" Opacity="0.65" Text="{Binding Summary}" />
+        <TextBlock Grid.Column="7" VerticalAlignment="Center" Text="Requests" FontWeight="SemiBold" />
+        <ToggleSwitch Grid.Column="8" Margin="8,0,0,0" IsChecked="{Binding IsInterceptEnabled, Mode=TwoWay}" />
+        <TextBlock Grid.Column="9" Margin="12,0,0,0" VerticalAlignment="Center" Text="Responses" FontWeight="SemiBold" />
+        <ToggleSwitch Grid.Column="10" Margin="8,0,0,0" IsChecked="{Binding IsResponseInterceptEnabled, Mode=TwoWay}" />
       </Grid>
     </Border>
 
@@ -30,6 +35,19 @@
       <TabControl Grid.Row="0" Grid.Column="0" Margin="0,4,2,0">
         <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>
+        <TabItem Header="Binary editor">
+          <Grid RowDefinitions="Auto,Auto,*" ColumnDefinitions="100,100,100,100,100,Auto,*" Margin="6">
+            <TextBox Grid.Column="0" Margin="0,0,4,4" PlaceholderText="request/response" Text="{Binding BinarySide}" />
+            <TextBox Grid.Column="1" Margin="0,0,4,4" PlaceholderText="replace/insert/delete" Text="{Binding BinaryKind}" />
+            <TextBox Grid.Column="2" Margin="0,0,4,4" PlaceholderText="Offset" Text="{Binding BinaryOffset}" />
+            <TextBox Grid.Column="3" Margin="0,0,4,4" PlaceholderText="Count" Text="{Binding BinaryCount}" />
+            <TextBox Grid.Column="4" Margin="0,0,4,4" PlaceholderText="hex/base64" Text="{Binding BinaryEncoding}" />
+            <Button Grid.Column="5" Margin="0,0,4,0" Content="Load chunk" Command="{Binding LoadBinaryChunkCommand}" />
+            <Button Grid.Column="6" Content="Apply binary edit" Command="{Binding ApplyBinaryEditCommand}" />
+            <TextBox Grid.Row="1" Grid.ColumnSpan="7" AcceptsReturn="True" FontFamily="Consolas,monospace"
+                     PlaceholderText="Encoded hex or base64 data (empty for delete)" Text="{Binding BinaryData}" />
+          </Grid>
+        </TabItem>
       </TabControl>
       <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
         <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>
@@ -41,6 +59,9 @@
       <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8" Margin="8,6">
         <Button Content="Analyze" Command="{Binding AnalyzeCommand}" />
         <Button Content="Replay" Command="{Binding ReplayCommand}" />
+        <Button Content="Send to Repeater" Command="{Binding SendToRepeaterCommand}" />
+        <Button Content="Previous" Command="{Binding PreviousPageCommand}" />
+        <Button Content="Next" Command="{Binding NextPageCommand}" />
         <Border Width="1" Margin="5,0" Background="{DynamicResource SemiColorBorder}" />
         <Button Content="Continue" Command="{Binding ContinueCommand}" />
         <Button Content="Drop" Command="{Binding DropCommand}" />

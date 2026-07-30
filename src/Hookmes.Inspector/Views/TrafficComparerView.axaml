@@ -1,0 +1,16 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hookmes.Inspector.ViewModels"
+             x:Class="Hookmes.Inspector.Views.TrafficComparerView"
+             x:DataType="vm:TrafficComparerViewModel">
+  <Grid RowDefinitions="Auto,*">
+    <Grid Grid.Row="0" Margin="8" ColumnDefinitions="*,*,100,Auto">
+      <TextBox Grid.Column="0" Margin="0,0,6,0" PlaceholderText="Left packet id" Text="{Binding LeftPacketId}" />
+      <TextBox Grid.Column="1" Margin="0,0,6,0" PlaceholderText="Right packet id" Text="{Binding RightPacketId}" />
+      <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="request/response" Text="{Binding Side}" />
+      <Button Grid.Column="3" Content="Compare" Command="{Binding CompareCommand}" />
+    </Grid>
+    <TextBox Grid.Row="1" Margin="8,0,8,8" IsReadOnly="True" AcceptsReturn="True"
+             FontFamily="Consolas,monospace" Text="{Binding Result}" />
+  </Grid>
+</UserControl>

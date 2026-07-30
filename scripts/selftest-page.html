@@ -17,6 +17,11 @@
     });
     console.info('hookmes-selftest-ready');
     fetch('selftest-page.html?probe=1').then(() => console.info('hookmes-selftest-fetch-ok'));
+    fetch('/api/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', 'X-Hookmes-Selftest': 'capture' },
+      body: 'capture-body'
+    }).then(response => response.json()).then(() => console.info('hookmes-traffic-capture-ok'));
   </script>
 </body>
 </html>

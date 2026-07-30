@@ -101,7 +101,6 @@ public sealed class TrafficService : ITrafficService
 
     public async Task<TrafficReplayResult> ReplayAsync(string id, TrafficRequestEdit? edit = null, CancellationToken cancellationToken = default)
     {
-        EnsureModificationAllowed(edit is not null);
         var source = _store.Get(id) ?? throw new KeyNotFoundException($"Traffic item '{id}' was not found.");
         var session = GetSession(source.PageId);
         var method = edit?.Method ?? source.Method;

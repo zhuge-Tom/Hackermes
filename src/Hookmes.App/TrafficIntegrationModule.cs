@@ -5,6 +5,9 @@ using Hookmes.Base;
 using Hookmes.Inspector.ViewModels;
 using Hookmes.Inspector.Views;
 using Hookmes.Platform.Registries;
+using Hookmes.Traffic.Rules;
+using Hookmes.Traffic.Repeater;
+using Hookmes.Traffic.Comparison;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 
@@ -18,7 +21,14 @@ public sealed class TrafficIntegrationModule : IModule
     {
         services.AddSingleton<TrafficIntegrationService>();
         services.AddSingleton<IPacketCommandService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IPacketArchiveService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IPacketBodyReadService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IPacketBodyEditService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<ITrafficRuleWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IRepeaterWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<TrafficComparisonAdapter>();
+        services.AddSingleton<ITrafficComparerWorkbenchService>(sp => sp.GetRequiredService<TrafficComparisonAdapter>());
     }
 
     public void Initialize(IServiceProvider serviceProvider)
@@ -26,6 +36,18 @@ public sealed class TrafficIntegrationModule : IModule
         var integration = serviceProvider.GetRequiredService<TrafficIntegrationService>();
         PacketCommandRegistrar.Register(serviceProvider.GetRequiredService<CommandRegistry>(), integration);
         TrafficAiToolRegistrar.Register(serviceProvider.GetRequiredService<IAiToolRegistry>(), integration);
+        TrafficRuleToolRegistrar.Register(
+            serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<IAiToolRegistry>(),
+            serviceProvider.GetRequiredService<ITrafficRuleManager>());
+        RepeaterToolRegistrar.Register(
+            serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<IAiToolRegistry>(),
+            serviceProvider.GetRequiredService<IRepeaterService>());
+        TrafficComparisonToolRegistrar.Register(
+            serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<IAiToolRegistry>(),
+            serviceProvider.GetRequiredService<ITrafficComparisonService>());
 
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
@@ -41,5 +63,55 @@ public sealed class TrafficIntegrationModule : IModule
                 Content = new TrafficWorkbenchView { DataContext = new TrafficWorkbenchViewModel(integration) }
             }
         });
+
+        serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
+        {
+            Region = DockPosition.Bottom,
+            TabId = "traffic-comparer",
+            Title = "Comparer",
+            IconKey = "SemiIconDiff",
+            IsClosable = false,
+            Order = 4,
+            CreateTab = () => new DockTabItemViewModel
+            {
+                Id = "traffic-comparer", Title = "Comparer",
+                Content = new TrafficComparerView
+                {
+                    DataContext = new TrafficComparerViewModel(serviceProvider.GetRequiredService<ITrafficComparerWorkbenchService>())
+                }
+            }
+        });
+
+        serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
+        {
+            Region = DockPosition.Bottom,
+            TabId = "traffic-repeater",
+            Title = "Repeater",
+            IconKey = "SemiIconSend",
+            IsClosable = false,
+            Order = 3,
+            CreateTab = () => new DockTabItemViewModel
+            {
+                Id = "traffic-repeater", Title = "Repeater",
+                Content = new RepeaterWorkbenchView { DataContext = new RepeaterWorkbenchViewModel(integration) }
+            }
+        });
+
+        serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
+        {
+            Region = DockPosition.Bottom,
+            TabId = "traffic-rules",
+            Title = "流量规则",
+            IconKey = "SemiIconFilter",
+            IsClosable = false,
+            Order = 2,
+            CreateTab = () => new DockTabItemViewModel
+            {
+                Id = "traffic-rules", Title = "流量规则",
+                Content = new TrafficRulesView { DataContext = new TrafficRulesViewModel(integration) }
+            }
+        });
+
+        TrafficSelfTestRunner.TryStart(serviceProvider);
     }
 }

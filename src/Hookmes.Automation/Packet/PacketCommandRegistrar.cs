@@ -2,6 +2,7 @@ using Hookmes.Automation.Commands;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,7 +28,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|replay|intercept|continue|drop|edit> ...",
+        Usage = "packet <ls|show|analyze|diff|body-info|body-read|body-edit|replay|intercept|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -43,17 +44,24 @@ public static class PacketCommandRegistrar
                 "show" => await ShowAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", true, ct),
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
                 "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
+                "body-info" => await BodyInfoAsync(service, context, ct),
+                "body-read" => await BodyReadAsync(service, context, ct),
+                "body-edit" => await BodyEditAsync(service, context, ct),
                 "replay" => await Mutate(() => service.ReplayAsync(Require(context, 1, "id"), ct), "Packet replayed."),
                 "intercept" => await InterceptAsync(service, Require(context, 1, "on|off"), ct),
                 "continue" => await Mutate(() => service.ContinueAsync(Require(context, 1, "id"), ct), "Packet continued."),
                 "drop" => await Mutate(() => service.DropAsync(Require(context, 1, "id"), ct), "Packet dropped."),
                 "edit" => await EditAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|replay|intercept|continue|drop|edit> ...")
+                "export" => await ExportAsync(service, context, ct),
+                "import" => await ImportAsync(service, context, ct),
+                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|replay|intercept|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
         catch (KeyNotFoundException exception) { return CommandResult.Fail(exception.Message); }
         catch (HttpPacketParseException exception) { return CommandResult.Fail($"Invalid packet: {exception.Message}"); }
+        catch (InvalidDataException exception) { return CommandResult.Fail($"Invalid archive: {exception.Message}"); }
+        catch (IOException exception) { return CommandResult.Fail($"Archive I/O failed: {exception.Message}"); }
     }
 
     private static async Task<CommandResult> ListAsync(IPacketCommandService service, string? filter, CancellationToken ct)
@@ -103,6 +111,58 @@ public static class PacketCommandRegistrar
         _ = HttpPacketCodec.Parse(raw); // never persist malformed edits
         await service.EditAsync(id, side, raw, ct);
         return CommandResult.Ok("Packet updated.");
+    }
+
+    private static async Task<CommandResult> ExportAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketArchiveService archive) return CommandResult.Fail("This packet backend does not support archives.");
+        var path = Require(context, 1, "path (.json or .har)");
+        var entries = await archive.ExportArchiveAsync(context.Arg(2), ct);
+        await File.WriteAllTextAsync(path, PacketArchiveCodec.Serialize(entries, PacketArchiveCodec.DetectFormat(path)), ct);
+        return CommandResult.Ok($"Exported {entries.Count} packet(s) to {Path.GetFullPath(path)}.");
+    }
+
+    private static async Task<CommandResult> ImportAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketArchiveService archive) return CommandResult.Fail("This packet backend does not support archives.");
+        var path = Require(context, 1, "path (.json or .har)");
+        var entries = PacketArchiveCodec.Deserialize(await File.ReadAllTextAsync(path, ct), PacketArchiveCodec.DetectFormat(path));
+        var imported = await archive.ImportArchiveAsync(entries, ct);
+        return CommandResult.Ok($"Imported {imported} packet(s) from {Path.GetFullPath(path)}.");
+    }
+
+    private static async Task<CommandResult> BodyInfoAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketBodyReadService bodies) return CommandResult.Fail("This packet backend does not support ranged body reads.");
+        var result = await bodies.DescribeBodyAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
+        return CommandResult.Ok($"length={result.Length}\tsha256={result.Sha256}\tcontent-type={result.ContentType ?? "-"}\tcharset={result.Charset ?? "-"}");
+    }
+
+    private static async Task<CommandResult> BodyReadAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketBodyReadService bodies) return CommandResult.Fail("This packet backend does not support ranged body reads.");
+        var offset = long.Parse(context.Arg(3) ?? "0");
+        var count = int.Parse(context.Arg(4) ?? PacketBodyChunker.DefaultChunkSize.ToString());
+        var encoding = context.Arg(5)?.Equals("text", StringComparison.OrdinalIgnoreCase) == true
+            ? PacketBodyChunkEncoding.SafeText : PacketBodyChunkEncoding.Base64;
+        var result = await bodies.ReadBodyChunkAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", offset, count, encoding, ct);
+        return CommandResult.Ok($"offset={result.Offset}\tcount={result.Count}\ttotal={result.TotalLength}\tencoding={result.Encoding}\tend={result.IsEnd}{Environment.NewLine}{result.Data}");
+    }
+
+    private static async Task<CommandResult> BodyEditAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketBodyEditService editor) return CommandResult.Fail("This packet backend does not support binary edits.");
+        if (!Enum.TryParse<BinaryEditKind>(Require(context, 3, "replace|insert|delete"), true, out var kind))
+            return CommandResult.Fail("Edit kind must be replace, insert or delete.");
+        var offset = long.Parse(Require(context, 4, "offset"));
+        var count = long.Parse(context.Arg(5) ?? "0");
+        var encodingText = context.Arg(6) ?? "hex";
+        if (!Enum.TryParse<BinaryTextEncoding>(encodingText, true, out var encoding))
+            return CommandResult.Fail("Body encoding must be hex or base64.");
+        var data = kind == BinaryEditKind.Delete ? null : context.Rest(7);
+        var result = await editor.EditBodyAsync(Require(context, 1, "id"), context.Arg(2) ?? "request",
+            new BinaryBodyEdit(kind, offset, count, data, encoding), ct);
+        return CommandResult.Ok($"Body edited: length={result.Length} sha256={result.Sha256}");
     }
 
     private static async Task<string> GetRequiredAsync(IPacketCommandService service, string id, string side, CancellationToken ct)

@@ -13,4 +13,7 @@
     <Project Path="src/Hookmes.Traffic/Hookmes.Traffic.csproj" />
     <Project Path="src/Hookmes.App/Hookmes.App.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hookmes.PacketTraffic.Tests/Hookmes.PacketTraffic.Tests.csproj" />
+  </Folder>
 </Solution>

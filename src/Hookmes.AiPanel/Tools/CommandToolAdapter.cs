@@ -13,7 +13,7 @@ public sealed class CommandToolAdapter
 {
     // 文件路径型命令不直接暴露给模型；它们需经过独立文件工具的路径约束与策略检查。
     private static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
-        { "help", "timeline", "save", "load", "packet" };
+        { "help", "timeline", "save", "load", "packet", "rule", "repeater", "compare" };
     private readonly CommandRegistry _commands;
 
     public CommandToolAdapter(CommandRegistry commands) => _commands = commands;

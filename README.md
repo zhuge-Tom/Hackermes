@@ -78,6 +78,7 @@ rec start
 | 3 | 统一动作模型:执行器、选择器引擎、录制回放、交互式终端 | ✅ 完成 |
 | 4 | AI 集成:工具集、策略闸门、MCP | ✅ 完成 |
 | 5 | 数据包工作台:拦截、分析、编辑、丢弃、响应替换与重放 | ✅ 完成 |
+| 6 | 专业化流量工程:持久规则、响应拦截、HAR/JSON 归档、可重复测试 | 🚧 进行中 |
 
 已可用:内置浏览器多标签、CDP 请求-响应与事件订阅、页面内 Hook 与调用栈捕获、网络面板(协议数据与调用栈合并)、控制台面板(console / 未捕获异常 / 浏览器级日志三源合并)、五区域布局与布局持久化。
 
@@ -86,6 +87,8 @@ rec start
 阶段 4 已接入 OpenAI 兼容流式对话和多轮工具调用。页面工具复用阶段 3 的命令注册表，AI 可查询页面、点击、输入、截图、读取 console 与网络流；所有调用统一经过默认保守的策略闸门，写操作弹窗确认，危险工具拒绝，也可显式启用信任模式。MCP 支持配置 stdio server，自动发现并注册其工具。
 
 阶段 5 新增基于 CDP `Fetch` 域的数据包工作台，无需系统代理或根证书即可对内置浏览器的 HTTP(S) 请求/响应执行类似 Burp Intercept / Repeater 的操作。人工可在底部“数据包”页签编辑原始 HTTP，CLI 可使用 `packet ls|show|analyze|diff|replay|intercept|continue|drop|edit`；内部 Agent 共享同一核心服务，并按只读、修改和高风险分级确认。Agent 查看原始包时默认遮蔽认证头与 Cookie。
+
+阶段 6 已开始：请求和响应现在可以独立拦截；持久化流量规则支持增删改查、启停、排序及 JSON 导入导出，人工、CLI 与 Agent 可共同管理；`packet export` / `packet import` 支持 Hookmes JSON v1 与 HAR 1.2，并以 Base64 元数据无损保存二进制 body。大包可先查询长度/SHA-256，再以最大 256 KiB 的范围分块读取；二进制编辑支持 Hex/Base64 的 Replace/Insert/Delete 及 Content-Length 规范化。独立 Repeater 支持命名草稿、编辑、多轮发送历史以及耗时/大小/状态记录；Comparer 提供起始行、重复 Header 和二进制 body 摘要差异；历史列表支持复合筛选和分页。Traffic 历史使用版本化压缩文件落盘，Repeater/Comparer 使用版本化 JSON，均具备原子替换、备份恢复和跨重启加载。上述第四批源码已完成，按当前开发安排等待后续统一构建验收。
 
 冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
 
@@ -99,11 +102,11 @@ rec start
 | `Hookmes.PageAgent` | 页面内驻留脚本(TypeScript),经 binding 回传 |
 | `Hookmes.Dock` | Tab 保活控件、布局 ViewModel、懒物化 |
 | `Hookmes.Browser` | 浏览器标签页、WebView 生命周期、Agent 装配 |
-| `Hookmes.Inspector` | 网络面板、控制台面板 |
-| `Hookmes.Automation` | 统一动作、选择器、录制回放、断言、时间线和脚本持久化 |
+| `Hookmes.Inspector` | 网络/控制台、数据包、规则、Repeater 与 Comparer 工作台 |
+| `Hookmes.Automation` | 统一动作、录制回放、CLI、HTTP 包编解码、归档、分块读取与二进制编辑 |
 | `Hookmes.Terminal` | 领域 REPL 与真实 PTY System Shell |
 | `Hookmes.AiPanel` | OpenAI 兼容对话、AI 工具编排、策略闸门和 MCP stdio 桥接 |
-| `Hookmes.Traffic` | CDP Fetch 流量捕获、拦截规则、编辑/丢弃/响应替换与请求重放 |
+| `Hookmes.Traffic` | CDP Fetch 捕获/拦截/重放、持久规则与历史、Repeater、Comparer、查询分页 |
 | `Hookmes.App` | 启动装配、主窗口、视图定位 |
 
 ---
@@ -116,6 +119,7 @@ rec start
 | .NET SDK | 10.0 — [下载](https://dotnet.microsoft.com/download) |
 | WebView2 Runtime | 任意近期版本 — [下载](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | Node.js | 18+,**仅在修改 Page Agent 源码时需要** |
+| Python | 3.10+,**仅运行 `scripts/run-traffic-selftest.ps1` 的本地 HTTP 验收服务时需要** |
 
 前端产物以生成的 C# 源文件形式提交进仓库,因此常规构建不需要 Node.js。
 
@@ -125,6 +129,13 @@ rec start
 dotnet restore
 dotnet build Hookmes.slnx
 dotnet run --project src/Hookmes.App/Hookmes.App.csproj
+```
+
+流量核心测试与真实桌面 CDP 验收：
+
+```powershell
+dotnet test tests/Hookmes.PacketTraffic.Tests/Hookmes.PacketTraffic.Tests.csproj
+powershell -ExecutionPolicy Bypass -File scripts/run-traffic-selftest.ps1
 ```
 
 修改 Page Agent 的 TypeScript 源码后需重新生成:

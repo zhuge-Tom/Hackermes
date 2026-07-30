@@ -621,6 +621,9 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 **阶段 5 — 人机共用数据包工作台**
 `Traffic` 以 CDP `Fetch.requestPaused` 为唯一流量修改核心，人工工作台、`packet` CLI 与 Agent 数据包工具只作为三个适配层。默认捕获后立即放行；显式开启 Intercept 后才允许编辑、丢弃和响应替换。Agent 工具按操作粒度进入策略闸门，读取原始包默认脱敏。
 
+**阶段 6 — 专业化流量工程与可验证性（进行中）**
+在阶段 5 的单次内存工作流上增加持久规则、请求/响应独立拦截、二进制安全的 HAR/Hookmes JSON 历史交换、范围分块 body 读取与 Hex/Base64 局部编辑、独立 Repeater、结构化 Comparer、历史复合查询/分页和跨重启持久化，以及 Packet/Traffic/loopback HTTP 和真实桌面 WebView2/CDP 自动化验收。第四批持久化与二进制编辑源码已完成，等待统一构建验收后再把本阶段标记完成。
+
 ---
 
 ## 十二、关键风险

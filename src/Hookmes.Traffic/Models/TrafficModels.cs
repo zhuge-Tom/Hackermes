@@ -48,3 +48,22 @@ public sealed record TrafficCaptureOptions(
     bool PauseRequests = false,
     bool PauseResponses = false,
     bool CaptureResponseBodies = true);
+
+public sealed record TrafficQuery(
+    string? PageId = null,
+    string? Text = null,
+    string? Method = null,
+    int? Status = null,
+    string? ResourceType = null,
+    TrafficState? State = null,
+    string? RuleId = null,
+    DateTimeOffset? From = null,
+    DateTimeOffset? To = null,
+    int Offset = 0,
+    int Limit = 200);
+
+public sealed record TrafficQueryResult(
+    IReadOnlyList<TrafficMessage> Items,
+    int Total,
+    int Offset,
+    int Limit);
