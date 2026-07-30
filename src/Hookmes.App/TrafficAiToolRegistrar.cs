@@ -21,6 +21,10 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.ReadOnly, "id", true, a => Args("analyze", Required(a, "id"), Optional(a, "side", "request")));
         Register(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
             AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
+        if (packets is IPacketAuditQueryService)
+            Register(registry, packets, "packet_audit", "Query bounded metadata-only traffic operation audit entries.",
+                AiToolRisk.ReadOnly, "packetId", false, a => Args("audit", Optional(a, "packetId", "*"),
+                    a.TryGetProperty("limit", out var limit) ? limit.GetRawText() : "100"));
         Register(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
             AiToolRisk.ReadOnly, "id", true, a => Args("param-list", Required(a, "id"), Optional(a, "side", "request")));
         RegisterParameterSetTool(registry, packets);
@@ -222,7 +226,8 @@ internal static class TrafficAiToolRegistrar
                 filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
                 location = new { type = "string", @enum = new[] { "query", "form", "json" } },
                 name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" },
-                mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } }
+                mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } },
+                packetId = new { type = "string" }, limit = new { type = "integer", minimum = 1, maximum = 500 }
             },
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false

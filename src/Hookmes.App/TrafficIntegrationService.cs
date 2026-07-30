@@ -8,6 +8,8 @@ using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Services;
 using Hookmes.Traffic.Annotations;
+using Hookmes.Traffic.Comparison;
+using Hookmes.Traffic.History;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,7 +21,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService,
+    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -28,7 +30,10 @@ public sealed class TrafficIntegrationService :
     private readonly ICdpSessionRegistry _sessions;
     private readonly ITrafficRuleManager _rules;
     private readonly IRepeaterService _repeater;
+    private readonly ITrafficComparisonService _comparisons;
     private readonly ITrafficAnnotationService _annotations;
+    private readonly IPacketAuditTrail _audit;
+    private readonly ITrafficHistoryManagementService _history;
     private readonly SemaphoreSlim _captureGate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, EditDraftState> _editDrafts = new(StringComparer.Ordinal);
     private readonly IDisposable _activeSubscription;
@@ -38,21 +43,26 @@ public sealed class TrafficIntegrationService :
 
     public TrafficIntegrationService(
         ITrafficService traffic, ITrafficStore store, ICdpSessionRegistry sessions,
-        ITrafficRuleManager rules, IRepeaterService repeater,
-        ITrafficAnnotationService annotations, IEventBus eventBus)
+        ITrafficRuleManager rules, IRepeaterService repeater, ITrafficComparisonService comparisons,
+        ITrafficAnnotationService annotations, IPacketAuditTrail audit,
+        ITrafficHistoryManagementService history, IEventBus eventBus)
     {
         _traffic = traffic;
         _store = store;
         _sessions = sessions;
         _rules = rules;
         _repeater = repeater;
+        _comparisons = comparisons;
         _annotations = annotations;
+        _audit = audit;
+        _history = history;
         _store.Changed += OnStoreChanged;
         _sessions.SessionOpened += OnSessionOpened;
         _sessions.SessionClosed += OnSessionClosed;
         _rules.Changed += OnRulesChanged;
         _repeater.Changed += OnRepeaterChanged;
         _annotations.Changed += OnAnnotationChanged;
+        _history.Changed += OnHistoryChanged;
         _activeSubscription = eventBus.SubscribeDisposable<ActiveContentTabChangedEvent>(e =>
             _activePageId = e.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal) ? id : null);
         UpdateModificationGate();
@@ -62,6 +72,46 @@ public sealed class TrafficIntegrationService :
     public event Action? Changed;
     public event Action? RulesChanged;
     public event Action? RepeaterChanged;
+
+    public IReadOnlyList<PacketAuditEntry> QueryAudit(PacketAuditQuery query) => _audit.Query(query);
+
+    public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) =>
+        _audit.Query(new PacketAuditQuery(exchangeId, Limit: limit)).Select(entry => new TrafficAuditItem(
+            entry.Timestamp, entry.EntryPoint, entry.Operation.ToString(), entry.Side,
+            FormatAuditVersion(entry.Before), FormatAuditVersion(entry.After),
+            entry.Result.ToString(), entry.ErrorCode)).ToArray();
+
+    public TrafficHistoryOverview GetHistoryOverview() => ToHistoryOverview(_history.GetStatistics());
+
+    public string PreviewHistoryCleanup()
+    {
+        var value = _history.PreviewCleanup();
+        return $"Cleanup preview: remove {value.RemovedEntries} entries / {value.RemovedEstimatedBytes} B; " +
+               $"keep {value.RemainingEntries} entries / {value.RemainingEstimatedBytes} B.";
+    }
+
+    public Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(
+        int maxEntries, long maxBytes, int retentionDays, bool autoPrune, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _history.UpdatePolicy(new TrafficHistoryPolicy(maxEntries, maxBytes, retentionDays, autoPrune));
+        return Task.FromResult(ToHistoryOverview(_history.GetStatistics()));
+    }
+
+    public Task<string> CleanupTrafficHistoryAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var value = _history.Cleanup();
+        return Task.FromResult($"Removed {value.RemovedEntries} entries / {value.RemovedEstimatedBytes} B; " +
+                               $"remaining {value.RemainingEntries} / {value.RemainingEstimatedBytes} B.");
+    }
+
+    public Task ClearTrafficHistoryAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _history.Clear();
+        return Task.CompletedTask;
+    }
 
     public IReadOnlyList<TrafficExchange> Exchanges => _store.Read(5000)
         .Select(ToExchange).ToArray();
@@ -164,6 +214,20 @@ public sealed class TrafficIntegrationService :
         cancellationToken.ThrowIfCancellationRequested();
         _repeater.ClearHistory(id);
         return Task.CompletedTask;
+    }
+
+    public Task<string> CompareRoundsAsync(string leftDraftId, string leftResultId,
+        string rightDraftId, string rightResultId, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var response = side.Equals("response", StringComparison.OrdinalIgnoreCase);
+        if (!response && !side.Equals("request", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Comparison side must be request or response.");
+        var kind = response ? ComparisonSourceKind.RepeaterResponse : ComparisonSourceKind.RepeaterRequest;
+        var result = _comparisons.Compare(
+            new ComparisonSource(kind, DraftId: leftDraftId, SendResultId: leftResultId),
+            new ComparisonSource(kind, DraftId: rightDraftId, SendResultId: rightResultId));
+        return Task.FromResult(TrafficComparisonAdapter.Format(result));
     }
 
     public bool IsInterceptEnabled
@@ -316,6 +380,9 @@ public sealed class TrafficIntegrationService :
         var response = side.Equals("response", StringComparison.OrdinalIgnoreCase);
         if (!response && !side.Equals("request", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Side must be request or response.");
+        var beforeAudit = AuditVersion(item, response ? "response" : "request");
+        try
+        {
         var source = (response ? item.ResponseBody : item.RequestBody) ?? [];
         var edited = BinaryBodyEditor.Apply(source, edit);
         var key = id + ":" + side.ToLowerInvariant();
@@ -336,7 +403,16 @@ public sealed class TrafficIntegrationService :
         Interlocked.Exchange(ref draft.FailedAttempts, 0);
         draft.LastFailure = null;
         var (_, contentType, charset) = GetBody(id, side);
+        RecordAudit(PacketAuditOperation.BodyEdit, "shared-api", id, response ? "response" : "request",
+            beforeAudit, AuditVersion(updated, response ? "response" : "request"));
         return Task.FromResult(PacketBodyChunker.Describe(edited, contentType, charset));
+        }
+        catch (Exception exception)
+        {
+            RecordAudit(PacketAuditOperation.BodyEdit, "shared-api", id, response ? "response" : "request",
+                beforeAudit, beforeAudit, exception);
+            throw;
+        }
     }
 
     public Task<IReadOnlyList<PacketEditDraftStatus>> ListPendingEditsAsync(CancellationToken cancellationToken)
@@ -436,8 +512,12 @@ public sealed class TrafficIntegrationService :
         return Task.FromResult(ToAnnotationItem(changed));
     }
 
-    public async Task ReplayAsync(string id, CancellationToken cancellationToken) =>
-        _ = await _traffic.ReplayAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+    public async Task ReplayAsync(string id, CancellationToken cancellationToken)
+    {
+        var item = Required(id); var version = AuditVersion(item, "request");
+        try { _ = await _traffic.ReplayAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false); RecordAudit(PacketAuditOperation.Replay, "cli-agent", id, "request", version, version); }
+        catch (Exception exception) { RecordAudit(PacketAuditOperation.Replay, "cli-agent", id, "request", version, version, exception); throw; }
+    }
 
     public async Task SetInterceptionAsync(bool enabled, CancellationToken cancellationToken)
     {
@@ -452,9 +532,12 @@ public sealed class TrafficIntegrationService :
         var source = Required(id);
         var side = source.Stage == TrafficStage.Response ? "response" : "request";
         var key = id + ":" + side;
+        var afterVersion = AuditVersion(source, side);
+        var beforeVersion = AuditBeforeDraft(key, afterVersion);
         if (!_editDrafts.ContainsKey(key))
         {
-            await _traffic.ContinueAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+            try { await _traffic.ContinueAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false); RecordAudit(PacketAuditOperation.Continue, "cli-agent", id, side, beforeVersion, afterVersion); }
+            catch (Exception exception) { RecordAudit(PacketAuditOperation.Continue, "cli-agent", id, side, beforeVersion, afterVersion, exception); throw; }
             return;
         }
 
@@ -467,15 +550,20 @@ public sealed class TrafficIntegrationService :
                 await _traffic.ContinueAsync(id, new TrafficRequestEdit(source.Url, source.Method,
                     source.RequestHeaders, source.RequestBody), cancellationToken).ConfigureAwait(false);
             ClearDraft(key);
+            RecordAudit(source.Stage == TrafficStage.Response ? PacketAuditOperation.Fulfill : PacketAuditOperation.Continue,
+                "cli-agent", id, side, beforeVersion, afterVersion);
         }
-        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
+        catch (Exception exception) { RecordCommitFailure(key, exception); RecordAudit(source.Stage == TrafficStage.Response ? PacketAuditOperation.Fulfill : PacketAuditOperation.Continue, "cli-agent", id, side, beforeVersion, afterVersion, exception); throw; }
     }
 
     public async Task DropAsync(string id, CancellationToken cancellationToken)
     {
-        await _traffic.FailAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var item = Required(id); var side = item.Stage == TrafficStage.Response ? "response" : "request"; var version = AuditVersion(item, side);
+        try { await _traffic.FailAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) { RecordAudit(PacketAuditOperation.Drop, "cli-agent", id, side, version, version, exception); throw; }
         ClearDraft(DraftKey(id, "request"));
         ClearDraft(DraftKey(id, "response"));
+        RecordAudit(PacketAuditOperation.Drop, "cli-agent", id, side, version, version);
     }
 
     public async Task EditAsync(string id, string side, string rawPacket, CancellationToken cancellationToken)
@@ -484,6 +572,9 @@ public sealed class TrafficIntegrationService :
         var packet = HttpPacketCodec.Parse(rawPacket);
         ValidateSide(side);
         var key = DraftKey(id, side);
+        var before = AuditBeforeDraft(key, AuditVersion(source, side));
+        var submittedBody = Encoding.UTF8.GetBytes(packet.Body);
+        var after = ToEditVersion(submittedBody, packet.Headers.Select(header => new TrafficHeader(header.Name, header.Value)).ToArray());
         try
         {
             if (side.Equals("response", StringComparison.OrdinalIgnoreCase))
@@ -491,8 +582,10 @@ public sealed class TrafficIntegrationService :
             else
                 await _traffic.ContinueAsync(id, ToRequestEdit(packet, source), cancellationToken).ConfigureAwait(false);
             ClearDraft(key);
+            RecordAudit(side.Equals("response", StringComparison.OrdinalIgnoreCase) ? PacketAuditOperation.Fulfill : PacketAuditOperation.Edit,
+                "cli-agent", id, side.ToLowerInvariant(), before, after);
         }
-        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
+        catch (Exception exception) { RecordCommitFailure(key, exception); RecordAudit(side.Equals("response", StringComparison.OrdinalIgnoreCase) ? PacketAuditOperation.Fulfill : PacketAuditOperation.Edit, "cli-agent", id, side.ToLowerInvariant(), before, after, exception); throw; }
     }
 
     public Task<TrafficOperationResult> AnalyzeAsync(
@@ -512,6 +605,7 @@ public sealed class TrafficIntegrationService :
         string exchangeId, string request, CancellationToken cancellationToken)
     {
         var source = Required(exchangeId);
+        var before = AuditVersion(source, "request");
         var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
         if (_editDrafts.ContainsKey(exchangeId + ":request"))
             edit = edit with
@@ -519,7 +613,9 @@ public sealed class TrafficIntegrationService :
                 Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
                 Body = source.RequestBody
             };
-        var result = await _traffic.ReplayAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
+        TrafficReplayResult result;
+        try { result = await _traffic.ReplayAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false); RecordAudit(PacketAuditOperation.Replay, "workbench", exchangeId, "request", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? [])); }
+        catch (Exception exception) { RecordAudit(PacketAuditOperation.Replay, "workbench", exchangeId, "request", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? []), exception); throw; }
         var response = FormatResponse(result);
         return new TrafficOperationResult(true, $"重放完成: HTTP {result.Status}", response);
     }
@@ -534,6 +630,7 @@ public sealed class TrafficIntegrationService :
         }
         var edit = ToRequestEdit(HttpPacketCodec.Parse(request), source);
         var key = exchangeId + ":request";
+        var before = AuditBeforeDraft(key, AuditVersion(source, "request"));
         if (_editDrafts.ContainsKey(key)) edit = edit with
         {
             Headers = NormalizeContentLength(edit.Headers ?? [], source.RequestBody?.LongLength ?? 0),
@@ -543,14 +640,16 @@ public sealed class TrafficIntegrationService :
         {
             await _traffic.ContinueAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
             ClearDraft(key);
+            RecordAudit(PacketAuditOperation.Continue, "workbench", exchangeId, "request", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? []));
         }
-        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
+        catch (Exception exception) { RecordCommitFailure(key, exception); RecordAudit(PacketAuditOperation.Continue, "workbench", exchangeId, "request", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? []), exception); throw; }
     }
 
     public async Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken)
     {
         var edit = ToResponseEdit(HttpPacketCodec.Parse(response));
         var key = exchangeId + ":response";
+        var before = AuditBeforeDraft(key, AuditVersion(Required(exchangeId), "response"));
         if (_editDrafts.ContainsKey(key))
         {
             var source = Required(exchangeId);
@@ -564,8 +663,9 @@ public sealed class TrafficIntegrationService :
         {
             await _traffic.FulfillAsync(exchangeId, edit, cancellationToken).ConfigureAwait(false);
             ClearDraft(key);
+            RecordAudit(PacketAuditOperation.Fulfill, "workbench", exchangeId, "response", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? []));
         }
-        catch (Exception exception) { RecordCommitFailure(key, exception); throw; }
+        catch (Exception exception) { RecordCommitFailure(key, exception); RecordAudit(PacketAuditOperation.Fulfill, "workbench", exchangeId, "response", before, ToEditVersion(edit.Body ?? [], edit.Headers ?? []), exception); throw; }
     }
 
     private void OnStoreChanged(TrafficMessage _) => Changed?.Invoke();
@@ -608,6 +708,29 @@ public sealed class TrafficIntegrationService :
         new(body.LongLength, PacketBodyChunker.Describe(body).Sha256,
             headers.FirstOrDefault(header => header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))?.Value);
 
+    private static PacketEditVersion AuditVersion(TrafficMessage item, string side) =>
+        side.Equals("response", StringComparison.OrdinalIgnoreCase)
+            ? ToEditVersion(item.ResponseBody ?? [], item.ResponseHeaders)
+            : ToEditVersion(item.RequestBody ?? [], item.RequestHeaders);
+
+    private PacketEditVersion AuditBeforeDraft(string key, PacketEditVersion fallback) =>
+        _editDrafts.TryGetValue(key, out var draft)
+            ? ToEditVersion(draft.OriginalBody ?? [], draft.OriginalHeaders)
+            : fallback;
+
+    private void RecordAudit(PacketAuditOperation operation, string entryPoint, string packetId, string side,
+        PacketEditVersion before, PacketEditVersion after, Exception? error = null)
+    {
+        try
+        {
+            _audit.Record(new PacketAuditEntry(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow,
+                entryPoint, operation, packetId, side, before, after,
+                error is null ? PacketAuditResult.Succeeded : PacketAuditResult.Failed,
+                error?.GetType().FullName));
+        }
+        catch { /* Audit persistence must never change the packet operation outcome. */ }
+    }
+
     private void RecordCommitFailure(string key, Exception exception)
     {
         if (!_editDrafts.TryGetValue(key, out var draft)) return;
@@ -634,6 +757,7 @@ public sealed class TrafficIntegrationService :
     }
     private void OnRepeaterChanged(RepeaterChangedEvent _) => RepeaterChanged?.Invoke();
     private void OnAnnotationChanged(TrafficAnnotationChanged _) => Changed?.Invoke();
+    private void OnHistoryChanged(TrafficHistoryChanged _) => Changed?.Invoke();
     private void OnSessionOpened(ICdpSession session) => _ = StartForPageAsync(session.PageId);
     private void OnSessionClosed(string pageId) => _ = _traffic.StopCaptureAsync(pageId);
 
@@ -688,8 +812,26 @@ public sealed class TrafficIntegrationService :
         });
         var metrics = latest is null ? "Not sent" :
             $"{latest.DurationMilliseconds} ms · {latest.RequestSize} B → {latest.ResponseSize} B";
+        var history = draft.History.OrderByDescending(item => item.Sequence).Select(item =>
+        {
+            var roundRequest = HttpPacketCodec.Format(new HttpPacket
+            {
+                Kind = HttpPacketKind.Request, ProtocolVersion = "HTTP/1.1", Method = item.Request.Method,
+                Target = item.Request.Url, Headers = item.Request.Headers.Select(h => new HttpHeader(h.Name, h.Value)).ToArray(),
+                Body = DecodeBody(item.Request.Body)
+            });
+            var roundResponse = item.ResponseStatus is null ? string.Empty : HttpPacketCodec.Format(new HttpPacket
+            {
+                Kind = HttpPacketKind.Response, ProtocolVersion = "HTTP/1.1", StatusCode = item.ResponseStatus,
+                ReasonPhrase = item.ResponseStatusText, Headers = item.ResponseHeaders.Select(h => new HttpHeader(h.Name, h.Value)).ToArray(),
+                Body = DecodeBody(item.ResponseBody)
+            });
+            var roundMetrics = $"{item.DurationMilliseconds} ms · {item.RequestSize} B → {item.ResponseSize} B";
+            return new RepeaterRoundItem(draft.Id, draft.Name, item.Id, item.Sequence, item.Status.ToString(),
+                roundMetrics, roundRequest, roundResponse, item.ResponseStatus is not null);
+        }).ToArray();
         return new RepeaterDraftItem(draft.Id, draft.Name, request, draft.Revision, draft.History.Count,
-            latest?.Status.ToString() ?? "Draft", metrics, response);
+            latest?.Status.ToString() ?? "Draft", metrics, response, history);
     }
 
     private void UpdateModificationGate() =>
@@ -793,6 +935,14 @@ public sealed class TrafficIntegrationService :
         value.Starred, string.Join(", ", value.Tags), value.Note ?? string.Empty,
         value.Status.ToString(), value.Revision);
 
+    private static string FormatAuditVersion(PacketEditVersion value) =>
+        $"{value.Length} B · {value.Sha256} · CL {value.ContentLength ?? "-"}";
+
+    private static TrafficHistoryOverview ToHistoryOverview(TrafficHistoryStatistics value) => new(
+        value.EntryCount, value.EstimatedContentBytes, value.PersistedFileBytes,
+        value.OldestCapture, value.NewestCapture, value.Policy.MaxEntries,
+        value.Policy.MaxStorageBytes, value.Policy.RetentionDays, value.Policy.AutoPrune);
+
     public void Dispose()
     {
         _store.Changed -= OnStoreChanged;
@@ -801,6 +951,7 @@ public sealed class TrafficIntegrationService :
         _rules.Changed -= OnRulesChanged;
         _repeater.Changed -= OnRepeaterChanged;
         _annotations.Changed -= OnAnnotationChanged;
+        _history.Changed -= OnHistoryChanged;
         _activeSubscription.Dispose();
         _captureGate.Dispose();
     }

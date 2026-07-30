@@ -94,7 +94,7 @@ rec start
 
 二进制编辑现在以公共草稿契约保存首次编辑前快照、前后长度/SHA-256/Content-Length 和最近提交失败；人工 Binary editor、CLI `packet draft-*` 与 Agent `packet_edit_*` 均可查询或 Discard，提交失败时保留草稿供重试。Comparer 工作台也已支持从当前 Traffic/Repeater 来源创建、重命名、重算和删除持久 Session。
 
-Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2 MiB 的 Hookmes JSON/HAR 内容，不接受任意文件路径；批量导出可能包含敏感包数据，按 Dangerous 确认，导入按 Mutating 确认。
+Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2 MiB 的 Hookmes JSON/HAR 内容，不接受任意文件路径；批量导出可能包含敏感包数据，按 Dangerous 确认，导入按 Mutating 确认。Repeater Workbench 可选择每次发送的稳定历史轮次，查看该轮请求、响应、耗时和大小，并把任意两轮直接交给结构化 Comparer。数据包修改、继续、丢弃、Fulfill 与重放统一写入只含长度、SHA-256 和 Content-Length 的持久审计轨迹，人工、CLI `packet audit` 和 Agent `packet_audit` 均可查询。Traffic 历史已提供条数、估算容量、保留期和自动清理策略，三端可预览、应用清理或显式清空。
 
 冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
 

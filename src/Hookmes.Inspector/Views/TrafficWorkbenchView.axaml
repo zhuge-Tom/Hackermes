@@ -102,6 +102,42 @@
       <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
         <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Response pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedResponse}" /></TabItem>
+        <TabItem Header="Audit">
+          <Grid RowDefinitions="Auto,*" Margin="6">
+            <Button HorizontalAlignment="Left" Content="Refresh selected packet audit" Command="{Binding RefreshAuditCommand}" />
+            <DataGrid Grid.Row="1" Margin="0,6,0,0" ItemsSource="{Binding AuditEntries}" AutoGenerateColumns="False" IsReadOnly="True">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Time" Width="135" Binding="{Binding Timestamp}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Entry" Width="90" Binding="{Binding EntryPoint}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Operation" Width="80" Binding="{Binding Operation}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Side" Width="70" Binding="{Binding Side}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Before" Width="*" Binding="{Binding Before}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="After" Width="*" Binding="{Binding After}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Result" Width="80" Binding="{Binding Result}" x:DataType="vm:TrafficAuditItem" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </Grid>
+        </TabItem>
+        <TabItem Header="History storage">
+          <Grid RowDefinitions="Auto,Auto,Auto,*" ColumnDefinitions="Auto,*,Auto,*" Margin="8">
+            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,6,6" VerticalAlignment="Center" Text="Max entries" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,12,6" Text="{Binding HistoryMaxEntries}" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Margin="0,0,6,6" VerticalAlignment="Center" Text="Max bytes" />
+            <TextBox Grid.Row="0" Grid.Column="3" Margin="0,0,0,6" Text="{Binding HistoryMaxBytes}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,6,6" VerticalAlignment="Center" Text="Retention days" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,12,6" Text="{Binding HistoryRetentionDays}" />
+            <CheckBox Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Content="Automatic pruning" IsChecked="{Binding HistoryAutoPrune}" />
+            <StackPanel Grid.Row="2" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="6">
+              <Button Content="Refresh stats" Command="{Binding RefreshHistoryCommand}" />
+              <Button Content="Preview cleanup" Command="{Binding PreviewHistoryCleanupCommand}" />
+              <Button Content="Save and apply policy" Command="{Binding SaveHistoryPolicyCommand}" />
+              <Button Content="Run cleanup" Command="{Binding CleanupTrafficHistoryCommand}" />
+              <CheckBox Margin="12,0,0,0" Content="Confirm clear all" IsChecked="{Binding ConfirmHistoryClear}" />
+              <Button Content="Clear all history" Command="{Binding ClearTrafficHistoryCommand}" />
+            </StackPanel>
+            <SelectableTextBlock Grid.Row="3" Grid.ColumnSpan="4" Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding HistoryStatus}" />
+          </Grid>
+        </TabItem>
       </TabControl>
       <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="8,5" Background="{DynamicResource SemiColorFill0}">
         <SelectableTextBlock Text="{Binding Analysis}" TextWrapping="Wrap" />

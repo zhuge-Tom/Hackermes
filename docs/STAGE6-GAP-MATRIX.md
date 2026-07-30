@@ -14,14 +14,14 @@
 | 原始 HTTP 文本编辑并应用 | ✅ | ✅ | ✅ | Request/Response editor；`packet edit`；`packet_edit` | 需补编辑前后 Content-Length/Transfer-Encoding 一致性提示 |
 | 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters` 页读取/修改 query、form 和顶层 JSON；`packet param-list/param-set`；`packet_parameters/packet_parameter_set`（只读结果遮蔽敏感值，修改为 Dangerous） | UI 修改先应用到文本编辑器、CLI/Agent `param-set` 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON、multipart、Cookie 和 Header 参数 |
 | 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor；`body-info/body-read`；`packet_body_info/chunk` | UI 缺少长度/SHA-256 固定摘要、分块导航与 offset 进度视图 |
-| Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | `IPacketEditDraftService` 保存首次快照、前后长度/SHA-256/Content-Length和最近失败；Binary editor 可 Refresh/Discard；CLI `draft-list/show/discard`；Agent `packet_edit_drafts/draft/discard`；提交失败保留可重试 | 仍需真实 echo 对修改后字节、响应 Fulfill 与 CDP 失败重试执行验收；提交结果尚未形成持久审计记录 |
+| Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | `IPacketEditDraftService` 保存首次快照、前后长度/SHA-256/Content-Length和最近失败；Binary editor 可 Refresh/Discard；CLI `draft-list/show/discard`；Agent `packet_edit_drafts/draft/discard`；成功与失败提交进入元数据审计 | 仍需真实 echo 对修改后字节、响应 Fulfill 与 CDP 失败重试执行验收 |
 | 请求重放 | ✅ | ✅ | ✅ | Replay；`packet replay`；`packet_replay` | 已具备基本对等性；后续应支持显式超时和取消结果 |
-| Repeater 草稿与多轮历史 | ✅ | ✅ | ✅ | Repeater Workbench；`repeater ls/create/send/rename/delete/clear`；Agent `repeater_list/create/send/rename/delete/clear_history` | UI 只显示最新响应，不能逐轮选择和比较 |
+| Repeater 草稿与多轮历史 | ✅ | ✅ | ✅ | Repeater Workbench 可选择任意持久 send-result，查看该轮请求/响应/耗时与大小，并以稳定 `DraftId + ResultId` 交给 `ITrafficComparisonService` 比较两轮；`repeater ls/create/send/rename/delete/clear`；Agent `repeater_list/create/send/rename/delete/clear_history` | UI 已支持逐轮查看和双轮比较，但尚未一键保存为持久 Comparison Session |
 | 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 支持路径型 JSON export 与 replace/merge import；`rule ...`；`traffic_rule_list/change`；UI 适配层直接调用 `ITrafficRuleManager.ExportJson/ImportJson` | UI 仍缺系统文件选择器；复杂 request/response edit 规则没有完整表单 |
 | 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
 | HAR / Hookmes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench `Archive`；`packet export/import`；Agent `packet_archive_export/import` 只收发内容、不接受路径，复用 `PacketArchiveCodec/IPacketArchiveService`，限制 500 entries / 2 MiB；批量导出为 Dangerous、导入为 Mutating | UI 仍缺系统文件选择器和覆盖确认；Agent 大归档需先过滤、分批交换，且导出内容可能包含 body secrets |
-| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用 Traffic Store 和版本化持久化服务 | 缺保留期、容量、清理和存储占用管理入口 |
-| 操作安全与审计 | △ | △ | ✅ | Agent 风险分级；CLI 根命令标记 mutating；持久化原子替换/备份 | 人工/CLI 缺统一的操作审计记录、撤销和修改前后 hash |
+| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用 Traffic Store 和版本化持久化服务；历史支持条数、估算容量、保留期、自动清理、统计与显式清空 | 尚未提供按站点差异化配额 |
+| 操作安全与审计 | ✅ | ✅ | ✅ | Agent 风险分级；CLI 根命令标记 mutating；修改、继续、丢弃、Fulfill、重放统一记录长度/SHA-256/Content-Length、入口与结果；不保存原始敏感内容 | 尚无撤销操作和审计导出签名 |
 
 ## 下一阶段优先级
 

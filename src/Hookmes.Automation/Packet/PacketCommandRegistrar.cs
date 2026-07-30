@@ -37,7 +37,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|show|analyze|diff|audit|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -53,6 +53,7 @@ public static class PacketCommandRegistrar
                 "show" => await ShowAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", true, ct),
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
                 "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
+                "audit" => Audit(service, context),
                 "param-list" => await ParameterListAsync(service, context, ct),
                 "param-set" => await ParameterSetAsync(service, context, ct),
                 "body-info" => await BodyInfoAsync(service, context, ct),
@@ -177,6 +178,20 @@ public static class PacketCommandRegistrar
         var items = await drafts.ListPendingEditsAsync(ct);
         return CommandResult.Ok(items.Count == 0 ? "No pending packet edits." : string.Join(Environment.NewLine,
             items.Select(FormatDraft)));
+    }
+
+    private static CommandResult Audit(IPacketCommandService service, CommandContext context)
+    {
+        if (service is not IPacketAuditQueryService audit) return CommandResult.Fail("This packet backend does not support traffic audit queries.");
+        var packetId = context.Arg(1);
+        if (packetId == "*") packetId = null;
+        var limit = 100;
+        if (context.Arg(2) is { } rawLimit && (!int.TryParse(rawLimit, out limit) || limit <= 0))
+            return CommandResult.Fail("Audit limit must be a positive integer.");
+        var entries = audit.QueryAudit(new PacketAuditQuery(packetId, Limit: limit));
+        return CommandResult.Ok(entries.Count == 0 ? "No traffic audit entries." : string.Join(Environment.NewLine,
+            entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
+                $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}")));
     }
 
     private static async Task<CommandResult> DraftShowAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)

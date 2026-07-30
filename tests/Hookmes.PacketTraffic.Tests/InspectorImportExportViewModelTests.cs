@@ -101,6 +101,13 @@ public sealed class InspectorImportExportViewModelTests
         public Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count, string encoding, CancellationToken cancellationToken) => Task.FromResult("");
         public Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken) => Task.FromResult(DraftStatus);
         public Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken) { Discarded = (exchangeId, side); return Task.FromResult(DiscardResult); }
+        public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) => [];
+        public TrafficHistoryOverview GetHistoryOverview() => new(0, 0, 0, null, null, 5000, 256L * 1024 * 1024, 30, true);
+        public string PreviewHistoryCleanup() => "No entries would be removed.";
+        public Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(int maxEntries, long maxBytes, int retentionDays, bool autoPrune, CancellationToken cancellationToken) =>
+            Task.FromResult(new TrafficHistoryOverview(0, 0, 0, null, null, maxEntries, maxBytes, retentionDays, autoPrune));
+        public Task<string> CleanupTrafficHistoryAsync(CancellationToken cancellationToken) => Task.FromResult("No entries removed.");
+        public Task ClearTrafficHistoryAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket) => [];
         public string SetParameter(string rawPacket, string location, string name, int occurrence, string value) => rawPacket;
         public TrafficAnnotationItem? GetAnnotation(string exchangeId) => null;

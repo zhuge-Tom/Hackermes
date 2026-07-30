@@ -3,6 +3,7 @@ using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Comparison;
 using Hookmes.Traffic.Annotations;
+using Hookmes.Traffic.History;
 using Hookmes.Traffic.Services;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -17,6 +18,8 @@ public sealed class TrafficModule : IModule
     {
         services.AddSingleton<TrafficHistoryPersistence>();
         services.AddSingleton<ITrafficHistoryPersistence>(sp => sp.GetRequiredService<TrafficHistoryPersistence>());
+        services.AddSingleton<TrafficHistoryPolicyStore>();
+        services.AddSingleton<ITrafficHistoryPolicyStore>(sp => sp.GetRequiredService<TrafficHistoryPolicyStore>());
         services.AddSingleton<TrafficStore>();
         services.AddSingleton<ITrafficStore>(sp => sp.GetRequiredService<TrafficStore>());
         services.AddSingleton<TrafficRuleSet>();
@@ -31,6 +34,8 @@ public sealed class TrafficModule : IModule
         services.AddSingleton<ITrafficComparisonService>(sp => sp.GetRequiredService<TrafficComparisonService>());
         services.AddSingleton<TrafficAnnotationService>();
         services.AddSingleton<ITrafficAnnotationService>(sp => sp.GetRequiredService<TrafficAnnotationService>());
+        services.AddSingleton<TrafficHistoryManagementService>();
+        services.AddSingleton<ITrafficHistoryManagementService>(sp => sp.GetRequiredService<TrafficHistoryManagementService>());
     }
 
     public void Initialize(IServiceProvider serviceProvider)

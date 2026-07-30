@@ -9,8 +9,10 @@ using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Comparison;
 using Hookmes.Traffic.Annotations;
+using Hookmes.Traffic.History;
 using Microsoft.Extensions.DependencyInjection;
 using System;
+using System.IO;
 
 namespace Hookmes.App;
 
@@ -20,11 +22,14 @@ public sealed class TrafficIntegrationModule : IModule
 
     public void RegisterServices(IServiceCollection services)
     {
+        services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hookmes", "traffic-audit.v1.json")));
         services.AddSingleton<TrafficIntegrationService>();
         services.AddSingleton<IPacketCommandService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketArchiveService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketBodyReadService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketBodyEditService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IPacketAuditQueryService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficRuleWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IRepeaterWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
@@ -53,6 +58,10 @@ public sealed class TrafficIntegrationModule : IModule
             serviceProvider.GetRequiredService<CommandRegistry>(),
             serviceProvider.GetRequiredService<IAiToolRegistry>(),
             serviceProvider.GetRequiredService<ITrafficAnnotationService>());
+        TrafficHistoryToolRegistrar.Register(
+            serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<IAiToolRegistry>(),
+            serviceProvider.GetRequiredService<ITrafficHistoryManagementService>());
 
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {

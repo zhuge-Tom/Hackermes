@@ -32,6 +32,13 @@ public interface ITrafficWorkbenchService
         string encoding, CancellationToken cancellationToken);
     Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken);
+    IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100);
+    TrafficHistoryOverview GetHistoryOverview();
+    string PreviewHistoryCleanup();
+    Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(int maxEntries, long maxBytes, int retentionDays,
+        bool autoPrune, CancellationToken cancellationToken);
+    Task<string> CleanupTrafficHistoryAsync(CancellationToken cancellationToken);
+    Task ClearTrafficHistoryAsync(CancellationToken cancellationToken);
     Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken);
     Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken);
     IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket);
@@ -43,6 +50,10 @@ public interface ITrafficWorkbenchService
 
 public sealed record TrafficParameterItem(string Location, string Name, string Value, int Occurrence);
 public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
+public sealed record TrafficAuditItem(DateTimeOffset Timestamp, string EntryPoint, string Operation, string Side,
+    string Before, string After, string Result, string? ErrorCode);
+public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes, long FileBytes,
+    DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune);
 
 public sealed record TrafficExchange(
     string Id,
@@ -84,9 +95,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
 
     public ObservableCollection<TrafficExchange> Visible { get; } = [];
     public ObservableCollection<TrafficParameterItem> Parameters { get; } = [];
+    public ObservableCollection<TrafficAuditItem> AuditEntries { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(RefreshAuditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private TrafficExchange? _selected;
     [ObservableProperty] private string _filterText = string.Empty;
     [ObservableProperty] private string _methodFilter = string.Empty;
@@ -123,6 +135,12 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _annotationTags = string.Empty;
     [ObservableProperty] private string _annotationNote = string.Empty;
     [ObservableProperty] private string _annotationStatus = "Unreviewed";
+    [ObservableProperty] private string _historyMaxEntries = "5000";
+    [ObservableProperty] private string _historyMaxBytes = (256L * 1024 * 1024).ToString();
+    [ObservableProperty] private string _historyRetentionDays = "30";
+    [ObservableProperty] private bool _historyAutoPrune = true;
+    [ObservableProperty] private bool _confirmHistoryClear;
+    [ObservableProperty] private string _historyStatus = "History statistics not loaded.";
     private const int PageSize = 200;
 
     public bool HasSelection => Selected is not null;
@@ -137,6 +155,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         Analysis = value is null ? "Select a request, edit it, then Analyze or Replay." : $"{value.Method} {value.Url}";
         LoadParameters();
         LoadAnnotation();
+        LoadAudit();
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(CanResolveIntercept));
     }
@@ -205,6 +224,43 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         BinaryDraftStatus = discarded ? "Pending binary edit discarded; original body and headers restored." : "No pending binary edit.";
         Analysis = BinaryDraftStatus;
         if (discarded) Refresh();
+    });
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private void RefreshAudit() => LoadAudit();
+
+    [RelayCommand]
+    private void RefreshHistory() => ApplyHistoryOverview(_service.GetHistoryOverview());
+
+    [RelayCommand]
+    private void PreviewHistoryCleanup() => HistoryStatus = _service.PreviewHistoryCleanup();
+
+    [RelayCommand]
+    private Task SaveHistoryPolicyAsync() => ExecuteAsync(async ct =>
+    {
+        if (!int.TryParse(HistoryMaxEntries, out var maxEntries) ||
+            !long.TryParse(HistoryMaxBytes, out var maxBytes) ||
+            !int.TryParse(HistoryRetentionDays, out var retentionDays))
+            throw new ArgumentException("History limits must be integers.");
+        ApplyHistoryOverview(await _service.UpdateHistoryPolicyAsync(
+            maxEntries, maxBytes, retentionDays, HistoryAutoPrune, ct));
+    });
+
+    [RelayCommand]
+    private Task CleanupTrafficHistoryAsync() => ExecuteAsync(async ct =>
+    {
+        HistoryStatus = await _service.CleanupTrafficHistoryAsync(ct);
+        Refresh();
+    });
+
+    [RelayCommand]
+    private Task ClearTrafficHistoryAsync() => ExecuteAsync(async ct =>
+    {
+        if (!ConfirmHistoryClear) throw new InvalidOperationException("Enable the clear confirmation checkbox first.");
+        await _service.ClearTrafficHistoryAsync(ct);
+        ConfirmHistoryClear = false;
+        HistoryStatus = "Traffic history cleared.";
+        Refresh();
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
@@ -313,6 +369,23 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     {
         if (Selected is null) { ApplyAnnotation(null); return; }
         ApplyAnnotation(_service.GetAnnotation(Selected.Id));
+    }
+
+    private void LoadAudit()
+    {
+        AuditEntries.Clear();
+        if (Selected is null) return;
+        foreach (var item in _service.GetAudit(Selected.Id)) AuditEntries.Add(item);
+    }
+
+    private void ApplyHistoryOverview(TrafficHistoryOverview value)
+    {
+        HistoryMaxEntries = value.MaxEntries.ToString();
+        HistoryMaxBytes = value.MaxBytes.ToString();
+        HistoryRetentionDays = value.RetentionDays.ToString();
+        HistoryAutoPrune = value.AutoPrune;
+        HistoryStatus = $"{value.EntryCount} entries · estimated {value.EstimatedBytes} B · file {value.FileBytes} B · " +
+                        $"oldest {value.Oldest?.ToLocalTime().ToString("g") ?? "-"} · newest {value.Newest?.ToLocalTime().ToString("g") ?? "-"}";
     }
 
     private async Task LoadBinaryDraftStatusAsync(CancellationToken cancellationToken)
