@@ -6,7 +6,7 @@
 
 | 能力 | 人工工作台 | CLI | Agent | 当前证据 | 下一阶段缺口 |
 |---|---:|---:|---:|---|---|
-| 捕获、筛选、分页和查看原始请求/响应 | ✅ | ✅ | ✅ | Traffic Workbench；`packet ls/show`；`packet_list/show` | Agent `list` 结果不支持与 UI 相同的结构化复合筛选/分页 |
+| 捕获、筛选、分页和查看原始请求/响应 | ✅ | ✅ | ✅ | Traffic Workbench；CLI `packet query/show`；Agent `packet_query/show`；共享有界查询覆盖文本、方法、状态、资源类型、暂停状态及 offset/limit | 仍需真实大历史数据验证排序稳定性与翻页期间新增数据的游标语义 |
 | 协议异常、敏感字段分析 | ✅ | ✅ | ✅ | 三端复用 `HttpPacketAnalyzer` 的结构化 Finding；包含 side、稳定 code、Header 重复项和 UTF-8 body offset；UI 可精确选中 Header/StartLine 或定位 Binary editor | 规则集仍为内置静态集合，尚无插件发现机制 |
 | 语义 Diff | ✅ | ✅ | ✅ | Comparer 支持 Traffic/Repeater 来源直填与持久 Session CRUD；`packet diff` / `compare` / `compare-session`；`packet_diff` / `packet_compare_structured` / `comparison_session_*` | Repeater 来源仍需显式刷新后选择；后续可增加从其他工作台一键发送到左右槽位 |
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | `IPacketCommitService` 返回统一最终状态、前后摘要、audit id/error code；UI 摘要、CLI `key=value`、Agent JSON | 已具备源码对等性，等待真实 CDP 验收 |

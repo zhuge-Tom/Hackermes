@@ -86,9 +86,11 @@ rec start
 
 阶段 4 已接入 OpenAI 兼容流式对话和多轮工具调用。页面工具复用阶段 3 的命令注册表，AI 可查询页面、点击、输入、截图、读取 console 与网络流；所有调用统一经过默认保守的策略闸门，写操作弹窗确认，危险工具拒绝，也可显式启用信任模式。MCP 支持配置 stdio server，自动发现并注册其工具。
 
-阶段 5 新增基于 CDP `Fetch` 域的数据包工作台，无需系统代理或根证书即可对内置浏览器的 HTTP(S) 请求/响应执行类似 Burp Intercept / Repeater 的操作。人工可在底部“数据包”页签编辑原始 HTTP，CLI 可使用 `packet ls|show|analyze|diff|replay|intercept|continue|drop|edit`；内部 Agent 共享同一核心服务，并按只读、修改和高风险分级确认。Agent 查看原始包时默认遮蔽认证头与 Cookie。
+阶段 5 新增基于 CDP `Fetch` 域的数据包工作台，无需系统代理或根证书即可对内置浏览器的 HTTP(S) 请求/响应执行类似 Burp Intercept / Repeater 的操作。人工可在底部“数据包”页签编辑原始 HTTP，CLI 可使用 `packet ls|query|show|analyze|diff|replay|intercept|continue|drop|edit`；内部 Agent 共享同一核心服务，并按只读、修改和高风险分级确认。Agent 查看原始包时默认遮蔽认证头与 Cookie。
 
 阶段 6 已开始：请求和响应现在可以独立拦截；持久化流量规则支持增删改查、启停、排序及 JSON 导入导出，人工、CLI 与 Agent 可共同管理；人工可在 Rules Workbench 通过文件路径执行规则 JSON replace/merge import 与 export。Traffic Workbench 的 `Archive` 路径栏以及 `packet export` / `packet import` 支持 Hookmes JSON v1 与 HAR 1.2，并以 Base64 元数据无损保存二进制 body。大包可先查询长度/SHA-256，再以最大 256 KiB 的范围分块读取；二进制编辑支持 Hex/Base64 的 Replace/Insert/Delete 及 Content-Length 规范化。三端还可结构化读取并修改 query、form 与顶层 JSON 参数：人工使用 `Parameters` 页，CLI 使用 `packet param-list/param-set`，Agent 使用 `packet_parameters/packet_parameter_set`。数据包可持久保存 starred、tags、note 与 review status 标注，对应人工 `Annotation` 页、CLI `annotation` 命令和 Agent `packet_annotation_*` 工具。独立 Repeater 支持命名草稿、编辑、多轮发送历史以及耗时/大小/状态记录；Comparer 提供起始行、重复 Header 和二进制 body 摘要差异；历史列表支持复合筛选和分页。Traffic 历史使用版本化压缩文件落盘，Repeater/Comparer/Annotation 使用版本化文件，均具备原子替换、备份恢复和跨重启加载。上述源码仍按当前开发安排等待后续统一构建验收。
+
+流量元数据查询现由有界 `PacketQuery` 契约统一：人工工作台与 `packet query [text|*] [method|*] [status|*] [resourceType|*] [held|all] [offset] [limit]`、Agent `packet_query` 具有相同的文本/方法/状态/资源类型/暂停状态复合筛选和 offset/limit 分页语义。CLI 返回稳定分页头，Agent 返回结构化 camelCase 页面；两者都不返回 Header 或 Body 值。
 
 新增的三端对等入口包括四态拦截 `packet intercept-mode` / `packet_intercept_mode`、持久比较会话 `compare-session` / `comparison_session_*`、Repeater rename/clear-history，以及 Agent 标注组合查询与 prune。
 

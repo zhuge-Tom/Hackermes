@@ -626,6 +626,8 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 
 三种操作入口的当前对等程度、剩余缺口和逐项验收门槛见 [`STAGE6-GAP-MATRIX.md`](STAGE6-GAP-MATRIX.md)。二进制修改已由 `IPacketEditDraftService` 固化为可查询、可放弃、失败可重试的草稿契约，并由人工、CLI、Agent 共享；可选 `IPacketCommitService` 在不破坏旧捕获后端的前提下，为 Continue、Drop、Edit/Fulfill 与 Discard 返回最终状态、前后版本、audit id 和安全错误码，三端只负责各自格式化。统一持久审计只记录修改前后规范元数据、入口和结果，不落原始包内容；`IPacketAuditExportService` 以 ECDSA P-256 对规范化载荷签名，文档内嵌 SPKI 公钥和 SHA-256 指纹以支持离线验证，可选 expected key id 提供信任固定。私钥适配器把 PKCS#8 存入 `ISecretStore`，人工、CLI 和 Agent 共用服务，Agent 只收发有界内容、不接收文件路径。Traffic 层以 `ITrafficRuleExecutionSource` 发布脱敏规则执行事件，Automation 层桥接现有审计，避免 Traffic 反向依赖上层。Comparer 的 Traffic/Repeater 来源选择和持久 Session CRUD 已进入人工工作台。Agent 归档边界不暴露文件系统路径，只允许显式格式的有限 JSON/HAR 内容（500 条、2 MiB），并按批量敏感导出 Dangerous、历史导入 Mutating 分级。Inspector 的文件对话以委托边界由 View 注入，ViewModel 不引用 Avalonia Storage API；最近 Archive/Rules 路径通过 `IRecentTrafficPathService` 适配平台设置，只在操作成功后持久化。Repeater 的每轮历史以 DraftId/SendResultId 稳定寻址；Inspector 通过 `IRepeaterWorkbenchService` 获取轮次 DTO，并调用既有 `ITrafficComparisonService` 比较来源，不在 UI 层复制 diff。Traffic Store 的版本化策略统一约束全局及站点条数/容量、保留期和自动清理，并向人工、CLI 与 Agent 暴露管理入口。
 
+捕获列表的机器入口不再依赖自由文本命令拼接：`IPacketQueryService` 接受有界 `PacketQuery`，统一文本、方法、状态码、资源类型、暂停状态和 offset/limit。Traffic 适配器直接映射到 `TrafficQuery`；CLI 只格式化稳定分页头及行，Agent 返回 camelCase `PacketQueryPage` 且不包含 Header/Body 值。人工工作台使用同一组 Traffic Store 查询字段，因此三端筛选语义保持一致。
+
 ---
 
 ## 十二、关键风险

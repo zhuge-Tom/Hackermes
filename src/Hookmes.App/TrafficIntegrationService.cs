@@ -21,7 +21,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService, IPacketAuditExportService, IPacketCommitService,
+    IPacketCommandService, IPacketQueryService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService, IPacketAuditExportService, IPacketCommitService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -192,6 +192,18 @@ public sealed class TrafficIntegrationService :
             filter.OnlyIntercepted ? TrafficState.Paused : null,
             Offset: filter.Offset, Limit: filter.Limit));
         return new TrafficExchangePage(result.Items.Select(ToExchange).ToArray(), result.Total, result.Offset, result.Limit);
+    }
+
+    public Task<PacketQueryPage> QueryPacketsAsync(PacketQuery query, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        query = PacketQueryLimits.Validate(query);
+        var result = _store.Query(new TrafficQuery(
+            null, query.Text, query.Method, query.StatusCode, query.ResourceType,
+            query.OnlyIntercepted ? TrafficState.Paused : null, query.Offset, query.Limit));
+        IReadOnlyList<PacketSummary> items = result.Items.Select(item => new PacketSummary(
+            item.Id, item.Method, item.Url, item.ResponseStatus, item.State == TrafficState.Paused)).ToArray();
+        return Task.FromResult(new PacketQueryPage(items, result.Total, result.Offset, result.Limit));
     }
 
     public IReadOnlyList<TrafficRuleItem> Rules => _rules.GetAll().Select(rule => new TrafficRuleItem(

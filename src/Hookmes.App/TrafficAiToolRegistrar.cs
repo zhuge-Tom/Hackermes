@@ -19,6 +19,7 @@ internal static class TrafficAiToolRegistrar
     {
         Register(registry, packets, "packet_list", "List captured HTTP packets. Values are not returned.",
             AiToolRisk.ReadOnly, "filter", false, a => Args("ls", Optional(a, "filter")));
+        if (packets is IPacketQueryService queries) RegisterPacketQueryTool(registry, queries);
         Register(registry, packets, "packet_show", "Show a captured HTTP request or response. Sensitive header values are redacted.",
             AiToolRisk.ReadOnly, "id", true, a => Args("show", Required(a, "id"), Optional(a, "side", "request")));
         RegisterAnalysisTool(registry, packets);
@@ -77,6 +78,44 @@ internal static class TrafficAiToolRegistrar
         RegisterCommitTool(registry, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
             AiToolRisk.Mutating, false, (args, ct) => commits.CommitDiscardAsync(Required(args, "id"),
                 Optional(args, "side", "request"), ct));
+    }
+
+    private static void RegisterPacketQueryTool(IAiToolRegistry registry, IPacketQueryService queries)
+    {
+        var schema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                text = new { type = "string", maxLength = 512 },
+                method = new { type = "string", maxLength = 32 },
+                statusCode = new { type = "integer", minimum = 100, maximum = 999 },
+                resourceType = new { type = "string", maxLength = 64 },
+                onlyIntercepted = new { type = "boolean" },
+                offset = new { type = "integer", minimum = 0, maximum = PacketQueryLimits.MaximumOffset },
+                limit = new { type = "integer", minimum = 1, maximum = PacketQueryLimits.MaximumPageSize }
+            },
+            additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_query",
+            "Query captured HTTP packet metadata with compound filters and bounded pagination. Packet values are not returned.",
+            schema, AiToolRisk.ReadOnly, async (invocation, ct) =>
+            {
+                try
+                {
+                    var args = invocation.Arguments;
+                    var query = PacketQueryLimits.Validate(new PacketQuery(
+                        OptionalValue(args, "text"), OptionalValue(args, "method"), OptionalInt(args, "statusCode"),
+                        OptionalValue(args, "resourceType"), OptionalBool(args, "onlyIntercepted"),
+                        OptionalInt(args, "offset") ?? 0, OptionalInt(args, "limit") ?? 100));
+                    var page = await queries.QueryPacketsAsync(query, ct).ConfigureAwait(false);
+                    return ToolResult.Ok(JsonSerializer.Serialize(page, CommitJsonOptions));
+                }
+                catch (ArgumentException exception)
+                {
+                    return ToolResult.Fail(exception.Message);
+                }
+            }));
     }
 
     private static void RegisterAuditExportTools(IAiToolRegistry registry, IPacketAuditExportService exports)
@@ -411,6 +450,12 @@ internal static class TrafficAiToolRegistrar
             ? property.GetString() ?? string.Empty : property.GetRawText() : throw new ArgumentException($"Missing {name}.");
     private static string Optional(JsonElement value, string name, string fallback = "") =>
         value.TryGetProperty(name, out var property) ? property.GetString() ?? fallback : fallback;
+    private static string? OptionalValue(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) ? property.GetString() : null;
+    private static int? OptionalInt(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) ? property.GetInt32() : null;
+    private static bool OptionalBool(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) && property.GetBoolean();
     private static string Args(params string[] values) => string.Join(' ', values);
     private static string EscapeRaw(string raw) => raw.Replace("\r\n", "\\r\\n", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal);
 

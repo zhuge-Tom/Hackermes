@@ -37,7 +37,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|query|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -50,6 +50,7 @@ public static class PacketCommandRegistrar
             return action switch
             {
                 "ls" => await ListAsync(service, context.Arg(1), ct),
+                "query" => await QueryAsync(service, context, ct),
                 "show" => await ShowAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", true, ct),
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
                 "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
@@ -72,7 +73,7 @@ public static class PacketCommandRegistrar
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
+                _ => CommandResult.Fail("Usage: packet <ls|query|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
@@ -88,6 +89,34 @@ public static class PacketCommandRegistrar
         return CommandResult.Ok(rows.Count == 0 ? "No packets." : string.Join(Environment.NewLine,
             rows.Select(x => $"{x.Id}\t{x.Method}\t{x.StatusCode?.ToString() ?? "-"}\t{(x.Intercepted ? "held" : "pass")}\t{x.Url}")));
     }
+
+    private static async Task<CommandResult> QueryAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketQueryService queries)
+            return CommandResult.Fail("This packet backend does not support structured packet queries.");
+        var query = new PacketQuery(
+            Wildcard(context.Arg(1)), Wildcard(context.Arg(2)), ParseOptionalInt(context.Arg(3), "status"),
+            Wildcard(context.Arg(4)), ParseHeld(context.Arg(5)), ParseInt(context.Arg(6), "offset", 0),
+            ParseInt(context.Arg(7), "limit", 100));
+        var page = await queries.QueryPacketsAsync(PacketQueryLimits.Validate(query), ct);
+        var header = $"total={page.Total}\toffset={page.Offset}\tlimit={page.Limit}";
+        return CommandResult.Ok(page.Items.Count == 0 ? header + Environment.NewLine + "No packets." :
+            header + Environment.NewLine + string.Join(Environment.NewLine, page.Items.Select(FormatSummary)));
+    }
+
+    private static string FormatSummary(PacketSummary item) =>
+        $"{item.Id}\t{item.Method}\t{item.StatusCode?.ToString() ?? "-"}\t{(item.Intercepted ? "held" : "pass")}\t{item.Url}";
+
+    private static string? Wildcard(string? value) => value is null or "*" ? null : value;
+    private static int? ParseOptionalInt(string? value, string name) => value is null or "*" ? null : ParseInt(value, name, 0);
+    private static int ParseInt(string? value, string name, int fallback) => value is null ? fallback :
+        int.TryParse(value, out var parsed) ? parsed : throw new ArgumentException($"{name} must be an integer.");
+    private static bool ParseHeld(string? value) => value?.ToLowerInvariant() switch
+    {
+        null or "*" or "all" => false,
+        "held" => true,
+        _ => throw new ArgumentException("state must be held or all.")
+    };
 
     private static async Task<CommandResult> ShowAsync(IPacketCommandService service, string id, string side, bool pretty, CancellationToken ct)
     {
