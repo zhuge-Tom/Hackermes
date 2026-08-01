@@ -12,7 +12,7 @@
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | `IPacketCommitService` 返回统一最终状态、前后摘要、audit id/error code；UI 摘要、CLI `key=value`、Agent JSON | 已具备源码对等性，等待真实 CDP 验收 |
 | 响应拦截与 Fulfill | ✅ | ✅ | ✅ | UI 有独立 Response Intercept；CLI/Agent 四态拦截；响应 Edit 通过统一提交结果报告 Fulfilled 与 audit id | `packet intercept on|off` 保留为仅控制请求拦截的兼容入口 |
 | 原始 HTTP 文本编辑并应用 | ✅ | ✅ | ✅ | Request/Response editor、`packet edit`、`packet_edit` 共用 `IPacketCommitService`；失败仍返回结构化结果 | 需补编辑前后 Content-Length/Transfer-Encoding 一致性提示 |
-| 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters` 页读取/修改 query、form 和顶层 JSON；`packet param-list/param-set`；`packet_parameters/packet_parameter_set`（只读结果遮蔽敏感值，修改为 Dangerous） | UI 修改先应用到文本编辑器、CLI/Agent `param-set` 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON、multipart、Cookie 和 Header 参数 |
+| 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters`、CLI `packet param-*`、Agent `packet_parameter*` 共享 query/form/顶层 JSON/重复 Header/Cookie occurrence 契约；修改有界并防 Header 注入，Agent 遮蔽 Cookie/认证值 | UI 修改先应用到文本编辑器、CLI/Agent 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON 与 multipart |
 | 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor 固定显示长度/SHA-256/类型/字符集，支持 64 KiB 前后/跳转、实际范围和进度；`body-info/body-read`；`packet_body_info/chunk` | 超大 body 的完整 SHA-256 仍为 O(n)，尚无增量缓存 |
 | Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | `IPacketEditDraftService` 保存首次快照、前后长度/SHA-256/Content-Length和最近失败；Binary editor 可 Refresh/Discard；CLI `draft-list/show/discard`；Agent `packet_edit_drafts/draft/discard`；成功与失败提交进入元数据审计 | 仍需真实 echo 对修改后字节、响应 Fulfill 与 CDP 失败重试执行验收 |
 | 请求重放 | ✅ | ✅ | ✅ | Replay；`packet replay`；`packet_replay` | 已具备基本对等性；后续应支持显式超时和取消结果 |

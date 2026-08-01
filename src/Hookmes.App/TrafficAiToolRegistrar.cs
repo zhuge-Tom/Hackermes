@@ -2,6 +2,8 @@ using Hookmes.AiPanel.Tools;
 using Hookmes.Automation.Commands;
 using Hookmes.Automation.Packet;
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -303,27 +305,37 @@ internal static class TrafficAiToolRegistrar
             type = "object", properties = new
             {
                 id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
-                location = new { type = "string", @enum = new[] { "query", "form", "json" } },
-                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" }
+                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie" } },
+                name = new { type = "string", minLength = 1, maxLength = HttpPacketParameters.MaximumNameLength },
+                occurrence = new { type = "integer", minimum = 0 },
+                value = new { type = "string", maxLength = HttpPacketParameters.MaximumValueLength }
             }, required = new[] { "id", "side", "location", "name", "occurrence", "value" }, additionalProperties = false
         });
         registry.Register(new AiToolDefinition("packet_parameter_set",
             "Set one structured parameter occurrence and submit the held packet. Requires confirmation.",
             schema, AiToolRisk.Dangerous, async (invocation, ct) =>
             {
-                var args = invocation.Arguments;
-                var id = Required(args, "id");
-                var side = Required(args, "side");
-                if (side is not ("request" or "response"))
-                    return ToolResult.Fail("Side must be request or response.");
-                var raw = await packets.GetRawAsync(id, side, ct).ConfigureAwait(false);
-                if (raw is null) return ToolResult.Fail($"Packet '{id}' has no {side}.");
-                if (!Enum.TryParse<HttpParameterLocation>(Required(args, "location"), true, out var location))
-                    return ToolResult.Fail("Parameter location must be query, form or json.");
-                var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(raw), location,
-                    Required(args, "name"), args.GetProperty("occurrence").GetInt32(), Required(args, "value"));
-                await packets.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct).ConfigureAwait(false);
-                return ToolResult.Ok("Parameter updated and packet submitted.");
+                try
+                {
+                    var args = invocation.Arguments;
+                    var id = Required(args, "id");
+                    var side = Required(args, "side");
+                    if (side is not ("request" or "response"))
+                        return ToolResult.Fail("Side must be request or response.");
+                    var raw = await packets.GetRawAsync(id, side, ct).ConfigureAwait(false);
+                    if (raw is null) return ToolResult.Fail($"Packet '{id}' has no {side}.");
+                    if (!Enum.TryParse<HttpParameterLocation>(Required(args, "location"), true, out var location))
+                        return ToolResult.Fail("Parameter location must be query, form, json, header or cookie.");
+                    var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(raw), location,
+                        Required(args, "name"), args.GetProperty("occurrence").GetInt32(), Required(args, "value"));
+                    await packets.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct).ConfigureAwait(false);
+                    return ToolResult.Ok("Parameter updated and packet submitted.");
+                }
+                catch (Exception exception) when (exception is ArgumentException or InvalidDataException or
+                                                  KeyNotFoundException or HttpPacketParseException)
+                {
+                    return ToolResult.Fail(exception.Message);
+                }
             }));
     }
 
@@ -409,7 +421,7 @@ internal static class TrafficAiToolRegistrar
                 id = new { type = "string" }, leftId = new { type = "string" }, rightId = new { type = "string" },
                 side = new { type = "string", @enum = new[] { "request", "response" } },
                 filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
-                location = new { type = "string", @enum = new[] { "query", "form", "json" } },
+                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie" } },
                 name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" },
                 mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } },
                 packetId = new { type = "string" }, limit = new { type = "integer", minimum = 1, maximum = 500 }
@@ -465,7 +477,8 @@ internal static class TrafficAiToolRegistrar
         for (var i = 0; i < lines.Length; i++)
         {
             var columns = lines[i].Split('\t');
-            if (columns.Length >= 3 && IsSensitiveName(columns[1]))
+            if (columns.Length >= 3 &&
+                (columns[0].StartsWith("cookie[", StringComparison.OrdinalIgnoreCase) || IsSensitiveName(columns[1])))
             {
                 columns[2] = "<redacted>";
                 lines[i] = string.Join('\t', columns);
@@ -489,6 +502,11 @@ internal static class TrafficAiToolRegistrar
         name.Contains("passwd", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("authorization", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("proxy-authorization", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("cookie", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("set-cookie", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("x-api-key", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("api_key", StringComparison.OrdinalIgnoreCase) ||
         name.Contains("apikey", StringComparison.OrdinalIgnoreCase);
 }

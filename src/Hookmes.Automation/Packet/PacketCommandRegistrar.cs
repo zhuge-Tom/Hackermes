@@ -353,8 +353,8 @@ public static class PacketCommandRegistrar
     {
         var id = Require(context, 1, "id");
         var side = context.Arg(2) ?? "request";
-        if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json"), true, out var location))
-            return CommandResult.Fail("Parameter location must be query, form or json.");
+        if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json|header|cookie"), true, out var location))
+            return CommandResult.Fail("Parameter location must be query, form, json, header or cookie.");
         var name = Require(context, 4, "name");
         if (!int.TryParse(Require(context, 5, "occurrence"), out var occurrence))
             return CommandResult.Fail("Parameter occurrence must be an integer.");

@@ -632,7 +632,7 @@ public sealed class TrafficIntegrationService :
     public string SetParameter(string rawPacket, string location, string name, int occurrence, string value)
     {
         if (!Enum.TryParse<HttpParameterLocation>(location, true, out var parsed))
-            throw new ArgumentException("Location must be query, form or json.");
+            throw new ArgumentException("Location must be query, form, json, header or cookie.");
         var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(rawPacket), parsed, name, occurrence, value);
         return HttpPacketCodec.Format(updated, false);
     }

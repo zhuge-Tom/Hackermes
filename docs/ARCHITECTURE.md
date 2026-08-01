@@ -628,6 +628,8 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 
 捕获列表的机器入口不再依赖自由文本命令拼接：`IPacketQueryService` 接受有界 `PacketQuery`，统一文本、方法、状态码、资源类型、暂停状态和 offset/limit。Traffic 适配器直接映射到 `TrafficQuery`；CLI 只格式化稳定分页头及行，Agent 返回 camelCase `PacketQueryPage` 且不包含 Header/Body 值。人工工作台使用同一组 Traffic Store 查询字段，因此三端筛选语义保持一致。
 
+结构化参数层 `HttpPacketParameters` 现把 Query、Form、顶层 JSON、Header 和 Cookie 统一为 location/name/occurrence/value。Header 名称按大小写不敏感匹配并保留原始顺序与名称，Cookie 名称按大小写敏感匹配；请求 `Cookie` 修改只替换目标 pair，响应 `Set-Cookie` 修改保留 Path、Secure、HttpOnly 等属性。共享写入边界限制名称和值长度，拒绝 Header 换行、控制字符及 Cookie 分隔符注入。人工在编辑器内应用结果，CLI/Agent 对暂停包提交同一格式化数据；Agent 的只读输出额外遮蔽所有 Cookie 和认证 Header 值。
+
 ---
 
 ## 十二、关键风险
