@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace Hookmes.Automation.Packet;
 
-public enum PacketAuditOperation { Edit, BodyEdit, Continue, Drop, Fulfill, Replay }
+public enum PacketAuditOperation { Edit, BodyEdit, Discard, Continue, Drop, Fulfill, Replay }
 public enum PacketAuditResult { Succeeded, Failed }
 
 public sealed record PacketAuditEntry(

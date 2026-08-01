@@ -21,6 +21,7 @@ public interface ITrafficWorkbenchService
     bool IsResponseInterceptEnabled { get; set; }
     event Action? Changed;
     Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken);
+    Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(string exchangeId, string side, string rawPacket, CancellationToken cancellationToken);
     Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task DropAsync(string exchangeId, CancellationToken cancellationToken);
@@ -30,6 +31,7 @@ public interface ITrafficWorkbenchService
         string data, string encoding, CancellationToken cancellationToken);
     Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count,
         string encoding, CancellationToken cancellationToken);
+    Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken);
     IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100);
@@ -49,11 +51,29 @@ public interface ITrafficWorkbenchService
 }
 
 public sealed record TrafficParameterItem(string Location, string Name, string Value, int Occurrence);
+public sealed record TrafficFindingItem(
+    string Severity, string Code, string Message, string Side, string LocationKind,
+    string? Field, string? HeaderName, int? HeaderOccurrence, long? BodyOffset, int? BodyLength)
+{
+    public string Location => LocationKind == "Header" ? $"{HeaderName}[{HeaderOccurrence ?? 0}]"
+        : LocationKind == "Body" ? $"byte {BodyOffset ?? 0} +{BodyLength ?? 0}"
+        : Field ?? LocationKind;
+}
 public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
 public sealed record TrafficAuditItem(DateTimeOffset Timestamp, string EntryPoint, string Operation, string Side,
     string Before, string After, string Result, string? ErrorCode);
 public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes, long FileBytes,
     DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune);
+public sealed record TrafficBinaryBodyInfo(long Length, string Sha256, string? ContentType, string? Charset);
+
+public static class TrafficBinaryRange
+{
+    public static long Previous(long offset, int count) => Math.Max(0, offset - Math.Max(1, count));
+    public static long Next(long totalLength, long offset, int loadedCount) =>
+        Math.Clamp(checked(Math.Max(0, offset) + Math.Max(0, loadedCount)), 0, Math.Max(0, totalLength));
+    public static int ActualCount(long totalLength, long offset, int requestedCount) =>
+        offset < 0 || offset > totalLength ? 0 : (int)Math.Min(Math.Max(0, requestedCount), totalLength - offset);
+}
 
 public sealed record TrafficExchange(
     string Id,
@@ -96,9 +116,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     public ObservableCollection<TrafficExchange> Visible { get; } = [];
     public ObservableCollection<TrafficParameterItem> Parameters { get; } = [];
     public ObservableCollection<TrafficAuditItem> AuditEntries { get; } = [];
+    public ObservableCollection<TrafficFindingItem> Findings { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(RefreshAuditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(PreviousBinaryChunkCommand), nameof(NextBinaryChunkCommand), nameof(RefreshBinaryBodyInfoCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(RefreshAuditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
     private TrafficExchange? _selected;
     [ObservableProperty] private string _filterText = string.Empty;
     [ObservableProperty] private string _methodFilter = string.Empty;
@@ -112,6 +133,9 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _formattedRequest = string.Empty;
     [ObservableProperty] private string _formattedResponse = string.Empty;
     [ObservableProperty] private string _analysis = "Select a request, edit it, then Analyze or Replay.";
+    [ObservableProperty] private string _analysisSide = "request";
+    [ObservableProperty] private string _findingTarget = "No finding selected.";
+    [ObservableProperty] private TrafficFindingItem? _selectedFinding;
     [ObservableProperty] private string _summary = "No traffic captured";
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
@@ -120,10 +144,16 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _binarySide = "request";
     [ObservableProperty] private string _binaryKind = "replace";
     [ObservableProperty] private string _binaryOffset = "0";
-    [ObservableProperty] private string _binaryCount = "0";
+    [ObservableProperty] private string _binaryCount = (64 * 1024).ToString();
     [ObservableProperty] private string _binaryEncoding = "hex";
     [ObservableProperty] private string _binaryData = string.Empty;
     [ObservableProperty] private string _binaryDraftStatus = "No pending binary edit.";
+    [ObservableProperty] private string _binaryBodySummary = "Body info not loaded.";
+    [ObservableProperty] private string _binaryRangeStatus = "No chunk loaded.";
+    [ObservableProperty] private double _binaryProgress;
+    private long _binaryBodyLength;
+    private int _binaryLoadedCount;
+    private bool _binaryInfoLoaded;
     [ObservableProperty] private string _archivePath = "traffic.har";
     [ObservableProperty] private string _archiveFilter = string.Empty;
     [ObservableProperty] private string _parameterSide = "request";
@@ -156,6 +186,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         LoadParameters();
         LoadAnnotation();
         LoadAudit();
+        Findings.Clear();
+        SelectedFinding = null;
+        ResetBinaryNavigation();
+        if (value is not null) _ = LoadBinaryBodyInfoSafelyAsync(value.Id, BinarySide);
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(CanResolveIntercept));
     }
@@ -171,7 +205,33 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     partial void OnRequestEditorChanged(string value) { FormattedRequest = FormatMessage(value); if (ParameterSide == "request") LoadParameters(); }
     partial void OnResponseEditorChanged(string value) { FormattedResponse = FormatMessage(value); if (ParameterSide == "response") LoadParameters(); }
     partial void OnParameterSideChanged(string value) => LoadParameters();
+    partial void OnBinarySideChanged(string value)
+    {
+        ResetBinaryNavigation();
+        if (Selected is not null) _ = LoadBinaryBodyInfoSafelyAsync(Selected.Id, value);
+    }
     partial void OnSelectedParameterChanged(TrafficParameterItem? value) => ParameterValue = value?.Value ?? string.Empty;
+    partial void OnSelectedFindingChanged(TrafficFindingItem? value)
+    {
+        if (value is null) { FindingTarget = "No finding selected."; return; }
+        var side = value.Side.Equals("Response", StringComparison.OrdinalIgnoreCase) ? "response" : "request";
+        if (value.LocationKind == "Body")
+        {
+            BinarySide = side;
+            BinaryOffset = (value.BodyOffset ?? 0).ToString();
+            BinaryCount = (value.BodyLength ?? 0).ToString();
+            FindingTarget = $"Binary editor target: {side} body, offset {BinaryOffset}, length {BinaryCount}.";
+        }
+        else if (value.LocationKind == "Header")
+        {
+            FindingTarget = $"{side} editor target: header '{value.HeaderName}', occurrence {value.HeaderOccurrence ?? 0}.";
+        }
+        else
+        {
+            FindingTarget = $"{side} editor target: {value.Field ?? value.LocationKind}.";
+        }
+        Analysis = $"[{value.Severity}] {value.Code}: {value.Message}{Environment.NewLine}{FindingTarget}";
+    }
 
     [RelayCommand] private void Reload() => Refresh();
     [RelayCommand] private Task ExportArchiveAsync() => ExecuteAsync(async ct =>
@@ -192,7 +252,15 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     }
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
-    private Task AnalyzeAsync() => RunAsync(ct => _service.AnalyzeAsync(Selected!.Id, RequestEditor, ct), applyResponse: false);
+    private Task AnalyzeAsync() => ExecuteAsync(async ct =>
+    {
+        var side = AnalysisSide.Equals("response", StringComparison.OrdinalIgnoreCase) ? "response" : "request";
+        var raw = side == "response" ? ResponseEditor : RequestEditor;
+        var findings = await _service.AnalyzeFindingsAsync(Selected!.Id, side, raw, ct);
+        Findings.Clear();
+        foreach (var finding in findings) Findings.Add(finding);
+        Analysis = findings.Count == 0 ? "No built-in findings." : $"{findings.Count} finding(s). Select one to locate its edit target.";
+    });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private Task ReplayAsync() => RunAsync(ct => _service.ReplayAsync(Selected!.Id, RequestEditor, ct), applyResponse: true);
@@ -212,6 +280,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         Analysis = await _service.EditBinaryBodyAsync(Selected!.Id, BinarySide, BinaryKind,
             offset, count, BinaryData, BinaryEncoding, ct);
         await LoadBinaryDraftStatusAsync(ct);
+        await LoadBinaryBodyInfoAsync(ct);
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
@@ -264,14 +333,32 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
-    private Task LoadBinaryChunkAsync() => ExecuteAsync(async ct =>
+    private Task LoadBinaryChunkAsync() => ExecuteAsync(ct => LoadBinaryChunkCoreAsync(ParseBinaryOffset(), ct));
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task PreviousBinaryChunkAsync() => ExecuteAsync(ct =>
+        LoadBinaryChunkCoreAsync(TrafficBinaryRange.Previous(ParseBinaryOffset(), ParseBinaryCount()), ct));
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task NextBinaryChunkAsync() => ExecuteAsync(ct =>
+        LoadBinaryChunkCoreAsync(TrafficBinaryRange.Next(_binaryBodyLength, ParseBinaryOffset(), _binaryLoadedCount), ct));
+
+    [RelayCommand(CanExecute = nameof(HasSelection))]
+    private Task RefreshBinaryBodyInfoAsync() => ExecuteAsync(LoadBinaryBodyInfoAsync);
+
+    private async Task LoadBinaryChunkCoreAsync(long offset, CancellationToken ct)
     {
-        if (!long.TryParse(BinaryOffset, out var offset) || !int.TryParse(BinaryCount, out var count))
-            throw new ArgumentException("Binary offset and count must be integers.");
-        if (count <= 0) count = 64 * 1024;
+        if (!_binaryInfoLoaded) await LoadBinaryBodyInfoAsync(ct);
+        var count = ParseBinaryCount();
+        if (offset < 0 || offset > _binaryBodyLength) throw new ArgumentOutOfRangeException(nameof(offset), $"Offset must be between 0 and {_binaryBodyLength}.");
         BinaryData = await _service.ReadBinaryBodyAsync(Selected!.Id, BinarySide, offset, count, BinaryEncoding, ct);
-        Analysis = $"Loaded binary chunk at offset {offset}.";
-    });
+        BinaryOffset = offset.ToString();
+        _binaryLoadedCount = TrafficBinaryRange.ActualCount(_binaryBodyLength, offset, count);
+        var end = offset + _binaryLoadedCount;
+        BinaryRangeStatus = $"Range {offset:N0}–{end:N0} of {_binaryBodyLength:N0} bytes · {_binaryLoadedCount:N0} loaded";
+        BinaryProgress = _binaryBodyLength == 0 ? 100 : end * 100d / _binaryBodyLength;
+        Analysis = $"Loaded binary range {offset}–{end}.";
+    }
 
     private bool CanApplyParameter => Selected is not null && SelectedParameter is not null;
 
@@ -393,6 +480,57 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         BinaryDraftStatus = await _service.GetBinaryDraftStatusAsync(Selected!.Id, BinarySide, cancellationToken)
             ?? "No pending binary edit.";
     }
+
+    private async Task LoadBinaryBodyInfoAsync(CancellationToken cancellationToken)
+    {
+        var info = await _service.GetBinaryBodyInfoAsync(Selected!.Id, BinarySide, cancellationToken);
+        _binaryBodyLength = info.Length;
+        _binaryInfoLoaded = true;
+        _binaryLoadedCount = 0;
+        BinaryOffset = "0";
+        BinaryBodySummary = $"{info.Length:N0} bytes · SHA-256 {info.Sha256} · {info.ContentType ?? "unknown content type"}" +
+                            (string.IsNullOrWhiteSpace(info.Charset) ? "" : $" · charset {info.Charset}");
+        BinaryProgress = 0;
+        BinaryRangeStatus = info.Length == 0 ? "Empty body." : "No chunk loaded.";
+    }
+
+    private async Task LoadBinaryBodyInfoSafelyAsync(string exchangeId, string side)
+    {
+        if (!side.Equals("request", StringComparison.OrdinalIgnoreCase) &&
+            !side.Equals("response", StringComparison.OrdinalIgnoreCase))
+        {
+            BinaryBodySummary = "Side must be request or response.";
+            return;
+        }
+        try
+        {
+            var info = await _service.GetBinaryBodyInfoAsync(exchangeId, side, CancellationToken.None);
+            if (Selected?.Id != exchangeId || !BinarySide.Equals(side, StringComparison.OrdinalIgnoreCase)) return;
+            _binaryBodyLength = info.Length;
+            _binaryInfoLoaded = true;
+            _binaryLoadedCount = 0;
+            BinaryBodySummary = $"{info.Length:N0} bytes · SHA-256 {info.Sha256} · {info.ContentType ?? "unknown content type"}" +
+                                (string.IsNullOrWhiteSpace(info.Charset) ? "" : $" · charset {info.Charset}");
+            BinaryRangeStatus = info.Length == 0 ? "Empty body." : "No chunk loaded.";
+        }
+        catch (Exception exception) { BinaryBodySummary = $"Body info unavailable: {exception.Message}"; }
+    }
+
+    private void ResetBinaryNavigation()
+    {
+        _binaryBodyLength = 0;
+        _binaryLoadedCount = 0;
+        _binaryInfoLoaded = false;
+        BinaryOffset = "0";
+        BinaryBodySummary = Selected is null ? "Body info not loaded." : "Loading body info…";
+        BinaryRangeStatus = "No chunk loaded.";
+        BinaryProgress = 0;
+    }
+
+    private long ParseBinaryOffset() => long.TryParse(BinaryOffset, out var value)
+        ? value : throw new ArgumentException("Binary offset must be an integer.");
+    private int ParseBinaryCount() => int.TryParse(BinaryCount, out var value) && value > 0
+        ? value : throw new ArgumentException("Binary count must be a positive integer.");
 
     private void ApplyAnnotation(TrafficAnnotationItem? value)
     {

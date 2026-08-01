@@ -7,8 +7,19 @@ using System.Text.RegularExpressions;
 namespace Hookmes.Automation.Packet;
 
 public enum PacketFindingSeverity { Info, Warning, High }
+public enum PacketFindingSide { Unknown, Request, Response }
+public enum PacketFindingLocationKind { Packet, StartLine, Header, Body }
 
-public sealed record PacketFinding(PacketFindingSeverity Severity, string Code, string Message, string? Location = null);
+public sealed record PacketFinding(PacketFindingSeverity Severity, string Code, string Message, string? Location = null)
+{
+    public PacketFindingSide Side { get; init; }
+    public PacketFindingLocationKind LocationKind { get; init; } = PacketFindingLocationKind.Packet;
+    public string? Field { get; init; }
+    public string? HeaderName { get; init; }
+    public int? HeaderOccurrence { get; init; }
+    public long? BodyOffset { get; init; }
+    public int? BodyLength { get; init; }
+}
 public sealed record PacketAnalysis(IReadOnlyList<PacketFinding> Findings, IReadOnlyList<string> SensitiveFields);
 public sealed record PacketDifference(string Location, string? Left, string? Right);
 
@@ -21,29 +32,43 @@ public static partial class HttpPacketAnalyzer
     {
         var findings = new List<PacketFinding>();
         var sensitive = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var header in packet.Headers)
-            if (IsSensitive(header.Name)) sensitive.Add($"header:{header.Name}");
+        var side = packet.Kind == HttpPacketKind.Request ? PacketFindingSide.Request : PacketFindingSide.Response;
+        for (var index = 0; index < packet.Headers.Count; index++)
+        {
+            var header = packet.Headers[index];
+            if (!IsSensitive(header.Name)) continue;
+            sensitive.Add($"header:{header.Name}");
+            findings.Add(AtHeader(PacketFindingSeverity.Info, "sensitive-header",
+                $"Header '{header.Name}' may contain sensitive data.", side, header.Name,
+                packet.Headers.Take(index).Count(item => item.Name.Equals(header.Name, StringComparison.OrdinalIgnoreCase))));
+        }
 
-        foreach (Match match in FormFieldRegex().Matches(packet.Body))
-            if (IsSensitive(Uri.UnescapeDataString(match.Groups[1].Value))) sensitive.Add($"body:{match.Groups[1].Value}");
-        foreach (Match match in JsonFieldRegex().Matches(packet.Body))
-            if (IsSensitive(match.Groups[1].Value)) sensitive.Add($"body:{match.Groups[1].Value}");
+        foreach (var match in FormFieldRegex().Matches(packet.Body).Cast<Match>().Concat(JsonFieldRegex().Matches(packet.Body).Cast<Match>()))
+        {
+            var field = match.Groups[1];
+            var decodedName = Uri.UnescapeDataString(field.Value);
+            if (!IsSensitive(decodedName)) continue;
+            sensitive.Add($"body:{field.Value}");
+            findings.Add(AtBody(PacketFindingSeverity.Info, "sensitive-body-field",
+                $"Body field '{field.Value}' may contain sensitive data.", side, packet.Body, field.Index, field.Length, field.Value));
+        }
 
         if (packet.HeaderValues("Content-Length").FirstOrDefault() is { } length &&
             long.TryParse(length, out var declared) && declared != Encoding.UTF8.GetByteCount(packet.Body))
-            findings.Add(new(PacketFindingSeverity.Warning, "content-length-mismatch", "Content-Length does not match the UTF-8 body length.", "header:Content-Length"));
+            findings.Add(AtHeader(PacketFindingSeverity.Warning, "content-length-mismatch", "Content-Length does not match the UTF-8 body length.", side, "Content-Length"));
         if (packet.Kind == HttpPacketKind.Request && packet.Target is { } target && Uri.TryCreate(target, UriKind.Absolute, out var uri) && uri.Scheme == "http" && sensitive.Count > 0)
-            findings.Add(new(PacketFindingSeverity.High, "plaintext-secret", "Sensitive values may be transmitted over plaintext HTTP.", "request-target"));
+            findings.Add(AtStart(PacketFindingSeverity.High, "plaintext-secret", "Sensitive values may be transmitted over plaintext HTTP.", side, "target"));
         if (packet.Kind == HttpPacketKind.Request && !packet.HeaderValues("Host").Any() && packet.ProtocolVersion.Equals("HTTP/1.1", StringComparison.OrdinalIgnoreCase))
-            findings.Add(new(PacketFindingSeverity.Warning, "missing-host", "HTTP/1.1 request has no Host header.", "header:Host"));
+            findings.Add(AtHeader(PacketFindingSeverity.Warning, "missing-host", "HTTP/1.1 request has no Host header.", side, "Host"));
         if (packet.Headers.GroupBy(h => h.Name, StringComparer.OrdinalIgnoreCase).Any(g => g.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) && g.Select(h => h.Value).Distinct().Count() > 1))
-            findings.Add(new(PacketFindingSeverity.High, "ambiguous-content-length", "Conflicting Content-Length headers can enable request smuggling.", "header:Content-Length"));
+            findings.Add(AtHeader(PacketFindingSeverity.High, "ambiguous-content-length", "Conflicting Content-Length headers can enable request smuggling.", side, "Content-Length"));
         if (packet.HeaderValues("Transfer-Encoding").Any() && packet.HeaderValues("Content-Length").Any())
-            findings.Add(new(PacketFindingSeverity.High, "te-cl-ambiguity", "Both Transfer-Encoding and Content-Length are present.", "headers"));
+            findings.Add(AtHeader(PacketFindingSeverity.High, "te-cl-ambiguity", "Both Transfer-Encoding and Content-Length are present.", side, "Transfer-Encoding"));
         if (packet.Headers.Any(h => h.Value.Contains("\r", StringComparison.Ordinal) || h.Value.Contains("\n", StringComparison.Ordinal)))
-            findings.Add(new(PacketFindingSeverity.High, "header-injection", "A header value contains a line break.", "headers"));
+            findings.Add(AtHeader(PacketFindingSeverity.High, "header-injection", "A header value contains a line break.", side,
+                packet.Headers.First(h => h.Value.Contains("\r", StringComparison.Ordinal) || h.Value.Contains("\n", StringComparison.Ordinal)).Name));
         if (sensitive.Count > 0)
-            findings.Add(new(PacketFindingSeverity.Info, "sensitive-data", $"Detected {sensitive.Count} sensitive field(s); redact before sharing.", "packet"));
+            findings.Add(new PacketFinding(PacketFindingSeverity.Info, "sensitive-data", $"Detected {sensitive.Count} sensitive field(s); redact before sharing.", "packet") { Side = side });
         return new PacketAnalysis(findings, sensitive.Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
@@ -68,6 +93,27 @@ public static partial class HttpPacketAnalyzer
 
     private static bool IsSensitive(string name) => SensitiveNames.Any(s =>
         name.Equals(s, StringComparison.OrdinalIgnoreCase) || name.EndsWith("_" + s, StringComparison.OrdinalIgnoreCase));
+
+    private static PacketFinding AtHeader(PacketFindingSeverity severity, string code, string message,
+        PacketFindingSide side, string headerName, int? occurrence = null) =>
+        new(severity, code, message, $"header:{headerName}")
+        {
+            Side = side, LocationKind = PacketFindingLocationKind.Header,
+            HeaderName = headerName, HeaderOccurrence = occurrence
+        };
+
+    private static PacketFinding AtStart(PacketFindingSeverity severity, string code, string message,
+        PacketFindingSide side, string field) => new(severity, code, message, $"start:{field}")
+        { Side = side, LocationKind = PacketFindingLocationKind.StartLine, Field = field };
+
+    private static PacketFinding AtBody(PacketFindingSeverity severity, string code, string message,
+        PacketFindingSide side, string body, int characterOffset, int characterLength, string field) =>
+        new(severity, code, message, $"body:{field}")
+        {
+            Side = side, LocationKind = PacketFindingLocationKind.Body, Field = field,
+            BodyOffset = Encoding.UTF8.GetByteCount(body.AsSpan(0, characterOffset)),
+            BodyLength = Encoding.UTF8.GetByteCount(body.AsSpan(characterOffset, characterLength))
+        };
 
     [GeneratedRegex(@"(?:^|&)([^=&]+)=", RegexOptions.CultureInvariant)]
     private static partial Regex FormFieldRegex();

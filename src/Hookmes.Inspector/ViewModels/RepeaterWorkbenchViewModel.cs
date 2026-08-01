@@ -31,6 +31,8 @@ public interface IRepeaterWorkbenchService
     Task ClearHistoryAsync(string id, CancellationToken cancellationToken);
     Task<string> CompareRoundsAsync(string leftDraftId, string leftResultId,
         string rightDraftId, string rightResultId, string side, CancellationToken cancellationToken);
+    Task<string> SaveRoundComparisonAsync(string name, string leftDraftId, string leftResultId,
+        string rightDraftId, string rightResultId, string side, CancellationToken cancellationToken);
 }
 
 public partial class RepeaterWorkbenchViewModel : ViewModelBase
@@ -55,16 +57,17 @@ public partial class RepeaterWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _responseViewer = string.Empty;
     [ObservableProperty] private RepeaterRoundItem? _viewedRound;
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand), nameof(SaveRoundComparisonCommand))]
     private RepeaterRoundItem? _leftRound;
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand), nameof(SaveRoundComparisonCommand))]
     private RepeaterRoundItem? _rightRound;
     [ObservableProperty] private string _comparisonSide = "response";
+    [ObservableProperty] private string _comparisonName = "Repeater comparison";
     [ObservableProperty] private string _comparisonResult = "Select any two rounds to compare.";
     [ObservableProperty] private string _status = "Send a packet here from the Data Packet workbench.";
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CompareRoundsCommand), nameof(SaveRoundComparisonCommand))]
     private bool _isBusy;
 
     public bool CanOperate => Selected is not null && !IsBusy;
@@ -105,6 +108,14 @@ public partial class RepeaterWorkbenchViewModel : ViewModelBase
     private Task CompareRoundsAsync() => ExecuteAsync(async ct =>
     {
         ComparisonResult = await _service.CompareRoundsAsync(
+            LeftRound!.DraftId, LeftRound.ResultId, RightRound!.DraftId, RightRound.ResultId,
+            ComparisonSide.Trim(), ct);
+    });
+
+    [RelayCommand(CanExecute = nameof(CanCompareRounds))]
+    private Task SaveRoundComparisonAsync() => ExecuteAsync(async ct =>
+    {
+        ComparisonResult = await _service.SaveRoundComparisonAsync(ComparisonName.Trim(),
             LeftRound!.DraftId, LeftRound.ResultId, RightRound!.DraftId, RightRound.ResultId,
             ComparisonSide.Trim(), ct);
     });

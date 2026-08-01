@@ -96,7 +96,12 @@ public static class PacketCommandRegistrar
     private static async Task<CommandResult> AnalyzeAsync(IPacketCommandService service, string id, string side, CancellationToken ct)
     {
         var analysis = HttpPacketAnalyzer.Analyze(HttpPacketCodec.Parse(await GetRequiredAsync(service, id, side, ct)));
-        var lines = analysis.Findings.Select(f => $"[{f.Severity}] {f.Code}: {f.Message}" + (f.Location is null ? "" : $" ({f.Location})")).ToList();
+        var lines = analysis.Findings.Select(f =>
+            $"[{f.Severity}] {f.Code}: {f.Message}" +
+            $" (side={f.Side}; kind={f.LocationKind}" +
+            (f.HeaderName is null ? "" : $"; header={f.HeaderName}[{f.HeaderOccurrence ?? 0}]") +
+            (f.BodyOffset is null ? "" : $"; body={f.BodyOffset}+{f.BodyLength ?? 0}") +
+            (f.Field is null ? "" : $"; field={f.Field}") + ")").ToList();
         if (lines.Count == 0) lines.Add("No built-in findings.");
         if (analysis.SensitiveFields.Count > 0) lines.Add("Sensitive: " + string.Join(", ", analysis.SensitiveFields));
         return CommandResult.Ok(string.Join(Environment.NewLine, lines));

@@ -10,6 +10,25 @@ namespace Hookmes.PacketTraffic.Tests;
 public sealed class InspectorImportExportViewModelTests
 {
     [Fact]
+    public async Task Selecting_structured_finding_points_binary_editor_at_exact_body_range()
+    {
+        var service = new ArchiveWorkbenchFake
+        {
+            StructuredFindings = [new TrafficFindingItem("High", "body-risk", "Inspect bytes", "Request", "Body", "token", null, null, 17, 5)]
+        };
+        var model = new TrafficWorkbenchViewModel(service);
+        model.Selected = service.Exchanges[0];
+
+        await model.AnalyzeCommand.ExecuteAsync(null);
+        model.SelectedFinding = model.Findings[0];
+
+        Assert.Equal("request", model.BinarySide);
+        Assert.Equal("17", model.BinaryOffset);
+        Assert.Equal("5", model.BinaryCount);
+        Assert.Contains("Binary editor target", model.FindingTarget);
+    }
+
+    [Fact]
     public async Task Traffic_workbench_forwards_archive_path_filter_and_reports_counts()
     {
         var service = new ArchiveWorkbenchFake();
@@ -79,7 +98,9 @@ public sealed class InspectorImportExportViewModelTests
 
     private sealed class ArchiveWorkbenchFake : ITrafficWorkbenchService
     {
-        public IReadOnlyList<TrafficExchange> Exchanges => [];
+        public IReadOnlyList<TrafficExchange> Exchanges =>
+            [new("packet", DateTimeOffset.UtcNow, "POST", "https://example.test", null, "POST / HTTP/1.1\r\n\r\nbody", "")];
+        public IReadOnlyList<TrafficFindingItem> StructuredFindings { get; init; } = [];
         public bool IsInterceptEnabled { get; set; }
         public bool IsResponseInterceptEnabled { get; set; }
         public event Action? Changed;
@@ -92,6 +113,7 @@ public sealed class InspectorImportExportViewModelTests
         public Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken) { Exported = (path, filter); return Task.FromResult(7); }
         public Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken) { ImportedPath = path; return Task.FromResult(3); }
         public Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));
+        public Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(string exchangeId, string side, string rawPacket, CancellationToken cancellationToken) => Task.FromResult(StructuredFindings);
         public Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));
         public Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task DropAsync(string exchangeId, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -99,6 +121,8 @@ public sealed class InspectorImportExportViewModelTests
         public Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken) => Task.FromResult("draft");
         public Task<string> EditBinaryBodyAsync(string exchangeId, string side, string kind, long offset, long count, string data, string encoding, CancellationToken cancellationToken) => Task.FromResult("ok");
         public Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count, string encoding, CancellationToken cancellationToken) => Task.FromResult("");
+        public Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(string exchangeId, string side, CancellationToken cancellationToken) =>
+            Task.FromResult(new TrafficBinaryBodyInfo(0, new string('0', 64), null, null));
         public Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken) => Task.FromResult(DraftStatus);
         public Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken) { Discarded = (exchangeId, side); return Task.FromResult(DiscardResult); }
         public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) => [];

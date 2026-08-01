@@ -34,13 +34,15 @@
                Text="{Binding ResponseViewer}" />
     </Grid>
 
-    <Grid Grid.Row="3" Margin="8,6" ColumnDefinitions="*,*,100,Auto">
+    <Grid Grid.Row="3" Margin="8,6" ColumnDefinitions="*,*,100,180,Auto,Auto">
       <ComboBox Grid.Column="0" Margin="0,0,6,0" ItemsSource="{Binding Rounds}" SelectedItem="{Binding LeftRound}"
                 DisplayMemberBinding="{Binding Label}" PlaceholderText="Left round" />
       <ComboBox Grid.Column="1" Margin="0,0,6,0" ItemsSource="{Binding Rounds}" SelectedItem="{Binding RightRound}"
                 DisplayMemberBinding="{Binding Label}" PlaceholderText="Right round" />
       <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="request/response" Text="{Binding ComparisonSide}" />
-      <Button Grid.Column="3" Content="Compare rounds" Command="{Binding CompareRoundsCommand}" />
+      <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="Session name" Text="{Binding ComparisonName}" />
+      <Button Grid.Column="4" Content="Compare rounds" Command="{Binding CompareRoundsCommand}" />
+      <Button Grid.Column="5" Margin="6,0,0,0" Content="Save session" Command="{Binding SaveRoundComparisonCommand}" />
     </Grid>
 
     <Grid Grid.Row="4" ColumnDefinitions="Auto,Auto,Auto,*" Margin="8,0,8,6">

@@ -25,7 +25,8 @@ public sealed class RepeaterWorkbenchHistoryViewModelTests
             ViewedRound = second,
             LeftRound = first,
             RightRound = second,
-            ComparisonSide = "request"
+            ComparisonSide = "request",
+            ComparisonName = " regression pair "
         };
 
         Assert.Equal("POST /two", model.RequestEditor);
@@ -34,6 +35,10 @@ public sealed class RepeaterWorkbenchHistoryViewModelTests
 
         Assert.Equal(("draft-a", "send-1", "draft-b", "send-9", "request"), service.Compared);
         Assert.Equal("structured comparison", model.ComparisonResult);
+
+        await model.SaveRoundComparisonCommand.ExecuteAsync(null);
+        Assert.Equal(("regression pair", "draft-a", "send-1", "draft-b", "send-9", "request"), service.Saved);
+        Assert.Equal("saved comparison", model.ComparisonResult);
     }
 
     private sealed class FakeService(IReadOnlyList<RepeaterDraftItem> drafts) : IRepeaterWorkbenchService
@@ -41,11 +46,18 @@ public sealed class RepeaterWorkbenchHistoryViewModelTests
         public IReadOnlyList<RepeaterDraftItem> Drafts => drafts;
         public event Action? RepeaterChanged;
         public (string, string, string, string, string)? Compared { get; private set; }
+        public (string, string, string, string, string, string)? Saved { get; private set; }
         public Task<string> CompareRoundsAsync(string leftDraftId, string leftResultId, string rightDraftId,
             string rightResultId, string side, CancellationToken cancellationToken)
         {
             Compared = (leftDraftId, leftResultId, rightDraftId, rightResultId, side);
             return Task.FromResult("structured comparison");
+        }
+        public Task<string> SaveRoundComparisonAsync(string name, string leftDraftId, string leftResultId,
+            string rightDraftId, string rightResultId, string side, CancellationToken cancellationToken)
+        {
+            Saved = (name, leftDraftId, leftResultId, rightDraftId, rightResultId, side);
+            return Task.FromResult("saved comparison");
         }
         public Task<RepeaterDraftItem> SendAsync(string id, string name, string request, CancellationToken cancellationToken) =>
             Task.FromResult(drafts[0]);

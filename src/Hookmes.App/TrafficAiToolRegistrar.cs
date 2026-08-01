@@ -2,6 +2,7 @@ using Hookmes.AiPanel.Tools;
 using Hookmes.Automation.Commands;
 using Hookmes.Automation.Packet;
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,8 +18,7 @@ internal static class TrafficAiToolRegistrar
             AiToolRisk.ReadOnly, "filter", false, a => Args("ls", Optional(a, "filter")));
         Register(registry, packets, "packet_show", "Show a captured HTTP request or response. Sensitive header values are redacted.",
             AiToolRisk.ReadOnly, "id", true, a => Args("show", Required(a, "id"), Optional(a, "side", "request")));
-        Register(registry, packets, "packet_analyze", "Analyze an HTTP packet for protocol anomalies and sensitive fields.",
-            AiToolRisk.ReadOnly, "id", true, a => Args("analyze", Required(a, "id"), Optional(a, "side", "request")));
+        RegisterAnalysisTool(registry, packets);
         Register(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
             AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
         if (packets is IPacketAuditQueryService)
@@ -53,6 +53,39 @@ internal static class TrafficAiToolRegistrar
         if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
         if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
         if (packets is IPacketArchiveService archive) RegisterArchiveTools(registry, archive);
+    }
+
+    private static void RegisterAnalysisTool(IAiToolRegistry registry, IPacketCommandService packets)
+    {
+        var schema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object", properties = new
+            {
+                id = new { type = "string" },
+                side = new { type = "string", @enum = new[] { "request", "response" } }
+            }, required = new[] { "id" }, additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_analyze",
+            "Return structured protocol and sensitive-data findings with stable codes and edit locations.",
+            schema, AiToolRisk.ReadOnly, async (invocation, ct) =>
+            {
+                var id = Required(invocation.Arguments, "id");
+                var side = Optional(invocation.Arguments, "side", "request");
+                var raw = await packets.GetRawAsync(id, side, ct).ConfigureAwait(false);
+                if (raw is null) return ToolResult.Fail($"Packet '{id}' has no {side} data.");
+                var analysis = HttpPacketAnalyzer.Analyze(HttpPacketCodec.Parse(raw));
+                return ToolResult.Ok(JsonSerializer.Serialize(new
+                {
+                    findings = analysis.Findings.Select(finding => new
+                    {
+                        severity = finding.Severity.ToString(), code = finding.Code, message = finding.Message,
+                        side = finding.Side.ToString(), locationKind = finding.LocationKind.ToString(),
+                        field = finding.Field, headerName = finding.HeaderName, headerOccurrence = finding.HeaderOccurrence,
+                        bodyOffset = finding.BodyOffset, bodyLength = finding.BodyLength
+                    }),
+                    sensitiveFields = analysis.SensitiveFields
+                }));
+            }));
     }
 
     private static void RegisterArchiveTools(IAiToolRegistry registry, IPacketArchiveService archive)

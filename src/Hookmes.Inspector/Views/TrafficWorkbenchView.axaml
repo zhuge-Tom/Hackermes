@@ -48,17 +48,31 @@
         <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>
         <TabItem Header="Binary editor">
-          <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="100,100,100,100,100,Auto,*" Margin="6">
-            <TextBox Grid.Column="0" Margin="0,0,4,4" PlaceholderText="request/response" Text="{Binding BinarySide}" />
-            <TextBox Grid.Column="1" Margin="0,0,4,4" PlaceholderText="replace/insert/delete" Text="{Binding BinaryKind}" />
-            <TextBox Grid.Column="2" Margin="0,0,4,4" PlaceholderText="Offset" Text="{Binding BinaryOffset}" />
-            <TextBox Grid.Column="3" Margin="0,0,4,4" PlaceholderText="Count" Text="{Binding BinaryCount}" />
-            <TextBox Grid.Column="4" Margin="0,0,4,4" PlaceholderText="hex/base64" Text="{Binding BinaryEncoding}" />
-            <Button Grid.Column="5" Margin="0,0,4,0" Content="Load chunk" Command="{Binding LoadBinaryChunkCommand}" />
-            <Button Grid.Column="6" Content="Apply binary edit" Command="{Binding ApplyBinaryEditCommand}" />
-            <TextBox Grid.Row="1" Grid.ColumnSpan="7" AcceptsReturn="True" FontFamily="Consolas,monospace"
+          <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="6">
+            <Border Grid.Row="0" Padding="7,5" Background="{DynamicResource SemiColorFill0}">
+              <Grid ColumnDefinitions="*,Auto">
+                <SelectableTextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding BinaryBodySummary}" />
+                <Button Grid.Column="1" Margin="8,0,0,0" Content="Refresh info" Command="{Binding RefreshBinaryBodyInfoCommand}" />
+              </Grid>
+            </Border>
+            <Grid Grid.Row="1" Margin="0,6,0,0" ColumnDefinitions="100,100,100,100,100,Auto,Auto,Auto,Auto,*">
+              <TextBox Grid.Column="0" Margin="0,0,4,4" PlaceholderText="request/response" Text="{Binding BinarySide}" />
+              <TextBox Grid.Column="1" Margin="0,0,4,4" PlaceholderText="replace/insert/delete" Text="{Binding BinaryKind}" />
+              <TextBox Grid.Column="2" Margin="0,0,4,4" PlaceholderText="Offset / jump" Text="{Binding BinaryOffset}" />
+              <TextBox Grid.Column="3" Margin="0,0,4,4" PlaceholderText="Chunk count" Text="{Binding BinaryCount}" />
+              <TextBox Grid.Column="4" Margin="0,0,4,4" PlaceholderText="hex/base64" Text="{Binding BinaryEncoding}" />
+              <Button Grid.Column="5" Margin="0,0,4,0" Content="Previous" Command="{Binding PreviousBinaryChunkCommand}" />
+              <Button Grid.Column="6" Margin="0,0,4,0" Content="Load / Jump" Command="{Binding LoadBinaryChunkCommand}" />
+              <Button Grid.Column="7" Margin="0,0,4,0" Content="Next" Command="{Binding NextBinaryChunkCommand}" />
+              <Button Grid.Column="8" Content="Apply edit" Command="{Binding ApplyBinaryEditCommand}" />
+            </Grid>
+            <Grid Grid.Row="2" Margin="0,2,0,6" ColumnDefinitions="*,180">
+              <TextBlock VerticalAlignment="Center" Opacity="0.72" Text="{Binding BinaryRangeStatus}" />
+              <ProgressBar Grid.Column="1" Height="6" Minimum="0" Maximum="100" Value="{Binding BinaryProgress}" />
+            </Grid>
+            <TextBox Grid.Row="3" AcceptsReturn="True" FontFamily="Consolas,monospace"
                      PlaceholderText="Encoded hex or base64 data (empty for delete)" Text="{Binding BinaryData}" />
-            <Grid Grid.Row="2" Grid.ColumnSpan="7" Margin="0,6,0,0" ColumnDefinitions="*,Auto,Auto">
+            <Grid Grid.Row="4" Margin="0,6,0,0" ColumnDefinitions="*,Auto,Auto">
               <SelectableTextBlock Grid.Column="0" VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding BinaryDraftStatus}" />
               <Button Grid.Column="1" Margin="6,0,0,0" Content="Refresh draft" Command="{Binding RefreshBinaryDraftCommand}" />
               <Button Grid.Column="2" Margin="6,0,0,0" Content="Discard draft" Command="{Binding DiscardBinaryDraftCommand}" />
@@ -102,6 +116,26 @@
       <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
         <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Response pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedResponse}" /></TabItem>
+        <TabItem Header="Findings">
+          <Grid RowDefinitions="Auto,*,Auto" Margin="6">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock VerticalAlignment="Center" Text="Analyze side" />
+              <TextBox Width="110" PlaceholderText="request/response" Text="{Binding AnalysisSide}" />
+              <Button Content="Analyze" Command="{Binding AnalyzeCommand}" />
+            </StackPanel>
+            <DataGrid Grid.Row="1" Margin="0,6" ItemsSource="{Binding Findings}"
+                      SelectedItem="{Binding SelectedFinding, Mode=TwoWay}" AutoGenerateColumns="False" IsReadOnly="True">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Severity" Width="75" Binding="{Binding Severity}" x:DataType="vm:TrafficFindingItem" />
+                <DataGridTextColumn Header="Code" Width="150" Binding="{Binding Code}" x:DataType="vm:TrafficFindingItem" />
+                <DataGridTextColumn Header="Side" Width="70" Binding="{Binding Side}" x:DataType="vm:TrafficFindingItem" />
+                <DataGridTextColumn Header="Location" Width="150" Binding="{Binding Location}" x:DataType="vm:TrafficFindingItem" />
+                <DataGridTextColumn Header="Message" Width="*" Binding="{Binding Message}" x:DataType="vm:TrafficFindingItem" />
+              </DataGrid.Columns>
+            </DataGrid>
+            <SelectableTextBlock Grid.Row="2" TextWrapping="Wrap" Text="{Binding FindingTarget}" />
+          </Grid>
+        </TabItem>
         <TabItem Header="Audit">
           <Grid RowDefinitions="Auto,*" Margin="6">
             <Button HorizontalAlignment="Left" Content="Refresh selected packet audit" Command="{Binding RefreshAuditCommand}" />

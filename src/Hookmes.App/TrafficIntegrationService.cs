@@ -230,6 +230,22 @@ public sealed class TrafficIntegrationService :
         return Task.FromResult(TrafficComparisonAdapter.Format(result));
     }
 
+    public Task<string> SaveRoundComparisonAsync(string name, string leftDraftId, string leftResultId,
+        string rightDraftId, string rightResultId, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var response = side.Equals("response", StringComparison.OrdinalIgnoreCase);
+        if (!response && !side.Equals("request", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Comparison side must be request or response.");
+        var kind = response ? ComparisonSourceKind.RepeaterResponse : ComparisonSourceKind.RepeaterRequest;
+        var session = _comparisons.Create(name.Trim(),
+            new ComparisonSource(kind, DraftId: leftDraftId, SendResultId: leftResultId),
+            new ComparisonSource(kind, DraftId: rightDraftId, SendResultId: rightResultId));
+        return Task.FromResult($"Saved comparison session '{session.Name}' ({session.Id}).{Environment.NewLine}" +
+            TrafficComparisonAdapter.Format(session.Result));
+    }
+
     public bool IsInterceptEnabled
     {
         get => _intercept;
@@ -363,6 +379,13 @@ public sealed class TrafficIntegrationService :
         return Task.FromResult(PacketBodyChunker.Describe(body, contentType, charset));
     }
 
+    public async Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(
+        string exchangeId, string side, CancellationToken cancellationToken)
+    {
+        var info = await DescribeBodyAsync(exchangeId, side, cancellationToken).ConfigureAwait(false);
+        return new TrafficBinaryBodyInfo(info.Length, info.Sha256, info.ContentType, info.Charset);
+    }
+
     public Task<PacketBodyChunk> ReadBodyChunkAsync(
         string id, string side, long offset, int count,
         PacketBodyChunkEncoding preferredEncoding, CancellationToken cancellationToken)
@@ -436,11 +459,22 @@ public sealed class TrafficIntegrationService :
         var key = DraftKey(id, side);
         if (!_editDrafts.TryGetValue(key, out var draft)) return Task.FromResult(false);
         var item = Required(id);
-        _store.Import(draft.Side == "response"
-            ? item with { ResponseBody = draft.OriginalBody?.ToArray(), ResponseHeaders = draft.OriginalHeaders.ToArray() }
-            : item with { RequestBody = draft.OriginalBody?.ToArray(), RequestHeaders = draft.OriginalHeaders.ToArray() });
-        _editDrafts.TryRemove(key, out _);
-        return Task.FromResult(true);
+        var before = AuditVersion(item, draft.Side);
+        var after = ToEditVersion(draft.OriginalBody ?? [], draft.OriginalHeaders);
+        try
+        {
+            _store.Import(draft.Side == "response"
+                ? item with { ResponseBody = draft.OriginalBody?.ToArray(), ResponseHeaders = draft.OriginalHeaders.ToArray() }
+                : item with { RequestBody = draft.OriginalBody?.ToArray(), RequestHeaders = draft.OriginalHeaders.ToArray() });
+            _editDrafts.TryRemove(key, out _);
+            RecordAudit(PacketAuditOperation.Discard, "shared-api", id, draft.Side, before, after);
+            return Task.FromResult(true);
+        }
+        catch (Exception exception)
+        {
+            RecordAudit(PacketAuditOperation.Discard, "shared-api", id, draft.Side, before, after, exception);
+            throw;
+        }
     }
 
     public async Task<string> EditBinaryBodyAsync(
@@ -599,6 +633,19 @@ public sealed class TrafficIntegrationService :
         if (analysis.SensitiveFields.Count > 0)
             summary += Environment.NewLine + "敏感字段: " + string.Join(", ", analysis.SensitiveFields);
         return Task.FromResult(new TrafficOperationResult(true, summary));
+    }
+
+    public Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(
+        string exchangeId, string side, string rawPacket, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = Required(exchangeId);
+        ValidateSide(side);
+        var analysis = HttpPacketAnalyzer.Analyze(HttpPacketCodec.Parse(rawPacket));
+        return Task.FromResult<IReadOnlyList<TrafficFindingItem>>(analysis.Findings.Select(finding => new TrafficFindingItem(
+            finding.Severity.ToString(), finding.Code, finding.Message,
+            finding.Side.ToString(), finding.LocationKind.ToString(), finding.Field,
+            finding.HeaderName, finding.HeaderOccurrence, finding.BodyOffset, finding.BodyLength)).ToArray());
     }
 
     public async Task<TrafficOperationResult> ReplayAsync(

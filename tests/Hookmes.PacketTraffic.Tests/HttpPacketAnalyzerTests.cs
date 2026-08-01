@@ -1,5 +1,6 @@
 using Hookmes.Automation.Packet;
 using System.Linq;
+using System.Text;
 using Xunit;
 
 namespace Hookmes.PacketTraffic.Tests;
@@ -17,6 +18,26 @@ public sealed class HttpPacketAnalyzerTests
         Assert.Contains("content-length-mismatch", codes);
         Assert.Contains("ambiguous-content-length", codes);
         Assert.Contains("te-cl-ambiguity", codes);
+    }
+
+    [Fact]
+    public void Findings_expose_stable_side_header_and_utf8_body_edit_locations()
+    {
+        const string body = "{\"前缀\":1,\"access_token\":\"secret\"}";
+        var packet = HttpPacketCodec.Parse(
+            "POST /login HTTP/1.1\r\nHost: example.test\r\nAuthorization: secret\r\n\r\n" + body);
+
+        var analysis = HttpPacketAnalyzer.Analyze(packet);
+        var header = analysis.Findings.Single(item => item.Code == "sensitive-header");
+        var bodyFinding = analysis.Findings.Single(item => item.Code == "sensitive-body-field");
+
+        Assert.Equal(PacketFindingSide.Request, header.Side);
+        Assert.Equal(PacketFindingLocationKind.Header, header.LocationKind);
+        Assert.Equal("Authorization", header.HeaderName);
+        Assert.Equal(0, header.HeaderOccurrence);
+        Assert.Equal(PacketFindingLocationKind.Body, bodyFinding.LocationKind);
+        Assert.Equal(Encoding.UTF8.GetByteCount(body[..body.IndexOf("access_token", System.StringComparison.Ordinal)]), bodyFinding.BodyOffset);
+        Assert.Equal(Encoding.UTF8.GetByteCount("access_token"), bodyFinding.BodyLength);
     }
 
     [Fact]
