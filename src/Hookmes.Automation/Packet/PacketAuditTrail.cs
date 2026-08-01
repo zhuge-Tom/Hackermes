@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace Hookmes.Automation.Packet;
 
-public enum PacketAuditOperation { Edit, BodyEdit, Discard, Continue, Drop, Fulfill, Replay }
+public enum PacketAuditOperation { Edit, BodyEdit, Discard, Continue, Drop, Fulfill, Replay, RuleMatch }
 public enum PacketAuditResult { Succeeded, Failed }
 
 public sealed record PacketAuditEntry(
@@ -19,7 +19,9 @@ public sealed record PacketAuditEntry(
     PacketEditVersion Before,
     PacketEditVersion After,
     PacketAuditResult Result,
-    string? ErrorCode = null);
+    string? ErrorCode = null,
+    string? RuleId = null,
+    string? RuleAction = null);
 
 public sealed record PacketAuditQuery(string? PacketId = null, PacketAuditOperation? Operation = null, int Limit = 100);
 
@@ -135,6 +137,11 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
         if (entry.Side is not ("request" or "response")) throw new ArgumentException("Audit side must be request or response.");
         if (!Enum.IsDefined(entry.Operation) || !Enum.IsDefined(entry.Result) || entry.Timestamp == default)
             throw new ArgumentException("Audit operation metadata is invalid.");
+        if (entry.Operation == PacketAuditOperation.RuleMatch &&
+            (string.IsNullOrWhiteSpace(entry.RuleId) || entry.RuleId.Length > 128))
+            throw new ArgumentException("Audit rule id is invalid.");
+        if ((entry.RuleAction?.Length ?? 0) > 64)
+            throw new ArgumentException("Audit rule metadata is invalid.");
         ValidateVersion(entry.Before); ValidateVersion(entry.After);
     }
 

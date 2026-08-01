@@ -45,7 +45,7 @@
 
     <Grid Grid.Row="3" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
       <TabControl Grid.Row="0" Grid.Column="0" Margin="0,4,2,0">
-        <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" /></TabItem>
+        <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" SelectionStart="{Binding RequestSelectionStart, Mode=TwoWay}" SelectionEnd="{Binding RequestSelectionEnd, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>
         <TabItem Header="Binary editor">
           <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="6">
@@ -114,7 +114,7 @@
         </TabItem>
       </TabControl>
       <TabControl Grid.Row="0" Grid.Column="1" Margin="2,4,0,0">
-        <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" /></TabItem>
+        <TabItem Header="Response editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding ResponseEditor, Mode=TwoWay}" SelectionStart="{Binding ResponseSelectionStart, Mode=TwoWay}" SelectionEnd="{Binding ResponseSelectionEnd, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Response pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedResponse}" /></TabItem>
         <TabItem Header="Findings">
           <Grid RowDefinitions="Auto,*,Auto" Margin="6">
@@ -145,6 +145,8 @@
                 <DataGridTextColumn Header="Entry" Width="90" Binding="{Binding EntryPoint}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Operation" Width="80" Binding="{Binding Operation}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Side" Width="70" Binding="{Binding Side}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Rule" Width="110" Binding="{Binding RuleId}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Rule action" Width="140" Binding="{Binding RuleAction}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Before" Width="*" Binding="{Binding Before}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="After" Width="*" Binding="{Binding After}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Result" Width="80" Binding="{Binding Result}" x:DataType="vm:TrafficAuditItem" />
@@ -153,7 +155,7 @@
           </Grid>
         </TabItem>
         <TabItem Header="History storage">
-          <Grid RowDefinitions="Auto,Auto,Auto,*" ColumnDefinitions="Auto,*,Auto,*" Margin="8">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" ColumnDefinitions="Auto,*,Auto,*" Margin="8">
             <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,6,6" VerticalAlignment="Center" Text="Max entries" />
             <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,12,6" Text="{Binding HistoryMaxEntries}" />
             <TextBlock Grid.Row="0" Grid.Column="2" Margin="0,0,6,6" VerticalAlignment="Center" Text="Max bytes" />
@@ -169,7 +171,14 @@
               <CheckBox Margin="12,0,0,0" Content="Confirm clear all" IsChecked="{Binding ConfirmHistoryClear}" />
               <Button Content="Clear all history" Command="{Binding ClearTrafficHistoryCommand}" />
             </StackPanel>
-            <SelectableTextBlock Grid.Row="3" Grid.ColumnSpan="4" Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding HistoryStatus}" />
+            <StackPanel Grid.Row="3" Grid.ColumnSpan="4" Margin="0,6,0,0" Orientation="Horizontal" Spacing="6">
+              <TextBox Width="180" PlaceholderText="host or *.domain" Text="{Binding HistorySitePattern}" />
+              <TextBox Width="100" PlaceholderText="max entries" Text="{Binding HistorySiteMaxEntries}" />
+              <TextBox Width="130" PlaceholderText="max bytes" Text="{Binding HistorySiteMaxBytes}" />
+              <Button Content="Set site quota" Command="{Binding SetHistorySiteQuotaCommand}" />
+              <Button Content="Remove site quota" Command="{Binding RemoveHistorySiteQuotaCommand}" />
+            </StackPanel>
+            <SelectableTextBlock Grid.Row="4" Grid.ColumnSpan="4" Margin="0,8,0,0" TextWrapping="Wrap" Text="{Binding HistoryStatus}" />
           </Grid>
         </TabItem>
       </TabControl>

@@ -130,6 +130,23 @@ internal static class TrafficHistoryRetention
             removedBytes += size;
             removedIds.Add(expired.Id);
         }
+        foreach (var quota in policy.SiteQuotas ?? [])
+        {
+            var matching = retained.Where(item => MatchesHost(item.Url, quota.HostPattern))
+                .OrderBy(item => item.CapturedAt).ToList();
+            long siteBytes = matching.Sum(TrafficHistorySizing.Estimate);
+            while (matching.Count > quota.MaxEntries || siteBytes > quota.MaxStorageBytes)
+            {
+                var oldest = matching[0];
+                matching.RemoveAt(0);
+                retained.Remove(oldest);
+                var size = TrafficHistorySizing.Estimate(oldest);
+                total -= size;
+                siteBytes -= size;
+                removedBytes += size;
+                removedIds.Add(oldest.Id);
+            }
+        }
         while (retained.Count > policy.MaxEntries || total > policy.MaxStorageBytes)
         {
             var oldest = retained[0];
@@ -140,6 +157,15 @@ internal static class TrafficHistoryRetention
             removedIds.Add(oldest.Id);
         }
         return new TrafficRemovalPlan(removedIds, removedBytes);
+    }
+
+    private static bool MatchesHost(string url, string pattern)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        var host = uri.Host;
+        return pattern.StartsWith("*.", StringComparison.Ordinal)
+            ? host.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase) && host.Length > pattern.Length - 1
+            : host.Equals(pattern, StringComparison.OrdinalIgnoreCase);
     }
 
     internal sealed record TrafficRemovalPlan(IReadOnlySet<string> Ids, long RemovedBytes);

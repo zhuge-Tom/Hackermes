@@ -24,6 +24,12 @@ internal static class TrafficHistoryToolRegistrar
             new { maxEntries = new { type = "integer" }, maxBytes = new { type = "integer" }, retentionDays = new { type = "integer" }, autoPrune = new { type = "boolean" } },
             args => $"set {Raw(args, "maxEntries")} {Raw(args, "maxBytes")} {Raw(args, "retentionDays")} {Raw(args, "autoPrune")}",
             ["maxEntries", "maxBytes", "retentionDays", "autoPrune"]);
+        Register(tools, history, "traffic_history_site_quota_set", "Set and apply a bounded retention quota for one exact host or wildcard domain.", AiToolRisk.Mutating,
+            new { hostPattern = new { type = "string" }, maxEntries = new { type = "integer" }, maxBytes = new { type = "integer" } },
+            args => $"site-set {Quote(args, "hostPattern")} {Raw(args, "maxEntries")} {Raw(args, "maxBytes")}",
+            ["hostPattern", "maxEntries", "maxBytes"]);
+        Register(tools, history, "traffic_history_site_quota_remove", "Remove one host-specific traffic history quota.", AiToolRisk.Mutating,
+            new { hostPattern = new { type = "string" } }, args => $"site-remove {Quote(args, "hostPattern")}", ["hostPattern"]);
         Register(tools, history, "traffic_history_cleanup", "Apply the current retention policy and flush persistent history.", AiToolRisk.Dangerous,
             new { }, _ => "cleanup");
         Register(tools, history, "traffic_history_clear", "Permanently clear all captured traffic history.", AiToolRisk.Dangerous,
@@ -56,4 +62,5 @@ internal static class TrafficHistoryToolRegistrar
     }
 
     private static string Raw(JsonElement element, string name) => element.GetProperty(name).GetRawText();
+    private static string Quote(JsonElement element, string name) => JsonSerializer.Serialize(element.GetProperty(name).GetString() ?? string.Empty);
 }

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -13,7 +14,7 @@ using System.Threading.Tasks;
 
 namespace Hookmes.Traffic.Services;
 
-public interface ITrafficService : IAsyncDisposable
+public interface ITrafficService : IAsyncDisposable, ITrafficRuleExecutionSource
 {
     bool ModificationsEnabled { get; }
     void SetModificationsEnabled(bool enabled);
@@ -34,6 +35,8 @@ public sealed class TrafficService : ITrafficService
     private readonly IAppLogger _logger;
     private readonly ConcurrentDictionary<string, CaptureContext> _contexts = new(StringComparer.Ordinal);
     private int _modificationsEnabled;
+
+    public event Action<TrafficRuleExecutionEvent>? RuleExecuted;
 
     public TrafficService(ICdpSessionRegistry registry, TrafficStore store, ITrafficRuleSet rules, IAppLogger logger)
     {
@@ -160,10 +163,42 @@ public sealed class TrafficService : ITrafficService
             if (rule is not null)
             {
                 _store.Put(message with { AppliedRuleId = rule.Id });
-                if (rule.Pause) return;
-                if (rule.Fail) { await FailAsync(id, rule.FailureReason).ConfigureAwait(false); return; }
-                if (responseStage && rule.ResponseEdit is not null) { await FulfillAsync(id, rule.ResponseEdit).ConfigureAwait(false); return; }
-                if (!responseStage && rule.RequestEdit is not null) { await ContinueAsync(id, rule.RequestEdit).ConfigureAwait(false); return; }
+                var action = ResolveRuleAction(rule, responseStage);
+                var before = Metadata(message);
+                var planned = PlannedMetadata(message, rule, action);
+                PublishRuleExecution(new TrafficRuleExecutionEvent(rule.Id, id, session.PageId, message.Stage,
+                    action, TrafficRuleExecutionResult.Matched, before, planned, DateTimeOffset.UtcNow));
+                if (action == TrafficRuleAction.None)
+                {
+                    PublishRuleExecution(new TrafficRuleExecutionEvent(rule.Id, id, session.PageId, message.Stage,
+                        action, TrafficRuleExecutionResult.Skipped, before, before, DateTimeOffset.UtcNow));
+                }
+                else if (action == TrafficRuleAction.Pause)
+                {
+                    PublishRuleExecution(new TrafficRuleExecutionEvent(rule.Id, id, session.PageId, message.Stage,
+                        action, TrafficRuleExecutionResult.Succeeded, before, before, DateTimeOffset.UtcNow));
+                    return;
+                }
+                else
+                {
+                    try
+                    {
+                        if (action == TrafficRuleAction.Fail) await FailAsync(id, rule.FailureReason).ConfigureAwait(false);
+                        else if (action == TrafficRuleAction.FulfillResponse) await FulfillAsync(id, rule.ResponseEdit!).ConfigureAwait(false);
+                        else await ContinueAsync(id, rule.RequestEdit!).ConfigureAwait(false);
+                        var after = _store.Get(id) is { } current ? planned with { State = current.State } : planned;
+                        PublishRuleExecution(new TrafficRuleExecutionEvent(rule.Id, id, session.PageId, message.Stage,
+                            action, TrafficRuleExecutionResult.Succeeded, before, after, DateTimeOffset.UtcNow));
+                        return;
+                    }
+                    catch (Exception ruleError)
+                    {
+                        PublishRuleExecution(new TrafficRuleExecutionEvent(rule.Id, id, session.PageId, message.Stage,
+                            action, TrafficRuleExecutionResult.Failed, before, planned, DateTimeOffset.UtcNow,
+                            ruleError.GetType().Name));
+                        throw;
+                    }
+                }
             }
             if ((responseStage && options.PauseResponses) || (!responseStage && options.PauseRequests)) return;
             await ContinueInternalAsync(session, id, fetchId).ConfigureAwait(false);
@@ -195,6 +230,51 @@ public sealed class TrafficService : ITrafficService
     }
 
     private ICdpSession GetSession(string pageId) => _registry.Get(pageId) ?? throw new InvalidOperationException($"No live CDP session for page '{pageId}'.");
+
+    private static TrafficRuleAction ResolveRuleAction(TrafficRule rule, bool responseStage) =>
+        rule.Pause ? TrafficRuleAction.Pause : rule.Fail ? TrafficRuleAction.Fail
+        : responseStage && rule.ResponseEdit is not null ? TrafficRuleAction.FulfillResponse
+        : !responseStage && rule.RequestEdit is not null ? TrafficRuleAction.EditRequest
+        : TrafficRuleAction.None;
+
+    private static TrafficRulePacketMetadata Metadata(TrafficMessage message)
+    {
+        var uri = Uri.TryCreate(message.Url, UriKind.Absolute, out var parsed) ? parsed : null;
+        var headers = message.Stage == TrafficStage.Response ? message.ResponseHeaders : message.RequestHeaders;
+        var body = message.Stage == TrafficStage.Response ? message.ResponseBody : message.RequestBody;
+        return new TrafficRulePacketMetadata(message.Method, uri?.Scheme, uri?.Host,
+            HashText(uri?.AbsolutePath ?? string.Empty), message.ResponseStatus, headers.Count, body?.LongLength ?? 0, message.State);
+    }
+
+    private static TrafficRulePacketMetadata PlannedMetadata(TrafficMessage message, TrafficRule rule, TrafficRuleAction action)
+    {
+        var before = Metadata(message);
+        if (action == TrafficRuleAction.EditRequest && rule.RequestEdit is { } request)
+        {
+            var uri = Uri.TryCreate(request.Url ?? message.Url, UriKind.Absolute, out var parsed) ? parsed : null;
+            return before with
+            {
+                Method = request.Method ?? message.Method, Scheme = uri?.Scheme, Host = uri?.Host,
+                PathHash = HashText(uri?.AbsolutePath ?? string.Empty),
+                HeaderCount = request.Headers?.Count ?? message.RequestHeaders.Count,
+                BodyLength = request.Body?.LongLength ?? message.RequestBody?.LongLength ?? 0,
+                State = TrafficState.Continued
+            };
+        }
+        if (action == TrafficRuleAction.FulfillResponse && rule.ResponseEdit is { } response)
+            return before with { Status = response.Status, HeaderCount = response.Headers?.Count ?? 0,
+                BodyLength = response.Body?.LongLength ?? 0, State = TrafficState.Fulfilled };
+        return action == TrafficRuleAction.Fail ? before with { State = TrafficState.Failed } : before;
+    }
+
+    private void PublishRuleExecution(TrafficRuleExecutionEvent value)
+    {
+        foreach (Action<TrafficRuleExecutionEvent> handler in RuleExecuted?.GetInvocationList() ?? [])
+            try { handler(value); } catch (Exception ex) { _logger.Warn($"Rule execution observer failed: {ex.GetType().Name}"); }
+    }
+
+    private static string HashText(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private void EnsureModificationAllowed(bool modifying) { if (modifying && !ModificationsEnabled) throw new InvalidOperationException("Traffic modifications are disabled. Enable them explicitly first."); }
     private static string FetchId(string id) { var split = id.IndexOf(':'); return split < 0 ? id : id[(split + 1)..]; }
     private static object HeaderObject(TrafficHeader h) => new { name = h.Name, value = h.Value };

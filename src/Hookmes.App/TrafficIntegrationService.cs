@@ -79,7 +79,7 @@ public sealed class TrafficIntegrationService :
         _audit.Query(new PacketAuditQuery(exchangeId, Limit: limit)).Select(entry => new TrafficAuditItem(
             entry.Timestamp, entry.EntryPoint, entry.Operation.ToString(), entry.Side,
             FormatAuditVersion(entry.Before), FormatAuditVersion(entry.After),
-            entry.Result.ToString(), entry.ErrorCode)).ToArray();
+            entry.Result.ToString(), entry.ErrorCode, entry.RuleId, entry.RuleAction)).ToArray();
 
     public TrafficHistoryOverview GetHistoryOverview() => ToHistoryOverview(_history.GetStatistics());
 
@@ -94,7 +94,30 @@ public sealed class TrafficIntegrationService :
         int maxEntries, long maxBytes, int retentionDays, bool autoPrune, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _history.UpdatePolicy(new TrafficHistoryPolicy(maxEntries, maxBytes, retentionDays, autoPrune));
+        _history.UpdatePolicy(new TrafficHistoryPolicy(maxEntries, maxBytes, retentionDays, autoPrune, _history.Policy.SiteQuotas));
+        return Task.FromResult(ToHistoryOverview(_history.GetStatistics()));
+    }
+
+    public Task<TrafficHistoryOverview> SetHistorySiteQuotaAsync(
+        string hostPattern, int maxEntries, long maxBytes, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostPattern);
+        var quotas = (_history.Policy.SiteQuotas ?? []).Where(value =>
+            !value.HostPattern.Equals(hostPattern, StringComparison.OrdinalIgnoreCase)).ToList();
+        quotas.Add(new TrafficSiteQuota(hostPattern, maxEntries, maxBytes));
+        _history.UpdatePolicy(_history.Policy with { SiteQuotas = quotas });
+        return Task.FromResult(ToHistoryOverview(_history.GetStatistics()));
+    }
+
+    public Task<TrafficHistoryOverview> RemoveHistorySiteQuotaAsync(
+        string hostPattern, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostPattern);
+        var quotas = (_history.Policy.SiteQuotas ?? []).Where(value =>
+            !value.HostPattern.Equals(hostPattern, StringComparison.OrdinalIgnoreCase)).ToArray();
+        _history.UpdatePolicy(_history.Policy with { SiteQuotas = quotas });
         return Task.FromResult(ToHistoryOverview(_history.GetStatistics()));
     }
 
@@ -988,7 +1011,9 @@ public sealed class TrafficIntegrationService :
     private static TrafficHistoryOverview ToHistoryOverview(TrafficHistoryStatistics value) => new(
         value.EntryCount, value.EstimatedContentBytes, value.PersistedFileBytes,
         value.OldestCapture, value.NewestCapture, value.Policy.MaxEntries,
-        value.Policy.MaxStorageBytes, value.Policy.RetentionDays, value.Policy.AutoPrune);
+        value.Policy.MaxStorageBytes, value.Policy.RetentionDays, value.Policy.AutoPrune,
+        (value.Policy.SiteQuotas ?? []).Select(quota =>
+            new TrafficHistorySiteQuotaItem(quota.HostPattern, quota.MaxEntries, quota.MaxStorageBytes)).ToArray());
 
     public void Dispose()
     {

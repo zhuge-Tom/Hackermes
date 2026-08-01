@@ -28,6 +28,7 @@ public sealed class TrafficModule : IModule
         services.AddSingleton<ITrafficRuleManager>(sp => sp.GetRequiredService<TrafficRuleManager>());
         services.AddSingleton<TrafficService>();
         services.AddSingleton<ITrafficService>(sp => sp.GetRequiredService<TrafficService>());
+        services.AddSingleton<ITrafficRuleExecutionSource>(sp => sp.GetRequiredService<TrafficService>());
         services.AddSingleton<RepeaterService>();
         services.AddSingleton<IRepeaterService>(sp => sp.GetRequiredService<RepeaterService>());
         services.AddSingleton<TrafficComparisonService>();

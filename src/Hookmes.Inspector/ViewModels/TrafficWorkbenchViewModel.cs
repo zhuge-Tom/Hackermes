@@ -39,6 +39,8 @@ public interface ITrafficWorkbenchService
     string PreviewHistoryCleanup();
     Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(int maxEntries, long maxBytes, int retentionDays,
         bool autoPrune, CancellationToken cancellationToken);
+    Task<TrafficHistoryOverview> SetHistorySiteQuotaAsync(string hostPattern, int maxEntries, long maxBytes, CancellationToken cancellationToken);
+    Task<TrafficHistoryOverview> RemoveHistorySiteQuotaAsync(string hostPattern, CancellationToken cancellationToken);
     Task<string> CleanupTrafficHistoryAsync(CancellationToken cancellationToken);
     Task ClearTrafficHistoryAsync(CancellationToken cancellationToken);
     Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken);
@@ -61,10 +63,61 @@ public sealed record TrafficFindingItem(
 }
 public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
 public sealed record TrafficAuditItem(DateTimeOffset Timestamp, string EntryPoint, string Operation, string Side,
-    string Before, string After, string Result, string? ErrorCode);
+    string Before, string After, string Result, string? ErrorCode, string? RuleId = null, string? RuleAction = null);
 public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes, long FileBytes,
-    DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune);
+    DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune,
+    IReadOnlyList<TrafficHistorySiteQuotaItem> SiteQuotas);
+public sealed record TrafficHistorySiteQuotaItem(string HostPattern, int MaxEntries, long MaxBytes);
 public sealed record TrafficBinaryBodyInfo(long Length, string Sha256, string? ContentType, string? Charset);
+public sealed record HttpTextSelection(int Start, int End)
+{
+    public int Length => End - Start;
+}
+
+public static class HttpFindingTextLocator
+{
+    public static HttpTextSelection? Locate(string rawHttp, string locationKind, string? headerName = null, int occurrence = 0)
+    {
+        if (string.IsNullOrEmpty(rawHttp)) return null;
+        var firstLineEnd = FindLineEnd(rawHttp, 0);
+        if (locationKind.Equals("StartLine", StringComparison.OrdinalIgnoreCase))
+            return new HttpTextSelection(0, firstLineEnd.ContentEnd);
+        if (!locationKind.Equals("Header", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(headerName) || occurrence < 0) return null;
+
+        var headerEnd = FindHeaderEnd(rawHttp);
+        var position = firstLineEnd.NextStart;
+        var found = 0;
+        while (position < headerEnd)
+        {
+            var line = FindLineEnd(rawHttp, position);
+            if (line.ContentEnd <= position) break;
+            var colon = rawHttp.IndexOf(':', position, line.ContentEnd - position);
+            if (colon > position && rawHttp[position..colon].Trim().Equals(headerName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (found++ == occurrence) return new HttpTextSelection(position, line.ContentEnd);
+            }
+            position = line.NextStart;
+        }
+        return null;
+    }
+
+    private static int FindHeaderEnd(string text)
+    {
+        var crlf = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        var lf = text.IndexOf("\n\n", StringComparison.Ordinal);
+        if (crlf < 0) return lf < 0 ? text.Length : lf;
+        return lf < 0 ? crlf : Math.Min(crlf, lf);
+    }
+
+    private static (int ContentEnd, int NextStart) FindLineEnd(string text, int start)
+    {
+        var newline = text.IndexOf('\n', start);
+        if (newline < 0) return (text.Length, text.Length);
+        var contentEnd = newline > start && text[newline - 1] == '\r' ? newline - 1 : newline;
+        return (contentEnd, newline + 1);
+    }
+}
 
 public static class TrafficBinaryRange
 {
@@ -130,6 +183,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private bool _isResponseInterceptEnabled;
     [ObservableProperty] private string _requestEditor = string.Empty;
     [ObservableProperty] private string _responseEditor = string.Empty;
+    [ObservableProperty] private int _requestSelectionStart;
+    [ObservableProperty] private int _requestSelectionEnd;
+    [ObservableProperty] private int _responseSelectionStart;
+    [ObservableProperty] private int _responseSelectionEnd;
     [ObservableProperty] private string _formattedRequest = string.Empty;
     [ObservableProperty] private string _formattedResponse = string.Empty;
     [ObservableProperty] private string _analysis = "Select a request, edit it, then Analyze or Replay.";
@@ -169,6 +226,9 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _historyMaxBytes = (256L * 1024 * 1024).ToString();
     [ObservableProperty] private string _historyRetentionDays = "30";
     [ObservableProperty] private bool _historyAutoPrune = true;
+    [ObservableProperty] private string _historySitePattern = string.Empty;
+    [ObservableProperty] private string _historySiteMaxEntries = "1000";
+    [ObservableProperty] private string _historySiteMaxBytes = (64L * 1024 * 1024).ToString();
     [ObservableProperty] private bool _confirmHistoryClear;
     [ObservableProperty] private string _historyStatus = "History statistics not loaded.";
     private const int PageSize = 200;
@@ -188,6 +248,8 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         LoadAudit();
         Findings.Clear();
         SelectedFinding = null;
+        RequestSelectionStart = RequestSelectionEnd = 0;
+        ResponseSelectionStart = ResponseSelectionEnd = 0;
         ResetBinaryNavigation();
         if (value is not null) _ = LoadBinaryBodyInfoSafelyAsync(value.Id, BinarySide);
         OnPropertyChanged(nameof(HasSelection));
@@ -224,13 +286,41 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         }
         else if (value.LocationKind == "Header")
         {
-            FindingTarget = $"{side} editor target: header '{value.HeaderName}', occurrence {value.HeaderOccurrence ?? 0}.";
+            var raw = side == "response" ? ResponseEditor : RequestEditor;
+            var selection = HttpFindingTextLocator.Locate(raw, value.LocationKind, value.HeaderName, value.HeaderOccurrence ?? 0);
+            ApplyFindingSelection(side, selection);
+            FindingTarget = selection is null
+                ? $"{side} editor target not found: header '{value.HeaderName}', occurrence {value.HeaderOccurrence ?? 0}."
+                : $"{side} editor selection {selection.Start}–{selection.End}: header '{value.HeaderName}', occurrence {value.HeaderOccurrence ?? 0}.";
+        }
+        else if (value.LocationKind == "StartLine")
+        {
+            var raw = side == "response" ? ResponseEditor : RequestEditor;
+            var selection = HttpFindingTextLocator.Locate(raw, value.LocationKind);
+            ApplyFindingSelection(side, selection);
+            FindingTarget = selection is null ? $"{side} start line not found."
+                : $"{side} editor selection {selection.Start}–{selection.End}: start line.";
         }
         else
         {
             FindingTarget = $"{side} editor target: {value.Field ?? value.LocationKind}.";
         }
         Analysis = $"[{value.Severity}] {value.Code}: {value.Message}{Environment.NewLine}{FindingTarget}";
+    }
+
+    private void ApplyFindingSelection(string side, HttpTextSelection? selection)
+    {
+        if (selection is null) return;
+        if (side == "response")
+        {
+            ResponseSelectionEnd = selection.End;
+            ResponseSelectionStart = selection.Start;
+        }
+        else
+        {
+            RequestSelectionEnd = selection.End;
+            RequestSelectionStart = selection.Start;
+        }
     }
 
     [RelayCommand] private void Reload() => Refresh();
@@ -314,6 +404,20 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         ApplyHistoryOverview(await _service.UpdateHistoryPolicyAsync(
             maxEntries, maxBytes, retentionDays, HistoryAutoPrune, ct));
     });
+
+    [RelayCommand]
+    private Task SetHistorySiteQuotaAsync() => ExecuteAsync(async ct =>
+    {
+        if (!int.TryParse(HistorySiteMaxEntries, out var maxEntries) ||
+            !long.TryParse(HistorySiteMaxBytes, out var maxBytes))
+            throw new ArgumentException("Site quota limits must be integers.");
+        ApplyHistoryOverview(await _service.SetHistorySiteQuotaAsync(
+            HistorySitePattern.Trim(), maxEntries, maxBytes, ct));
+    });
+
+    [RelayCommand]
+    private Task RemoveHistorySiteQuotaAsync() => ExecuteAsync(async ct =>
+        ApplyHistoryOverview(await _service.RemoveHistorySiteQuotaAsync(HistorySitePattern.Trim(), ct)));
 
     [RelayCommand]
     private Task CleanupTrafficHistoryAsync() => ExecuteAsync(async ct =>
@@ -472,7 +576,9 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         HistoryRetentionDays = value.RetentionDays.ToString();
         HistoryAutoPrune = value.AutoPrune;
         HistoryStatus = $"{value.EntryCount} entries · estimated {value.EstimatedBytes} B · file {value.FileBytes} B · " +
-                        $"oldest {value.Oldest?.ToLocalTime().ToString("g") ?? "-"} · newest {value.Newest?.ToLocalTime().ToString("g") ?? "-"}";
+                        $"oldest {value.Oldest?.ToLocalTime().ToString("g") ?? "-"} · newest {value.Newest?.ToLocalTime().ToString("g") ?? "-"}" +
+                        string.Concat(value.SiteQuotas.Select(quota =>
+                            $"{Environment.NewLine}{quota.HostPattern}: {quota.MaxEntries} entries / {quota.MaxBytes} B"));
     }
 
     private async Task LoadBinaryDraftStatusAsync(CancellationToken cancellationToken)

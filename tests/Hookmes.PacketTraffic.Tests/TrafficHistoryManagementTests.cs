@@ -77,6 +77,32 @@ public sealed class TrafficHistoryManagementTests : IDisposable
         Assert.Equal(0, manager.GetStatistics().EntryCount);
     }
 
+    [Fact]
+    public async Task Site_quota_prunes_oldest_matching_host_and_round_trips_through_cli()
+    {
+        using var persistence = new TrafficHistoryPersistence(HistoryPath);
+        var policies = new TrafficHistoryPolicyStore(PolicyPath);
+        var store = new TrafficStore(persistence, policies);
+        for (var index = 0; index < 5; index++) store.Import(Message(index) with
+        {
+            Id = "api-" + index, Url = "https://api.example.test/" + index
+        });
+        store.Import(Message(20) with { Id = "other", Url = "https://other.test/" });
+        var manager = new TrafficHistoryManagementService(store, policies, persistence);
+
+        var configured = await Execute(manager, "site-set *.example.test 2 1048576");
+        Assert.True(configured.Success);
+        Assert.Contains("site=*.example.test", configured.Output);
+        Assert.Equal(3, manager.GetStatistics().EntryCount);
+        Assert.NotNull(store.Get("api-0"));
+        Assert.NotNull(store.Get("api-1"));
+        Assert.NotNull(store.Get("other"));
+
+        Assert.True((await Execute(manager, "site-remove *.example.test")).Success);
+        Assert.Empty(manager.Policy.SiteQuotas ?? []);
+        Assert.Empty(new TrafficHistoryPolicyStore(PolicyPath).Current.SiteQuotas ?? []);
+    }
+
     private static Task<CommandResult> Execute(ITrafficHistoryManagementService service, string arguments) =>
         HistoryManagementCommandRegistrar.ExecuteAsync(service, new CommandContext
         {

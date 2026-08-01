@@ -196,7 +196,8 @@ public static class PacketCommandRegistrar
         var entries = audit.QueryAudit(new PacketAuditQuery(packetId, Limit: limit));
         return CommandResult.Ok(entries.Count == 0 ? "No traffic audit entries." : string.Join(Environment.NewLine,
             entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
-                $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}")));
+                $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}\t" +
+                $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}")));
     }
 
     private static async Task<CommandResult> DraftShowAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)

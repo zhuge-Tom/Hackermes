@@ -24,6 +24,7 @@ public sealed class TrafficIntegrationModule : IModule
     {
         services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hookmes", "traffic-audit.v1.json")));
+        services.AddSingleton<TrafficRuleAuditBridge>();
         services.AddSingleton<TrafficIntegrationService>();
         services.AddSingleton<IPacketCommandService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketArchiveService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
@@ -39,6 +40,7 @@ public sealed class TrafficIntegrationModule : IModule
 
     public void Initialize(IServiceProvider serviceProvider)
     {
+        _ = serviceProvider.GetRequiredService<TrafficRuleAuditBridge>();
         var integration = serviceProvider.GetRequiredService<TrafficIntegrationService>();
         PacketCommandRegistrar.Register(serviceProvider.GetRequiredService<CommandRegistry>(), integration);
         TrafficAiToolRegistrar.Register(serviceProvider.GetRequiredService<IAiToolRegistry>(), integration);

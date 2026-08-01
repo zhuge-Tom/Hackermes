@@ -7,7 +7,7 @@
 | 能力 | 人工工作台 | CLI | Agent | 当前证据 | 下一阶段缺口 |
 |---|---:|---:|---:|---|---|
 | 捕获、筛选、分页和查看原始请求/响应 | ✅ | ✅ | ✅ | Traffic Workbench；`packet ls/show`；`packet_list/show` | Agent `list` 结果不支持与 UI 相同的结构化复合筛选/分页 |
-| 协议异常、敏感字段分析 | ✅ | ✅ | ✅ | 三端复用 `HttpPacketAnalyzer` 的结构化 Finding；包含 side、稳定 code、Header 重复项和 UTF-8 body offset；UI Findings 可定位 Binary editor | 规则集仍为内置静态集合，尚无插件发现机制 |
+| 协议异常、敏感字段分析 | ✅ | ✅ | ✅ | 三端复用 `HttpPacketAnalyzer` 的结构化 Finding；包含 side、稳定 code、Header 重复项和 UTF-8 body offset；UI 可精确选中 Header/StartLine 或定位 Binary editor | 规则集仍为内置静态集合，尚无插件发现机制 |
 | 语义 Diff | ✅ | ✅ | ✅ | Comparer 支持 Traffic/Repeater 来源直填与持久 Session CRUD；`packet diff` / `compare` / `compare-session`；`packet_diff` / `packet_compare_structured` / `comparison_session_*` | Repeater 来源仍需显式刷新后选择；后续可增加从其他工作台一键发送到左右槽位 |
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | Request Intercept；`packet intercept/continue/drop`；对应 Agent 工具 | 已具备基本对等性 |
 | 响应拦截与 Fulfill | ✅ | ✅ | ✅ | UI 有独立 Response Intercept；CLI `packet intercept-mode request|response|both|off`；Agent `packet_intercept_mode`；均复用同一捕获服务 | `packet intercept on|off` 保留为仅控制请求拦截的兼容入口 |
@@ -20,8 +20,8 @@
 | 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 支持路径型 JSON export 与 replace/merge import；`rule ...`；`traffic_rule_list/change`；UI 适配层直接调用 `ITrafficRuleManager.ExportJson/ImportJson` | UI 仍缺系统文件选择器；复杂 request/response edit 规则没有完整表单 |
 | 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
 | HAR / Hookmes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench `Archive`；`packet export/import`；Agent `packet_archive_export/import` 只收发内容、不接受路径，复用 `PacketArchiveCodec/IPacketArchiveService`，限制 500 entries / 2 MiB；批量导出为 Dangerous、导入为 Mutating | UI 仍缺系统文件选择器和覆盖确认；Agent 大归档需先过滤、分批交换，且导出内容可能包含 body secrets |
-| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用 Traffic Store 和版本化持久化服务；历史支持条数、估算容量、保留期、自动清理、统计与显式清空 | 尚未提供按站点差异化配额 |
-| 操作安全与审计 | ✅ | ✅ | ✅ | Agent 风险分级；CLI 根命令标记 mutating；修改、继续、丢弃、Fulfill、重放统一记录长度/SHA-256/Content-Length、入口与结果；不保存原始敏感内容 | 尚无撤销操作和审计导出签名 |
+| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用版本化持久化服务；历史支持全局及精确主机/`*.domain` 条数容量配额、保留期、自动清理、统计与显式清空，三端共享策略 | 尚无按工作区隔离的配额配置 |
+| 操作安全与审计 | ✅ | ✅ | ✅ | 修改、Discard、继续、丢弃、Fulfill、重放和规则 Matched/Succeeded/Failed/Skipped 均进入元数据审计；规则路径只存 SHA-256，不保存 query/header value/body | 尚无撤销操作和审计导出签名 |
 
 ## 下一阶段优先级
 
@@ -33,7 +33,7 @@
 
 1. 为 apply-and-continue / apply-and-fulfill 返回最终 TrafficState 和可持久追踪的操作结果。
 2. 在 loopback 与真实 CDP 验收中断言服务端/浏览器实际收到的字节。
-3. 为规则自动命中补统一审计，并为审计提供签名导出。
+3. 为审计提供签名导出，并让提交结果直接携带可追踪 audit id。
 
 验收：同一个暂停请求分别从 UI、CLI、Agent 修改二进制 body 后继续，本地 echo 服务收到完全相同的新字节；响应 body 修改走 Fulfill 并返回新字节；模拟 CDP 失败后暂存标记仍存在且可重试。
 
@@ -47,9 +47,9 @@
 
 ### P2：可审计性与大数据体验
 
-- 为规则命中补操作者、入口、时间、前后 hash 与结果。
-- 为审计提供签名导出，为历史增加按站点配额。
-- 缓存超大 body 摘要，并为 Header Finding 增加文本编辑器光标选择。
+- 为审计提供签名导出及操作者身份扩展。
+- 缓存超大 body 摘要，并增加按工作区隔离的历史配额。
+- 为 Finding 增加自动切换目标编辑页和插件式分析器发现。
 
 ## 完成门槛
 

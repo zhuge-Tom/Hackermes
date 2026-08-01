@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Hookmes.Traffic.History;
 
@@ -6,7 +7,10 @@ public sealed record TrafficHistoryPolicy(
     int MaxEntries = 5000,
     long MaxStorageBytes = 256L * 1024 * 1024,
     int RetentionDays = 30,
-    bool AutoPrune = true);
+    bool AutoPrune = true,
+    IReadOnlyList<TrafficSiteQuota>? SiteQuotas = null);
+
+public sealed record TrafficSiteQuota(string HostPattern, int MaxEntries, long MaxStorageBytes);
 
 public sealed record TrafficHistoryStatistics(
     int EntryCount,
