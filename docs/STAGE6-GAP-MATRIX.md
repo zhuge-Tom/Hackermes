@@ -21,7 +21,7 @@
 | 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化 | UI 缺删除、按标签/状态筛选和批量标注；标注引用的包被清理后需明确自动 prune 策略 |
 | HAR / Hookmes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench 使用系统 HAR/JSON picker、覆盖确认和最近路径；`packet export/import`；Agent 只交换有限内容、不接受路径 | Agent 大归档仍需先过滤、分批交换，且导出内容可能包含 body secrets |
 | 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用版本化持久化服务；历史支持全局及精确主机/`*.domain` 条数容量配额、保留期、自动清理、统计与显式清空，三端共享策略 | 尚无按工作区隔离的配额配置 |
-| 操作安全与审计 | ✅ | ✅ | ✅ | 修改、Discard、继续、丢弃、Fulfill、重放和规则 Matched/Succeeded/Failed/Skipped 均进入元数据审计；规则路径只存 SHA-256，不保存 query/header value/body | 尚无撤销操作和审计导出签名 |
+| 操作安全与审计 | ✅ | ✅ | ✅ | 修改、Discard、继续、丢弃、Fulfill、重放和规则执行均进入元数据审计；三端共享 ECDSA P-256 签名导出/离线验签及可选指纹信任固定，不保存原始包 | 尚无撤销、操作者身份、密钥轮换及可信指纹分发机制 |
 
 ## 下一阶段优先级
 
@@ -32,7 +32,7 @@
 剩余 P0 工作以执行证据和审计为主：
 
 1. 在 loopback 与真实 CDP 验收中断言服务端/浏览器实际收到的字节。
-2. 为审计提供签名导出。
+2. 在真实平台密钥存储上验收签名密钥跨重启复用、损坏恢复和可信指纹固定。
 
 验收：同一个暂停请求分别从 UI、CLI、Agent 修改二进制 body 后继续，本地 echo 服务收到完全相同的新字节；响应 body 修改走 Fulfill 并返回新字节；模拟 CDP 失败后暂存标记仍存在且可重试。
 
@@ -45,7 +45,7 @@
 
 ### P2：可审计性与大数据体验
 
-- 为审计提供签名导出及操作者身份扩展。
+- 为审计补充操作者身份、密钥轮换和可信指纹分发；签名导出源码入口已覆盖三端。
 - 缓存超大 body 摘要，并增加按工作区隔离的历史配额。
 - 为 Finding 增加自动切换目标编辑页和插件式分析器发现。
 

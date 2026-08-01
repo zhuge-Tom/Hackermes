@@ -56,7 +56,7 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
     public void Record(PacketAuditEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        Validate(entry);
+        ValidateEntry(entry);
         lock (_gate)
         {
             _entries.Add(entry with { ErrorCode = SanitizeCode(entry.ErrorCode) });
@@ -117,7 +117,7 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
             foreach (var entry in file.Entries)
             {
                 if (entry is null) return false;
-                Validate(entry);
+                ValidateEntry(entry);
             }
             entries = file.Entries;
             return true;
@@ -128,7 +128,7 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
         catch (ArgumentException) { return false; }
     }
 
-    private static void Validate(PacketAuditEntry entry)
+    internal static void ValidateEntry(PacketAuditEntry entry)
     {
         if (string.IsNullOrWhiteSpace(entry.AuditId) || string.IsNullOrWhiteSpace(entry.PacketId))
             throw new ArgumentException("Audit id and packet id are required.");

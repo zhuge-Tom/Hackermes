@@ -5,6 +5,7 @@ using Hookmes.Base;
 using Hookmes.Inspector.ViewModels;
 using Hookmes.Inspector.Views;
 using Hookmes.Platform.Registries;
+using Hookmes.Platform.Services;
 using Hookmes.Traffic.Rules;
 using Hookmes.Traffic.Repeater;
 using Hookmes.Traffic.Comparison;
@@ -24,6 +25,8 @@ public sealed class TrafficIntegrationModule : IModule
     {
         services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hookmes", "traffic-audit.v1.json")));
+        services.AddSingleton<IPacketAuditSigningKey, PacketAuditSigningKey>();
+        services.AddSingleton<IPacketAuditExportService, PacketAuditExportService>();
         services.AddSingleton<TrafficRuleAuditBridge>();
         services.AddSingleton<TrafficIntegrationService>();
         services.AddSingleton<IPacketCommandService>(sp => sp.GetRequiredService<TrafficIntegrationService>());

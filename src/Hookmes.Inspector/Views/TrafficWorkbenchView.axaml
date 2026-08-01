@@ -137,9 +137,16 @@
           </Grid>
         </TabItem>
         <TabItem Header="Audit">
-          <Grid RowDefinitions="Auto,*" Margin="6">
-            <Button HorizontalAlignment="Left" Content="Refresh selected packet audit" Command="{Binding RefreshAuditCommand}" />
-            <DataGrid Grid.Row="1" Margin="0,6,0,0" ItemsSource="{Binding AuditEntries}" AutoGenerateColumns="False" IsReadOnly="True">
+          <Grid RowDefinitions="Auto,Auto,Auto,*" ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="6">
+            <Button Grid.Row="0" Grid.Column="0" Margin="0,0,6,6" Content="Refresh" Command="{Binding RefreshAuditCommand}" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,6,6" Watermark="Signed audit file" Text="{Binding AuditFilePath}" />
+            <TextBox Grid.Row="0" Grid.Column="2" Width="70" Margin="0,0,6,6" Watermark="Limit" Text="{Binding AuditExportLimit}" />
+            <CheckBox Grid.Row="0" Grid.Column="3" Margin="0,0,6,6" VerticalAlignment="Center" Content="Export all" IsChecked="{Binding AuditExportAll}" />
+            <Button Grid.Row="0" Grid.Column="4" Margin="0,0,0,6" Content="Export signed" Command="{Binding ExportSignedAuditCommand}" />
+            <TextBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,0,6,6" Watermark="Expected key fingerprint (optional trust pin)" Text="{Binding AuditExpectedKeyId}" />
+            <Button Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" Content="Verify signed" Command="{Binding VerifySignedAuditCommand}" />
+            <SelectableTextBlock Grid.Row="2" Grid.ColumnSpan="5" TextWrapping="Wrap" Text="{Binding AuditExportStatus}" />
+            <DataGrid Grid.Row="3" Grid.ColumnSpan="5" Margin="0,6,0,0" ItemsSource="{Binding AuditEntries}" AutoGenerateColumns="False" IsReadOnly="True">
               <DataGrid.Columns>
                 <DataGridTextColumn Header="Time" Width="135" Binding="{Binding Timestamp}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Entry" Width="90" Binding="{Binding EntryPoint}" x:DataType="vm:TrafficAuditItem" />

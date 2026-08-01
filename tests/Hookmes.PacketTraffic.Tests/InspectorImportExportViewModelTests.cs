@@ -239,6 +239,9 @@ public sealed class InspectorImportExportViewModelTests
         public TrafficExchangePage Query(TrafficExchangeFilter filter) => new([], 0, filter.Offset, filter.Limit);
         public Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken) { Exported = (path, filter); return Task.FromResult(7); }
         public Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken) { ImportedPath = path; return Task.FromResult(3); }
+        public Task<int> ExportSignedAuditFileAsync(string path, string? packetId, int limit, CancellationToken cancellationToken) => Task.FromResult(2);
+        public Task<TrafficAuditVerificationItem> VerifySignedAuditFileAsync(string path, string? expectedKeyId, CancellationToken cancellationToken) =>
+            Task.FromResult(new TrafficAuditVerificationItem(true, expectedKeyId ?? "test-key", 2, DateTimeOffset.UtcNow, null));
         public Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));
         public Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(string exchangeId, string side, string rawPacket, CancellationToken cancellationToken) => Task.FromResult(StructuredFindings);
         public Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));

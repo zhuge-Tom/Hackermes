@@ -37,7 +37,7 @@ public static class PacketCommandRegistrar
     {
         Name = "packet",
         Summary = "Inspect, analyze, edit and replay captured HTTP packets",
-        Usage = "packet <ls|show|analyze|diff|audit|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
+        Usage = "packet <ls|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...",
         IsMutating = true, // policy must gate the mutating subcommands; callers may expose read-only wrappers to AI.
         Handler = (context, cancellationToken) => ExecuteAsync(service, context, cancellationToken)
     });
@@ -54,6 +54,8 @@ public static class PacketCommandRegistrar
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
                 "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
                 "audit" => Audit(service, context),
+                "audit-export" => await AuditExportAsync(service, context, ct),
+                "audit-verify" => await AuditVerifyAsync(service, context, ct),
                 "param-list" => await ParameterListAsync(service, context, ct),
                 "param-set" => await ParameterSetAsync(service, context, ct),
                 "body-info" => await BodyInfoAsync(service, context, ct),
@@ -70,7 +72,7 @@ public static class PacketCommandRegistrar
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
-                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
+                _ => CommandResult.Fail("Usage: packet <ls|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
             };
         }
         catch (ArgumentException exception) { return CommandResult.Fail(exception.Message); }
@@ -214,6 +216,50 @@ public static class PacketCommandRegistrar
             entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
                 $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}\t" +
                 $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}")));
+    }
+
+    private static async Task<CommandResult> AuditExportAsync(
+        IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketAuditExportService exports)
+            return CommandResult.Fail("This packet backend does not support signed audit exports.");
+        var path = Require(context, 1, "path");
+        var packetId = context.Arg(2);
+        if (packetId == "*") packetId = null;
+        if (packetId is { Length: > 256 }) return CommandResult.Fail("Packet id must not exceed 256 characters.");
+        if (!TryAuditLimit(context.Arg(3), out var limit, out var error)) return CommandResult.Fail(error!);
+        var content = exports.Export(new PacketAuditQuery(packetId, Limit: limit));
+        await File.WriteAllTextAsync(path, content, ct);
+        return CommandResult.Ok($"Exported signed audit document to {Path.GetFullPath(path)}.");
+    }
+
+    private static async Task<CommandResult> AuditVerifyAsync(
+        IPacketCommandService service, CommandContext context, CancellationToken ct)
+    {
+        if (service is not IPacketAuditExportService exports)
+            return CommandResult.Fail("This packet backend does not support signed audit verification.");
+        var path = Require(context, 1, "path");
+        var expectedKeyId = context.Arg(2);
+        if (expectedKeyId is { Length: > 128 }) return CommandResult.Fail("Expected key id must not exceed 128 characters.");
+        if (new FileInfo(path).Length > PacketAuditExportService.MaximumContentBytes)
+            return CommandResult.Fail($"Audit document exceeds {PacketAuditExportService.MaximumContentBytes} bytes.");
+        var verification = exports.Verify(await File.ReadAllTextAsync(path, ct), expectedKeyId);
+        var output = $"valid={verification.Valid.ToString().ToLowerInvariant()}\tkeyId={verification.KeyId ?? "-"}\t" +
+            $"entries={verification.EntryCount}\texportedAt={verification.ExportedAt?.ToString("O") ?? "-"}\terror={verification.ErrorCode ?? "-"}";
+        return verification.Valid ? CommandResult.Ok(output) : CommandResult.Fail(output);
+    }
+
+    private static bool TryAuditLimit(string? value, out int limit, out string? error)
+    {
+        limit = 100;
+        error = null;
+        if (value is null) return true;
+        if (!int.TryParse(value, out limit) || limit is < 1 or > PacketAuditExportService.MaximumEntries)
+        {
+            error = $"Audit limit must be between 1 and {PacketAuditExportService.MaximumEntries}.";
+            return false;
+        }
+        return true;
     }
 
     private static async Task<CommandResult> DraftShowAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)

@@ -3,6 +3,7 @@ using Hookmes.Automation.Commands;
 using Hookmes.Automation.Packet;
 using System;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,6 +28,7 @@ internal static class TrafficAiToolRegistrar
             Register(registry, packets, "packet_audit", "Query bounded metadata-only traffic operation audit entries.",
                 AiToolRisk.ReadOnly, "packetId", false, a => Args("audit", Optional(a, "packetId", "*"),
                     a.TryGetProperty("limit", out var limit) ? limit.GetRawText() : "100"));
+        if (packets is IPacketAuditExportService auditExports) RegisterAuditExportTools(registry, auditExports);
         Register(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
             AiToolRisk.ReadOnly, "id", true, a => Args("param-list", Required(a, "id"), Optional(a, "side", "request")));
         RegisterParameterSetTool(registry, packets);
@@ -75,6 +77,65 @@ internal static class TrafficAiToolRegistrar
         RegisterCommitTool(registry, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
             AiToolRisk.Mutating, false, (args, ct) => commits.CommitDiscardAsync(Required(args, "id"),
                 Optional(args, "side", "request"), ct));
+    }
+
+    private static void RegisterAuditExportTools(IAiToolRegistry registry, IPacketAuditExportService exports)
+    {
+        var exportSchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                packetId = new { type = "string", maxLength = 256 },
+                limit = new { type = "integer", minimum = 1, maximum = PacketAuditExportService.MaximumEntries }
+            },
+            additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_audit_export",
+            $"Return signed metadata-only audit JSON (maximum {PacketAuditExportService.MaximumEntries} entries); no filesystem path is accepted.",
+            exportSchema, AiToolRisk.Dangerous, (invocation, _) =>
+            {
+                try
+                {
+                    var args = invocation.Arguments;
+                    var packetId = Optional(args, "packetId", null!);
+                    if (packetId?.Length > 256) return ValueTask.FromResult(ToolResult.Fail("Packet id must not exceed 256 characters."));
+                    var limit = args.TryGetProperty("limit", out var rawLimit) ? rawLimit.GetInt32() : 100;
+                    if (limit is < 1 or > PacketAuditExportService.MaximumEntries)
+                        return ValueTask.FromResult(ToolResult.Fail($"Audit limit must be between 1 and {PacketAuditExportService.MaximumEntries}."));
+                    return ValueTask.FromResult(ToolResult.Ok(exports.Export(new PacketAuditQuery(packetId, Limit: limit))));
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException)
+                {
+                    return ValueTask.FromResult(ToolResult.Fail(ex.Message));
+                }
+            }));
+
+        var verifySchema = JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                content = new { type = "string", maxLength = PacketAuditExportService.MaximumContentBytes },
+                expectedKeyId = new { type = "string", maxLength = 128 }
+            },
+            required = new[] { "content" },
+            additionalProperties = false
+        });
+        registry.Register(new AiToolDefinition("packet_audit_verify",
+            "Verify bounded signed audit JSON content without reading a filesystem path.",
+            verifySchema, AiToolRisk.ReadOnly, (invocation, _) =>
+            {
+                var args = invocation.Arguments;
+                var content = Required(args, "content");
+                var expectedKeyId = Optional(args, "expectedKeyId", null!);
+                if (Encoding.UTF8.GetByteCount(content) > PacketAuditExportService.MaximumContentBytes)
+                    return ValueTask.FromResult(ToolResult.Fail($"Audit content exceeds {PacketAuditExportService.MaximumContentBytes} UTF-8 bytes."));
+                if (expectedKeyId?.Length > 128) return ValueTask.FromResult(ToolResult.Fail("Expected key id must not exceed 128 characters."));
+                var result = exports.Verify(content, expectedKeyId);
+                var json = JsonSerializer.Serialize(result, CommitJsonOptions);
+                return ValueTask.FromResult(result.Valid ? ToolResult.Ok(json) : ToolResult.Fail(json));
+            }));
     }
 
     private static void RegisterCommitTool(IAiToolRegistry registry, string name, string description,

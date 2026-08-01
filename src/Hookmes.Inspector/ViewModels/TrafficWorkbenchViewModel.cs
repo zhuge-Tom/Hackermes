@@ -39,6 +39,8 @@ public interface ITrafficWorkbenchService
     Task<TrafficPacketCommitResult> ResolveFulfillAsync(string exchangeId, string response, CancellationToken cancellationToken);
     Task<TrafficPacketCommitResult> ResolveDiscardAsync(string exchangeId, string side, CancellationToken cancellationToken);
     IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100);
+    Task<int> ExportSignedAuditFileAsync(string path, string? packetId, int limit, CancellationToken cancellationToken);
+    Task<TrafficAuditVerificationItem> VerifySignedAuditFileAsync(string path, string? expectedKeyId, CancellationToken cancellationToken);
     TrafficHistoryOverview GetHistoryOverview();
     string PreviewHistoryCleanup();
     Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(int maxEntries, long maxBytes, int retentionDays,
@@ -68,6 +70,8 @@ public sealed record TrafficFindingItem(
 public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
 public sealed record TrafficAuditItem(DateTimeOffset Timestamp, string EntryPoint, string Operation, string Side,
     string Before, string After, string Result, string? ErrorCode, string? RuleId = null, string? RuleAction = null);
+public sealed record TrafficAuditVerificationItem(bool Valid, string? KeyId, int EntryCount,
+    DateTimeOffset? ExportedAt, string? ErrorCode);
 public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes, long FileBytes,
     DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune,
     IReadOnlyList<TrafficHistorySiteQuotaItem> SiteQuotas);
@@ -190,6 +194,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         new("HTTP Archive (*.har)", ["*.har"]),
         new("Hookmes JSON (*.json)", ["*.json"])
     ];
+    private static readonly InspectorFileType[] AuditFileTypes = [new("Signed audit JSON (*.json)", ["*.json"])];
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(PreviousBinaryChunkCommand), nameof(NextBinaryChunkCommand), nameof(RefreshBinaryBodyInfoCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(RefreshAuditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
@@ -251,6 +256,11 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty] private string _historySiteMaxBytes = (64L * 1024 * 1024).ToString();
     [ObservableProperty] private bool _confirmHistoryClear;
     [ObservableProperty] private string _historyStatus = "History statistics not loaded.";
+    [ObservableProperty] private string _auditFilePath = "traffic-audit.signed.json";
+    [ObservableProperty] private string _auditExportLimit = "500";
+    [ObservableProperty] private bool _auditExportAll;
+    [ObservableProperty] private string _auditExpectedKeyId = string.Empty;
+    [ObservableProperty] private string _auditExportStatus = "Signed audit export not created.";
     private const int PageSize = 200;
 
     public bool HasSelection => Selected is not null;
@@ -433,6 +443,44 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private void RefreshAudit() => LoadAudit();
+
+    [RelayCommand]
+    private Task ExportSignedAuditAsync() => ExecuteAsync(async ct =>
+    {
+        if (!int.TryParse(AuditExportLimit, out var limit) || limit is < 1 or > 500)
+            throw new ArgumentException("Audit export limit must be between 1 and 500.");
+        var packetId = AuditExportAll ? null : Selected?.Id;
+        if (!AuditExportAll && packetId is null)
+            throw new InvalidOperationException("Select a packet or enable Export all.");
+        var path = AuditFilePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.SaveAsync(new InspectorFileDialogRequest(
+                "Export signed traffic audit", path, AuditFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+        }
+        var count = await _service.ExportSignedAuditFileAsync(path, packetId, limit, ct);
+        AuditFilePath = path;
+        AuditExportStatus = $"Exported {count} signed audit entr{(count == 1 ? "y" : "ies")} to {path}.";
+    });
+
+    [RelayCommand]
+    private Task VerifySignedAuditAsync() => ExecuteAsync(async ct =>
+    {
+        var path = AuditFilePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.OpenAsync(new InspectorFileDialogRequest(
+                "Verify signed traffic audit", path, AuditFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+        }
+        var result = await _service.VerifySignedAuditFileAsync(path, NullIfEmpty(AuditExpectedKeyId), ct);
+        AuditFilePath = path;
+        AuditExportStatus = result.Valid
+            ? $"Signature valid · key {result.KeyId} · {result.EntryCount} entries · exported {result.ExportedAt?.ToLocalTime():g}."
+            : $"Signature invalid · {result.ErrorCode ?? "verification_failed"}" +
+              (result.KeyId is null ? string.Empty : $" · key {result.KeyId}");
+    });
 
     [RelayCommand]
     private void RefreshHistory() => ApplyHistoryOverview(_service.GetHistoryOverview());

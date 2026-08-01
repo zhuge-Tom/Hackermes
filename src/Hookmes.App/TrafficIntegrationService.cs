@@ -21,7 +21,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService, IPacketCommitService,
+    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService, IPacketAuditExportService, IPacketCommitService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -33,6 +33,7 @@ public sealed class TrafficIntegrationService :
     private readonly ITrafficComparisonService _comparisons;
     private readonly ITrafficAnnotationService _annotations;
     private readonly IPacketAuditTrail _audit;
+    private readonly IPacketAuditExportService _auditExports;
     private readonly ITrafficHistoryManagementService _history;
     private readonly SemaphoreSlim _captureGate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, EditDraftState> _editDrafts = new(StringComparer.Ordinal);
@@ -44,7 +45,7 @@ public sealed class TrafficIntegrationService :
     public TrafficIntegrationService(
         ITrafficService traffic, ITrafficStore store, ICdpSessionRegistry sessions,
         ITrafficRuleManager rules, IRepeaterService repeater, ITrafficComparisonService comparisons,
-        ITrafficAnnotationService annotations, IPacketAuditTrail audit,
+        ITrafficAnnotationService annotations, IPacketAuditTrail audit, IPacketAuditExportService auditExports,
         ITrafficHistoryManagementService history, IEventBus eventBus)
     {
         _traffic = traffic;
@@ -55,6 +56,7 @@ public sealed class TrafficIntegrationService :
         _comparisons = comparisons;
         _annotations = annotations;
         _audit = audit;
+        _auditExports = auditExports;
         _history = history;
         _store.Changed += OnStoreChanged;
         _sessions.SessionOpened += OnSessionOpened;
@@ -74,6 +76,9 @@ public sealed class TrafficIntegrationService :
     public event Action? RepeaterChanged;
 
     public IReadOnlyList<PacketAuditEntry> QueryAudit(PacketAuditQuery query) => _audit.Query(query);
+    public string Export(PacketAuditQuery query) => _auditExports.Export(query);
+    public PacketAuditVerification Verify(string content, string? expectedKeyId = null) =>
+        _auditExports.Verify(content, expectedKeyId);
 
     public Task<PacketCommitResult> CommitContinueAsync(string id, CancellationToken cancellationToken) =>
         CaptureCommitAsync(id, null, "Continue", () => ContinueAsync(id, cancellationToken), cancellationToken);
@@ -433,6 +438,31 @@ public sealed class TrafficIntegrationService :
             await System.IO.File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false),
             PacketArchiveCodec.DetectFormat(fullPath));
         return await ImportArchiveAsync(entries, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int> ExportSignedAuditFileAsync(
+        string path, string? packetId, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var query = new PacketAuditQuery(packetId, Limit: Math.Clamp(limit, 1, PacketAuditExportService.MaximumEntries));
+        var content = _auditExports.Export(query);
+        var fullPath = System.IO.Path.GetFullPath(path);
+        var directory = System.IO.Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory)) System.IO.Directory.CreateDirectory(directory);
+        await System.IO.File.WriteAllTextAsync(fullPath, content, cancellationToken).ConfigureAwait(false);
+        return _audit.Query(query).Count;
+    }
+
+    public async Task<TrafficAuditVerificationItem> VerifySignedAuditFileAsync(
+        string path, string? expectedKeyId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = System.IO.Path.GetFullPath(path);
+        if (new System.IO.FileInfo(fullPath).Length > PacketAuditExportService.MaximumContentBytes)
+            return new(false, null, 0, null, "content_too_large");
+        var result = _auditExports.Verify(
+            await System.IO.File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false), expectedKeyId);
+        return new(result.Valid, result.KeyId, result.EntryCount, result.ExportedAt, result.ErrorCode);
     }
 
     public Task<PacketBodyDescriptor> DescribeBodyAsync(
