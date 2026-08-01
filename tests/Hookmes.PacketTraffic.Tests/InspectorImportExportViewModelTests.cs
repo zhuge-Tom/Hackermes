@@ -1,6 +1,7 @@
 using Hookmes.Inspector.ViewModels;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -48,6 +49,82 @@ public sealed class InspectorImportExportViewModelTests
     }
 
     [Fact]
+    public async Task Traffic_workbench_uses_injected_picker_without_ui_dependency()
+    {
+        var service = new ArchiveWorkbenchFake();
+        InspectorFileDialogRequest? saveRequest = null;
+        var model = new TrafficWorkbenchViewModel(service)
+        {
+            FileDialogs = new InspectorFileDialogDelegates(
+                (_, _) => Task.FromResult<string?>(null),
+                (request, _) => { saveRequest = request; return Task.FromResult<string?>("chosen/session.har"); },
+                (_, _) => Task.FromResult(true))
+        };
+
+        await model.ExportArchiveCommand.ExecuteAsync(null);
+
+        Assert.Equal("chosen/session.har", service.Exported?.Path);
+        Assert.Equal("chosen/session.har", model.ArchivePath);
+        Assert.Equal("traffic.har", saveRequest!.SuggestedPath);
+        Assert.Contains(saveRequest.FileTypes, type => type.Patterns.Contains("*.har"));
+        Assert.Contains(saveRequest.FileTypes, type => type.Patterns.Contains("*.json"));
+    }
+
+    [Fact]
+    public async Task Cancelled_picker_does_not_call_archive_service()
+    {
+        var service = new ArchiveWorkbenchFake();
+        var model = new TrafficWorkbenchViewModel(service)
+        {
+            FileDialogs = new InspectorFileDialogDelegates(
+                (_, _) => Task.FromResult<string?>(null),
+                (_, _) => Task.FromResult<string?>(null),
+                (_, _) => Task.FromResult(true))
+        };
+
+        await model.ImportArchiveCommand.ExecuteAsync(null);
+        Assert.Null(service.ImportedPath);
+    }
+
+    [Fact]
+    public async Task Rules_workbench_uses_json_picker_delegate()
+    {
+        var service = new RulesWorkbenchFake();
+        InspectorFileDialogRequest? request = null;
+        var model = new TrafficRulesViewModel(service)
+        {
+            FileDialogs = new InspectorFileDialogDelegates(
+                (_, _) => Task.FromResult<string?>(null),
+                (value, _) => { request = value; return Task.FromResult<string?>("chosen/rules.json"); },
+                (_, _) => Task.FromResult(true))
+        };
+
+        await model.ExportRulesCommand.ExecuteAsync(null);
+        Assert.Equal("chosen/rules.json", service.ExportedPath);
+        Assert.Single(request!.FileTypes);
+        Assert.Contains("*.json", request.FileTypes[0].Patterns);
+    }
+
+    [Fact]
+    public async Task Replace_rules_import_requires_injected_confirmation()
+    {
+        var service = new RulesWorkbenchFake();
+        string? confirmation = null;
+        var model = new TrafficRulesViewModel(service)
+        {
+            FileDialogs = new InspectorFileDialogDelegates(
+                (_, _) => Task.FromResult<string?>("chosen/rules.json"),
+                (_, _) => Task.FromResult<string?>(null),
+                (message, _) => { confirmation = message; return Task.FromResult(false); })
+        };
+
+        await model.ImportRulesCommand.ExecuteAsync(null);
+
+        Assert.Null(service.Imported);
+        Assert.Contains("Replace all current traffic rules", confirmation);
+    }
+
+    [Fact]
     public async Task Rules_workbench_forwards_replace_or_merge_mode()
     {
         var service = new RulesWorkbenchFake();
@@ -63,6 +140,29 @@ public sealed class InspectorImportExportViewModelTests
 
         Assert.Equal(("rules/team.json", true), service.Imported);
         Assert.Contains("merge", model.Status);
+    }
+
+    [Fact]
+    public async Task Recent_paths_initialize_both_workbenches_and_are_remembered_after_success()
+    {
+        var recent = new RecentPathsFake("old/archive.har", "old/rules.json");
+        var archive = new ArchiveWorkbenchFake();
+        var trafficModel = new TrafficWorkbenchViewModel(archive, recent);
+        var rules = new RulesWorkbenchFake();
+        var rulesModel = new TrafficRulesViewModel(rules, recent);
+
+        Assert.Equal("old/archive.har", trafficModel.ArchivePath);
+        Assert.Equal("old/rules.json", rulesModel.RulesFilePath);
+
+        trafficModel.ArchivePath = " new/archive.har ";
+        rulesModel.RulesFilePath = " new/rules.json ";
+        await trafficModel.ExportArchiveCommand.ExecuteAsync(null);
+        await rulesModel.ImportRulesCommand.ExecuteAsync(null);
+
+        Assert.Equal("normalized:new/archive.har", recent.RememberedArchive);
+        Assert.Equal("normalized:new/rules.json", recent.RememberedRules);
+        Assert.Equal("normalized:new/archive.har", archive.Exported?.Path);
+        Assert.Equal("normalized:new/rules.json", rules.Imported?.Path);
     }
 
     [Fact]
@@ -110,6 +210,17 @@ public sealed class InspectorImportExportViewModelTests
         public Task SetRuleEnabledAsync(string id, bool enabled, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task RemoveRuleAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task MoveRuleAsync(string id, int targetIndex, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecentPathsFake(string? archive, string? rules) : IRecentTrafficPathService
+    {
+        public string? LastArchivePath => archive;
+        public string? LastRulesPath => rules;
+        public string? RememberedArchive { get; private set; }
+        public string? RememberedRules { get; private set; }
+        public string NormalizePath(string path) => "normalized:" + path.Trim();
+        public void RememberArchivePath(string path) => RememberedArchive = path;
+        public void RememberRulesPath(string path) => RememberedRules = path;
     }
 
     private sealed class ArchiveWorkbenchFake : ITrafficWorkbenchService

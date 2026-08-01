@@ -34,6 +34,7 @@ public sealed class TrafficIntegrationModule : IModule
         services.AddSingleton<IPacketCommitService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficRuleWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IRecentTrafficPathService, RecentTrafficPathService>();
         services.AddSingleton<IRepeaterWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<TrafficComparisonAdapter>();
         services.AddSingleton<ITrafficComparerWorkbenchService>(sp => sp.GetRequiredService<TrafficComparisonAdapter>());
@@ -77,7 +78,11 @@ public sealed class TrafficIntegrationModule : IModule
             CreateTab = () => new DockTabItemViewModel
             {
                 Id = "traffic-workbench", Title = "数据包",
-                Content = new TrafficWorkbenchView { DataContext = new TrafficWorkbenchViewModel(integration) }
+                Content = new TrafficWorkbenchView
+                {
+                    DataContext = new TrafficWorkbenchViewModel(integration,
+                        serviceProvider.GetRequiredService<IRecentTrafficPathService>())
+                }
             }
         });
 
@@ -125,7 +130,11 @@ public sealed class TrafficIntegrationModule : IModule
             CreateTab = () => new DockTabItemViewModel
             {
                 Id = "traffic-rules", Title = "流量规则",
-                Content = new TrafficRulesView { DataContext = new TrafficRulesViewModel(integration) }
+                Content = new TrafficRulesView
+                {
+                    DataContext = new TrafficRulesViewModel(integration,
+                        serviceProvider.GetRequiredService<IRecentTrafficPathService>())
+                }
             }
         });
 

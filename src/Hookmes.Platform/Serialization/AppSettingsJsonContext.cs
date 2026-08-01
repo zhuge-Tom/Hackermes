@@ -15,6 +15,7 @@ namespace Hookmes.Platform.Serialization;
 [JsonSerializable(typeof(TerminalSettings))]
 [JsonSerializable(typeof(AiSettings))]
 [JsonSerializable(typeof(McpServerSettings))]
+[JsonSerializable(typeof(TrafficSettings))]
 public partial class AppSettingsJsonContext : JsonSerializerContext
 {
 }

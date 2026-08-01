@@ -165,11 +165,15 @@ public sealed record TrafficExchangePage(
 public partial class TrafficWorkbenchViewModel : ViewModelBase
 {
     private readonly ITrafficWorkbenchService _service;
+    private readonly IRecentTrafficPathService? _recentPaths;
     private CancellationTokenSource? _operation;
 
-    public TrafficWorkbenchViewModel(ITrafficWorkbenchService service)
+    public TrafficWorkbenchViewModel(ITrafficWorkbenchService service, IRecentTrafficPathService? recentPaths = null)
     {
         _service = service;
+        _recentPaths = recentPaths;
+        if (!string.IsNullOrWhiteSpace(recentPaths?.LastArchivePath))
+            _archivePath = recentPaths.LastArchivePath;
         _service.Changed += OnServiceChanged;
         _isInterceptEnabled = service.IsInterceptEnabled;
         _isResponseInterceptEnabled = service.IsResponseInterceptEnabled;
@@ -180,6 +184,12 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     public ObservableCollection<TrafficParameterItem> Parameters { get; } = [];
     public ObservableCollection<TrafficAuditItem> AuditEntries { get; } = [];
     public ObservableCollection<TrafficFindingItem> Findings { get; } = [];
+    public InspectorFileDialogDelegates? FileDialogs { get; set; }
+    private static readonly InspectorFileType[] ArchiveFileTypes =
+    [
+        new("HTTP Archive (*.har)", ["*.har"]),
+        new("Hookmes JSON (*.json)", ["*.json"])
+    ];
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand), nameof(ReplayCommand), nameof(SendToRepeaterCommand), nameof(LoadBinaryChunkCommand), nameof(PreviousBinaryChunkCommand), nameof(NextBinaryChunkCommand), nameof(RefreshBinaryBodyInfoCommand), nameof(ApplyBinaryEditCommand), nameof(RefreshBinaryDraftCommand), nameof(DiscardBinaryDraftCommand), nameof(ApplyParameterCommand), nameof(SaveAnnotationCommand), nameof(RefreshAuditCommand), nameof(ContinueCommand), nameof(DropCommand), nameof(FulfillCommand))]
@@ -336,15 +346,41 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [RelayCommand] private void Reload() => Refresh();
     [RelayCommand] private Task ExportArchiveAsync() => ExecuteAsync(async ct =>
     {
-        var count = await _service.ExportArchiveFileAsync(ArchivePath.Trim(),
+        var path = ArchivePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.SaveAsync(new InspectorFileDialogRequest(
+                "Export traffic archive", path, ArchiveFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+            ArchivePath = path;
+        }
+        path = NormalizeArchivePath(path);
+        var count = await _service.ExportArchiveFileAsync(path,
             string.IsNullOrWhiteSpace(ArchiveFilter) ? null : ArchiveFilter.Trim(), ct);
-        Analysis = $"Exported {count} packet(s) to {ArchivePath.Trim()}.";
+        RememberArchivePath(path);
+        Analysis = $"Exported {count} packet(s) to {path}.";
     });
     [RelayCommand] private Task ImportArchiveAsync() => ExecuteAsync(async ct =>
     {
-        var count = await _service.ImportArchiveFileAsync(ArchivePath.Trim(), ct);
-        Analysis = $"Imported {count} packet(s) from {ArchivePath.Trim()}.";
+        var path = ArchivePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.OpenAsync(new InspectorFileDialogRequest(
+                "Import traffic archive", path, ArchiveFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+            ArchivePath = path;
+        }
+        path = NormalizeArchivePath(path);
+        var count = await _service.ImportArchiveFileAsync(path, ct);
+        RememberArchivePath(path);
+        Analysis = $"Imported {count} packet(s) from {path}.";
     });
+    private string NormalizeArchivePath(string path) => _recentPaths?.NormalizePath(path) ?? path.Trim();
+    private void RememberArchivePath(string path)
+    {
+        ArchivePath = path;
+        _recentPaths?.RememberArchivePath(path);
+    }
     [RelayCommand] private void PreviousPage() { if (PageIndex > 0) { PageIndex--; Refresh(); } }
     [RelayCommand] private void NextPage()
     {

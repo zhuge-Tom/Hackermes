@@ -30,10 +30,16 @@ public interface ITrafficRuleWorkbenchService
 public partial class TrafficRulesViewModel : ViewModelBase
 {
     private readonly ITrafficRuleWorkbenchService _service;
+    private readonly IRecentTrafficPathService? _recentPaths;
+    public InspectorFileDialogDelegates? FileDialogs { get; set; }
+    private static readonly InspectorFileType[] RuleFileTypes = [new("Traffic rules JSON (*.json)", ["*.json"])];
 
-    public TrafficRulesViewModel(ITrafficRuleWorkbenchService service)
+    public TrafficRulesViewModel(ITrafficRuleWorkbenchService service, IRecentTrafficPathService? recentPaths = null)
     {
         _service = service;
+        _recentPaths = recentPaths;
+        if (!string.IsNullOrWhiteSpace(recentPaths?.LastRulesPath))
+            _rulesFilePath = recentPaths.LastRulesPath;
         _service.RulesChanged += Refresh;
         Refresh();
     }
@@ -71,16 +77,46 @@ public partial class TrafficRulesViewModel : ViewModelBase
     [RelayCommand]
     private Task ExportRulesAsync() => ExecuteAsync(async ct =>
     {
-        await _service.ExportRulesFileAsync(RulesFilePath.Trim(), ct);
-        Status = $"Rules exported to {RulesFilePath.Trim()}.";
+        var path = RulesFilePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.SaveAsync(new InspectorFileDialogRequest(
+                "Export traffic rules", path, RuleFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+            RulesFilePath = path;
+        }
+        path = NormalizeRulesPath(path);
+        await _service.ExportRulesFileAsync(path, ct);
+        RememberRulesPath(path);
+        Status = $"Rules exported to {path}.";
     });
 
     [RelayCommand]
     private Task ImportRulesAsync() => ExecuteAsync(async ct =>
     {
-        var count = await _service.ImportRulesFileAsync(RulesFilePath.Trim(), MergeImport, ct);
-        Status = $"Imported {count} rule(s) from {RulesFilePath.Trim()} ({(MergeImport ? "merge" : "replace")}).";
+        var path = RulesFilePath.Trim();
+        if (FileDialogs is not null)
+        {
+            path = await FileDialogs.OpenAsync(new InspectorFileDialogRequest(
+                "Import traffic rules", path, RuleFileTypes), ct) ?? string.Empty;
+            if (path.Length == 0) return;
+            RulesFilePath = path;
+            if (!MergeImport && !await FileDialogs.ConfirmAsync(
+                    $"Replace all current traffic rules with rules from this file?{Environment.NewLine}{path}", ct))
+                return;
+        }
+        path = NormalizeRulesPath(path);
+        var count = await _service.ImportRulesFileAsync(path, MergeImport, ct);
+        RememberRulesPath(path);
+        Status = $"Imported {count} rule(s) from {path} ({(MergeImport ? "merge" : "replace")}).";
     });
+
+    private string NormalizeRulesPath(string path) => _recentPaths?.NormalizePath(path) ?? path.Trim();
+    private void RememberRulesPath(string path)
+    {
+        RulesFilePath = path;
+        _recentPaths?.RememberRulesPath(path);
+    }
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private Task ToggleAsync() => ExecuteAsync(async ct =>

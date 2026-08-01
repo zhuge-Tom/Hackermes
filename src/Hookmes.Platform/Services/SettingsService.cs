@@ -225,6 +225,7 @@ public sealed class SettingsService : ISettingsService
         settings.Browser ??= new BrowserSettings();
         settings.Terminal ??= new TerminalSettings();
         settings.Ai ??= new AiSettings();
+        settings.Traffic ??= new TrafficSettings();
 
         settings.Browser.PageAgentDisabledHosts ??= new();
 
@@ -248,5 +249,18 @@ public sealed class SettingsService : ISettingsService
 
         settings.Browser.MaxCapturedBodyBytes =
             Math.Clamp(settings.Browser.MaxCapturedBodyBytes, 64 * 1024, 64 * 1024 * 1024);
+
+        settings.Traffic.LastArchivePath = NormalizeRecentPath(settings.Traffic.LastArchivePath);
+        settings.Traffic.LastRulesPath = NormalizeRecentPath(settings.Traffic.LastRulesPath);
+    }
+
+    private static string? NormalizeRecentPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try { return Path.GetFullPath(path.Trim()); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

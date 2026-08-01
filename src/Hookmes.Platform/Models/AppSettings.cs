@@ -24,6 +24,19 @@ public sealed class AppSettings
 
     [JsonPropertyName("ai")]
     public AiSettings Ai { get; set; } = new();
+
+    [JsonPropertyName("traffic")]
+    public TrafficSettings Traffic { get; set; } = new();
+}
+
+/// <summary>Non-sensitive traffic UI state. Packet and rule contents are never stored here.</summary>
+public sealed class TrafficSettings
+{
+    [JsonPropertyName("lastArchivePath")]
+    public string? LastArchivePath { get; set; }
+
+    [JsonPropertyName("lastRulesPath")]
+    public string? LastRulesPath { get; set; }
 }
 
 public sealed class GeneralSettings
