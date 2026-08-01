@@ -21,7 +21,7 @@ namespace Hookmes.App;
 
 /// <summary>让人工工作台、CLI 和 AI 共用同一个 Traffic 核心。</summary>
 public sealed class TrafficIntegrationService :
-    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService,
+    IPacketCommandService, IPacketInterceptionModeService, IPacketArchiveService, IPacketBodyReadService, IPacketBodyEditService, IPacketEditDraftService, IPacketAuditQueryService, IPacketCommitService,
     ITrafficWorkbenchService, ITrafficRuleWorkbenchService,
     IRepeaterWorkbenchService, IDisposable
 {
@@ -74,6 +74,47 @@ public sealed class TrafficIntegrationService :
     public event Action? RepeaterChanged;
 
     public IReadOnlyList<PacketAuditEntry> QueryAudit(PacketAuditQuery query) => _audit.Query(query);
+
+    public Task<PacketCommitResult> CommitContinueAsync(string id, CancellationToken cancellationToken) =>
+        CaptureCommitAsync(id, null, "Continue", () => ContinueAsync(id, cancellationToken), cancellationToken);
+
+    public Task<PacketCommitResult> CommitDropAsync(string id, CancellationToken cancellationToken) =>
+        CaptureCommitAsync(id, null, "Drop", () => DropAsync(id, cancellationToken), cancellationToken);
+
+    public Task<PacketCommitResult> CommitEditAsync(
+        string id, string side, string rawPacket, CancellationToken cancellationToken) =>
+        CaptureCommitAsync(id, side, "Edit", () => EditAsync(id, side, rawPacket, cancellationToken), cancellationToken);
+
+    public Task<PacketCommitResult> CommitDiscardAsync(
+        string id, string side, CancellationToken cancellationToken) =>
+        CaptureCommitAsync(id, side, "Discard", async () =>
+        {
+            if (!await DiscardPendingEditAsync(id, side, cancellationToken).ConfigureAwait(false))
+            {
+                var missing = new InvalidOperationException("Pending packet edit was not found.");
+                var current = AuditVersion(Required(id), side);
+                RecordAudit(PacketAuditOperation.Discard, "shared-api", id, side.ToLowerInvariant(), current, current, missing);
+                throw missing;
+            }
+        }, cancellationToken);
+
+    public async Task<TrafficPacketCommitResult> ResolveContinueAsync(
+        string exchangeId, string request, CancellationToken cancellationToken) =>
+        ToTrafficCommitResult(await CaptureCommitAsync(exchangeId, "request", "Continue",
+            () => ContinueAsync(exchangeId, request, cancellationToken), cancellationToken).ConfigureAwait(false));
+
+    public async Task<TrafficPacketCommitResult> ResolveDropAsync(
+        string exchangeId, CancellationToken cancellationToken) =>
+        ToTrafficCommitResult(await CommitDropAsync(exchangeId, cancellationToken).ConfigureAwait(false));
+
+    public async Task<TrafficPacketCommitResult> ResolveFulfillAsync(
+        string exchangeId, string response, CancellationToken cancellationToken) =>
+        ToTrafficCommitResult(await CaptureCommitAsync(exchangeId, "response", "Fulfill",
+            () => FulfillAsync(exchangeId, response, cancellationToken), cancellationToken).ConfigureAwait(false));
+
+    public async Task<TrafficPacketCommitResult> ResolveDiscardAsync(
+        string exchangeId, string side, CancellationToken cancellationToken) =>
+        ToTrafficCommitResult(await CommitDiscardAsync(exchangeId, side, cancellationToken).ConfigureAwait(false));
 
     public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) =>
         _audit.Query(new PacketAuditQuery(exchangeId, Limit: limit)).Select(entry => new TrafficAuditItem(
@@ -1007,6 +1048,44 @@ public sealed class TrafficIntegrationService :
 
     private static string FormatAuditVersion(PacketEditVersion value) =>
         $"{value.Length} B · {value.Sha256} · CL {value.ContentLength ?? "-"}";
+
+    private static TrafficPacketCommitResult ToTrafficCommitResult(PacketCommitResult value) => new(
+        value.Success, value.Operation, value.PacketId, value.Side, value.FinalState,
+        FormatAuditVersion(value.Before), FormatAuditVersion(value.After), value.AuditId,
+        value.ErrorCode, value.Message);
+
+    private async Task<PacketCommitResult> CaptureCommitAsync(
+        string id, string? requestedSide, string fallbackOperation, Func<Task> action, CancellationToken cancellationToken)
+    {
+        var previousAuditId = _audit.Query(new PacketAuditQuery(id, Limit: 1)).FirstOrDefault()?.AuditId;
+        try
+        {
+            await action().ConfigureAwait(false);
+            return CreateCommitResult(id, requestedSide, fallbackOperation, true, null, previousAuditId);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            return CreateCommitResult(id, requestedSide, fallbackOperation, false, exception.GetType().Name, previousAuditId);
+        }
+    }
+
+    private PacketCommitResult CreateCommitResult(
+        string id, string? requestedSide, string fallbackOperation, bool success, string? fallbackError, string? previousAuditId)
+    {
+        var audit = _audit.Query(new PacketAuditQuery(id, Limit: 10)).FirstOrDefault(entry =>
+            entry.AuditId != previousAuditId &&
+            (requestedSide is null || entry.Side.Equals(requestedSide, StringComparison.OrdinalIgnoreCase)));
+        var item = _store.Get(id);
+        var side = audit?.Side ?? requestedSide?.ToLowerInvariant() ??
+            (item?.Stage == TrafficStage.Response ? "response" : "request");
+        var version = item is null ? new PacketEditVersion(0, new string('0', 64), null) : AuditVersion(item, side);
+        return new PacketCommitResult(success, audit?.Operation.ToString() ?? fallbackOperation, id, side,
+            item?.State.ToString() ?? "Unknown", audit?.Before ?? version, audit?.After ?? version,
+            audit?.AuditId, audit?.ErrorCode ?? fallbackError,
+            success ? $"{audit?.Operation.ToString() ?? fallbackOperation} completed." :
+            $"{audit?.Operation.ToString() ?? fallbackOperation} failed ({audit?.ErrorCode ?? fallbackError ?? "Unknown"}).");
+    }
 
     private static TrafficHistoryOverview ToHistoryOverview(TrafficHistoryStatistics value) => new(
         value.EntryCount, value.EstimatedContentBytes, value.PersistedFileBytes,

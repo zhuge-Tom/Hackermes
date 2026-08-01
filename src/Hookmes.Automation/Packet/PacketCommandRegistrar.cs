@@ -65,8 +65,8 @@ public static class PacketCommandRegistrar
                 "replay" => await Mutate(() => service.ReplayAsync(Require(context, 1, "id"), ct), "Packet replayed."),
                 "intercept" => await InterceptAsync(service, Require(context, 1, "on|off"), ct),
                 "intercept-mode" => await InterceptionModeAsync(service, Require(context, 1, "request|response|both|off"), ct),
-                "continue" => await Mutate(() => service.ContinueAsync(Require(context, 1, "id"), ct), "Packet continued."),
-                "drop" => await Mutate(() => service.DropAsync(Require(context, 1, "id"), ct), "Packet dropped."),
+                "continue" => await ContinueAsync(service, Require(context, 1, "id"), ct),
+                "drop" => await DropAsync(service, Require(context, 1, "id"), ct),
                 "edit" => await EditAsync(service, context, ct),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
@@ -148,8 +148,24 @@ public static class PacketCommandRegistrar
         if (context.Args.Count < 4) return CommandResult.Fail("Usage: packet edit <id> <request|response> <raw-http>");
         var raw = context.Rest(3).Replace("\\r\\n", "\r\n", StringComparison.Ordinal).Replace("\\n", "\n", StringComparison.Ordinal);
         _ = HttpPacketCodec.Parse(raw); // never persist malformed edits
+        if (service is IPacketCommitService commits)
+            return FormatCommit(await commits.CommitEditAsync(id, side, raw, ct));
         await service.EditAsync(id, side, raw, ct);
         return CommandResult.Ok("Packet updated.");
+    }
+
+    private static async Task<CommandResult> ContinueAsync(IPacketCommandService service, string id, CancellationToken ct)
+    {
+        if (service is IPacketCommitService commits)
+            return FormatCommit(await commits.CommitContinueAsync(id, ct));
+        return await Mutate(() => service.ContinueAsync(id, ct), "Packet continued.");
+    }
+
+    private static async Task<CommandResult> DropAsync(IPacketCommandService service, string id, CancellationToken ct)
+    {
+        if (service is IPacketCommitService commits)
+            return FormatCommit(await commits.CommitDropAsync(id, ct));
+        return await Mutate(() => service.DropAsync(id, ct), "Packet dropped.");
     }
 
     private static async Task<CommandResult> ExportAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
@@ -209,10 +225,36 @@ public static class PacketCommandRegistrar
 
     private static async Task<CommandResult> DraftDiscardAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
     {
+        var id = Require(context, 1, "id");
+        var side = context.Arg(2) ?? "request";
+        if (service is IPacketCommitService commits)
+            return FormatCommit(await commits.CommitDiscardAsync(id, side, ct));
         if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
-        var discarded = await drafts.DiscardPendingEditAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
+        var discarded = await drafts.DiscardPendingEditAsync(id, side, ct);
         return discarded ? CommandResult.Ok("Pending packet edit discarded.") : CommandResult.Fail("Pending packet edit was not found.");
     }
+
+    private static CommandResult FormatCommit(PacketCommitResult result)
+    {
+        var output = string.Join(Environment.NewLine,
+            $"success={result.Success.ToString().ToLowerInvariant()}",
+            $"operation={SafeValue(result.Operation)}",
+            $"id={SafeValue(result.PacketId)}",
+            $"side={SafeValue(result.Side)}",
+            $"state={SafeValue(result.FinalState)}",
+            $"auditId={SafeValue(result.AuditId)}",
+            $"before.length={result.Before.Length}",
+            $"before.sha256={SafeValue(result.Before.Sha256)}",
+            $"before.contentLength={SafeValue(result.Before.ContentLength)}",
+            $"after.length={result.After.Length}",
+            $"after.sha256={SafeValue(result.After.Sha256)}",
+            $"after.contentLength={SafeValue(result.After.ContentLength)}",
+            $"error={SafeValue(result.ErrorCode)}");
+        return result.Success ? CommandResult.Ok(output) : CommandResult.Fail(output);
+    }
+
+    private static string SafeValue(string? value) => string.IsNullOrWhiteSpace(value) ? "-" :
+        value.Replace("\r", "", StringComparison.Ordinal).Replace("\n", "", StringComparison.Ordinal);
 
     private static string FormatDraft(PacketEditDraftStatus draft)
     {

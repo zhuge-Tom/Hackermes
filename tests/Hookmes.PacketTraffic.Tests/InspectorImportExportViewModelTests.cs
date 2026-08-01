@@ -82,6 +82,22 @@ public sealed class InspectorImportExportViewModelTests
         Assert.Equal(("packet-1", "request"), service.Discarded);
     }
 
+    [Fact]
+    public async Task Resolve_commands_surface_shared_final_state_and_audit_id()
+    {
+        var service = new ArchiveWorkbenchFake();
+        var model = new TrafficWorkbenchViewModel(service)
+        {
+            Selected = new TrafficExchange("packet-1", DateTimeOffset.UtcNow, "POST", "https://example.test/", null,
+                "POST / HTTP/1.1\r\n\r\n", "", IsIntercepted: true)
+        };
+
+        await model.ContinueCommand.ExecuteAsync(null);
+
+        Assert.Contains("state Continued", model.Analysis);
+        Assert.Contains("audit audit-test", model.Analysis);
+    }
+
     private sealed class RulesWorkbenchFake : ITrafficRuleWorkbenchService
     {
         public IReadOnlyList<TrafficRuleItem> Rules => [];
@@ -125,6 +141,15 @@ public sealed class InspectorImportExportViewModelTests
             Task.FromResult(new TrafficBinaryBodyInfo(0, new string('0', 64), null, null));
         public Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken) => Task.FromResult(DraftStatus);
         public Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken) { Discarded = (exchangeId, side); return Task.FromResult(DiscardResult); }
+        public Task<TrafficPacketCommitResult> ResolveContinueAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(Commit("Continue", exchangeId, "request"));
+        public Task<TrafficPacketCommitResult> ResolveDropAsync(string exchangeId, CancellationToken cancellationToken) => Task.FromResult(Commit("Drop", exchangeId, "request"));
+        public Task<TrafficPacketCommitResult> ResolveFulfillAsync(string exchangeId, string response, CancellationToken cancellationToken) => Task.FromResult(Commit("Fulfill", exchangeId, "response"));
+        public Task<TrafficPacketCommitResult> ResolveDiscardAsync(string exchangeId, string side, CancellationToken cancellationToken)
+        {
+            Discarded = (exchangeId, side);
+            return Task.FromResult(DiscardResult ? Commit("Discard", exchangeId, side) :
+                new TrafficPacketCommitResult(false, "Discard", exchangeId, side, "Paused", "0 B", "0 B", "audit-test", "not_found", "not found"));
+        }
         public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) => [];
         public TrafficHistoryOverview GetHistoryOverview() => new(0, 0, 0, null, null, 5000, 256L * 1024 * 1024, 30, true, []);
         public string PreviewHistoryCleanup() => "No entries would be removed.";
@@ -141,5 +166,7 @@ public sealed class InspectorImportExportViewModelTests
         public string SetParameter(string rawPacket, string location, string name, int occurrence, string value) => rawPacket;
         public TrafficAnnotationItem? GetAnnotation(string exchangeId) => null;
         public Task<TrafficAnnotationItem> SaveAnnotationAsync(string exchangeId, bool starred, string tags, string note, string status, CancellationToken cancellationToken) => Task.FromResult(new TrafficAnnotationItem(starred, tags, note, status, 1));
+        private static TrafficPacketCommitResult Commit(string operation, string id, string side) =>
+            new(true, operation, id, side, "Continued", "0 B", "0 B", "audit-test", null, "ok");
     }
 }

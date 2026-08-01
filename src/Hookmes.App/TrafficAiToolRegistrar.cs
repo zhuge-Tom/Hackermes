@@ -12,6 +12,8 @@ namespace Hookmes.App;
 /// <summary>Agent-facing packet tools with per-operation risk classification.</summary>
 internal static class TrafficAiToolRegistrar
 {
+    private static readonly JsonSerializerOptions CommitJsonOptions = new(JsonSerializerDefaults.Web);
+
     public static void Register(IAiToolRegistry registry, IPacketCommandService packets)
     {
         Register(registry, packets, "packet_list", "List captured HTTP packets. Values are not returned.",
@@ -35,24 +37,74 @@ internal static class TrafficAiToolRegistrar
         if (packets is IPacketInterceptionModeService)
             Register(registry, packets, "packet_intercept_mode", "Set independent request/response interception: request, response, both or off.",
                 AiToolRisk.Mutating, "mode", true, a => Args("intercept-mode", Required(a, "mode")));
-        Register(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
-            AiToolRisk.Mutating, "id", true, a => Args("continue", Required(a, "id")));
-        Register(registry, packets, "packet_drop", "Drop a held HTTP request.",
-            AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
-        Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
-            AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+        if (packets is IPacketCommitService commits)
+            RegisterCommitTools(registry, commits);
+        else
+        {
+            Register(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
+                AiToolRisk.Mutating, "id", true, a => Args("continue", Required(a, "id")));
+            Register(registry, packets, "packet_drop", "Drop a held HTTP request.",
+                AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
+            Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
+                AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+        }
         if (packets is IPacketEditDraftService)
         {
             Register(registry, packets, "packet_edit_drafts", "List pending binary edits with before/after length, SHA-256, Content-Length and last commit failure.",
                 AiToolRisk.ReadOnly, "id", false, _ => "draft-list");
             Register(registry, packets, "packet_edit_draft", "Inspect one pending binary edit and its latest commit failure.",
                 AiToolRisk.ReadOnly, "id", true, a => Args("draft-show", Required(a, "id"), Optional(a, "side", "request")));
-            Register(registry, packets, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
-                AiToolRisk.Mutating, "id", true, a => Args("draft-discard", Required(a, "id"), Optional(a, "side", "request")));
+            if (packets is not IPacketCommitService)
+                Register(registry, packets, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
+                    AiToolRisk.Mutating, "id", true, a => Args("draft-discard", Required(a, "id"), Optional(a, "side", "request")));
         }
         if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
         if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
         if (packets is IPacketArchiveService archive) RegisterArchiveTools(registry, archive);
+    }
+
+    private static void RegisterCommitTools(IAiToolRegistry registry, IPacketCommitService commits)
+    {
+        RegisterCommitTool(registry, "packet_continue", "Continue a held HTTP request without edits.",
+            AiToolRisk.Mutating, false, (args, ct) => commits.CommitContinueAsync(Required(args, "id"), ct));
+        RegisterCommitTool(registry, "packet_drop", "Drop a held HTTP request.",
+            AiToolRisk.Dangerous, false, (args, ct) => commits.CommitDropAsync(Required(args, "id"), ct));
+        RegisterCommitTool(registry, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
+            AiToolRisk.Dangerous, true, (args, ct) => commits.CommitEditAsync(Required(args, "id"),
+                Required(args, "side"), Required(args, "rawHttp"), ct));
+        RegisterCommitTool(registry, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
+            AiToolRisk.Mutating, false, (args, ct) => commits.CommitDiscardAsync(Required(args, "id"),
+                Optional(args, "side", "request"), ct));
+    }
+
+    private static void RegisterCommitTool(IAiToolRegistry registry, string name, string description,
+        AiToolRisk risk, bool rawHttp, Func<JsonElement, CancellationToken, Task<PacketCommitResult>> commit)
+    {
+        var schema = rawHttp
+            ? JsonSerializer.SerializeToElement(new
+            {
+                type = "object",
+                properties = new { id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } }, rawHttp = new { type = "string" } },
+                required = new[] { "id", "side", "rawHttp" }, additionalProperties = false
+            })
+            : name == "packet_edit_discard"
+                ? JsonSerializer.SerializeToElement(new
+                {
+                    type = "object",
+                    properties = new { id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } } },
+                    required = new[] { "id" }, additionalProperties = false
+                })
+                : JsonSerializer.SerializeToElement(new
+                {
+                    type = "object", properties = new { id = new { type = "string" } },
+                    required = new[] { "id" }, additionalProperties = false
+                });
+        registry.Register(new AiToolDefinition(name, description, schema, risk, async (invocation, ct) =>
+        {
+            var result = await commit(invocation.Arguments, ct).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(result, CommitJsonOptions);
+            return result.Success ? ToolResult.Ok(json) : ToolResult.Fail(json);
+        }));
     }
 
     private static void RegisterAnalysisTool(IAiToolRegistry registry, IPacketCommandService packets)

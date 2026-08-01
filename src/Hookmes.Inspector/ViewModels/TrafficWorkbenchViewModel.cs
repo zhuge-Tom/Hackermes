@@ -34,6 +34,10 @@ public interface ITrafficWorkbenchService
     Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken);
     Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken);
+    Task<TrafficPacketCommitResult> ResolveContinueAsync(string exchangeId, string request, CancellationToken cancellationToken);
+    Task<TrafficPacketCommitResult> ResolveDropAsync(string exchangeId, CancellationToken cancellationToken);
+    Task<TrafficPacketCommitResult> ResolveFulfillAsync(string exchangeId, string response, CancellationToken cancellationToken);
+    Task<TrafficPacketCommitResult> ResolveDiscardAsync(string exchangeId, string side, CancellationToken cancellationToken);
     IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100);
     TrafficHistoryOverview GetHistoryOverview();
     string PreviewHistoryCleanup();
@@ -69,6 +73,12 @@ public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes,
     IReadOnlyList<TrafficHistorySiteQuotaItem> SiteQuotas);
 public sealed record TrafficHistorySiteQuotaItem(string HostPattern, int MaxEntries, long MaxBytes);
 public sealed record TrafficBinaryBodyInfo(long Length, string Sha256, string? ContentType, string? Charset);
+public sealed record TrafficPacketCommitResult(bool Success, string Operation, string PacketId, string Side,
+    string FinalState, string Before, string After, string? AuditId, string? ErrorCode, string Message)
+{
+    public string Summary => $"{Operation} {(Success ? "completed" : "failed")} · state {FinalState} · audit {AuditId ?? "-"}" +
+        $"{Environment.NewLine}{Before} → {After}" + (ErrorCode is null ? string.Empty : $" · error {ErrorCode}");
+}
 public sealed record HttpTextSelection(int Start, int End)
 {
     public int Length => End - Start;
@@ -379,10 +389,10 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private Task DiscardBinaryDraftAsync() => ExecuteAsync(async ct =>
     {
-        var discarded = await _service.DiscardBinaryDraftAsync(Selected!.Id, BinarySide, ct);
-        BinaryDraftStatus = discarded ? "Pending binary edit discarded; original body and headers restored." : "No pending binary edit.";
-        Analysis = BinaryDraftStatus;
-        if (discarded) Refresh();
+        var result = await _service.ResolveDiscardAsync(Selected!.Id, BinarySide, ct);
+        BinaryDraftStatus = result.Success ? "Pending binary edit discarded; original body and headers restored." : result.Message;
+        Analysis = result.Summary;
+        if (result.Success) Refresh();
     });
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
@@ -489,13 +499,13 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     });
 
     [RelayCommand(CanExecute = nameof(CanResolveIntercept))]
-    private Task ContinueAsync() => ResolveAsync(ct => _service.ContinueAsync(Selected!.Id, RequestEditor, ct), "Request continued");
+    private Task ContinueAsync() => ResolveAsync(ct => _service.ResolveContinueAsync(Selected!.Id, RequestEditor, ct));
 
     [RelayCommand(CanExecute = nameof(CanResolveIntercept))]
-    private Task DropAsync() => ResolveAsync(ct => _service.DropAsync(Selected!.Id, ct), "Request dropped");
+    private Task DropAsync() => ResolveAsync(ct => _service.ResolveDropAsync(Selected!.Id, ct));
 
     [RelayCommand(CanExecute = nameof(CanResolveIntercept))]
-    private Task FulfillAsync() => ResolveAsync(ct => _service.FulfillAsync(Selected!.Id, ResponseEditor, ct), "Custom response fulfilled");
+    private Task FulfillAsync() => ResolveAsync(ct => _service.ResolveFulfillAsync(Selected!.Id, ResponseEditor, ct));
 
     private async Task RunAsync(Func<CancellationToken, Task<TrafficOperationResult>> action, bool applyResponse)
     {
@@ -508,10 +518,13 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         }).ConfigureAwait(true);
     }
 
-    private Task ResolveAsync(Func<CancellationToken, Task> action, string success) => ExecuteAsync(async ct =>
+    private Task ResolveAsync(Func<CancellationToken, Task<TrafficPacketCommitResult>> action) => ExecuteAsync(async ct =>
     {
-        await action(ct).ConfigureAwait(true);
-        Analysis = success;
+        var result = await action(ct).ConfigureAwait(true);
+        Analysis = result.Summary;
+        if (!result.Success) return;
+        LoadAudit();
+        Refresh();
     });
 
     private async Task ExecuteAsync(Func<CancellationToken, Task> action)
