@@ -1,0 +1,117 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hackermes.Inspector.ViewModels"
+             xmlns:inspection="using:Hackermes.Inspector.Services"
+             x:Class="Hackermes.Inspector.Views.DomInspectorView"
+             x:DataType="vm:DomInspectorViewModel">
+  <Grid RowDefinitions="Auto,Auto,Auto,*">
+    <Grid Grid.Row="0" Margin="6,6,6,2" ColumnDefinitions="Auto,*,Auto">
+      <TextBlock VerticalAlignment="Center" FontSize="15" FontWeight="SemiBold" Text="Elements" />
+      <TextBlock Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#777777"
+                 Text="DOM tree · hover to preview, click to select and reveal" />
+      <Button Grid.Column="2" Content="Refresh" Command="{Binding RefreshCommand}" />
+    </Grid>
+
+    <TextBlock Grid.Row="1" Margin="6,2" Foreground="#777777" TextWrapping="Wrap" Text="{Binding Status}" />
+
+    <Border Grid.Row="2" Margin="6,2,6,4" Padding="6,4" Background="#F6F8FA" BorderBrush="#E1E4E8" BorderThickness="1">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+        <ItemsControl ItemsSource="{Binding BreadcrumbItems}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:DomTreeNodeViewModel">
+              <TextBlock FontFamily="Consolas" Foreground="#0758C8" Text="{Binding Display}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <Grid Grid.Row="3" ColumnDefinitions="3*,2*">
+      <Border Grid.Column="0" Margin="6,0,3,6" BorderBrush="#D9DDE3" BorderThickness="1">
+        <TreeView x:Name="PART_DomTree" ItemsSource="{Binding RootItems}" SelectedItem="{Binding SelectedItem, Mode=TwoWay}">
+          <TreeView.Styles>
+            <Style Selector="TreeViewItem" x:DataType="vm:DomTreeNodeViewModel">
+              <Setter Property="IsExpanded" Value="{Binding IsExpanded}" />
+            </Style>
+          </TreeView.Styles>
+          <TreeView.ItemTemplate>
+            <TreeDataTemplate DataType="vm:DomTreeNodeViewModel" ItemsSource="{Binding Children}">
+              <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="2,1" PointerEntered="OnDomNodePointerEntered">
+                <TextBlock Grid.Column="0" Width="14" Foreground="#1677FF" Text="{Binding PageHoverMarker}" />
+                <TextBlock Grid.Column="1" FontFamily="Consolas" Foreground="#7A1FA2" Text="{Binding Display}" />
+                <TextBlock Grid.Column="2" Margin="8,0,0,0" Foreground="#6A737D" TextTrimming="CharacterEllipsis" Text="{Binding Preview}" />
+                <TextBlock Grid.Column="3" Margin="8,0,2,0" Foreground="#6A737D" Text="{Binding ChildSummary}" />
+              </Grid>
+            </TreeDataTemplate>
+          </TreeView.ItemTemplate>
+        </TreeView>
+      </Border>
+
+      <Border Grid.Column="1" Margin="3,0,6,6" Padding="8" BorderBrush="#D9DDE3" BorderThickness="1">
+        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="6">
+          <TextBlock FontWeight="SemiBold" Text="Selected element" />
+          <StackPanel Grid.Row="1" Spacing="2">
+            <TextBlock FontFamily="Consolas" Foreground="#7A1FA2" Text="{Binding SelectedNodeTitle}" />
+            <TextBlock FontFamily="Consolas" Foreground="#6A737D" Text="{Binding SelectedNodePath}" />
+          </StackPanel>
+          <TabControl Grid.Row="2">
+            <TabItem Header="Styles (computed)">
+              <Grid RowDefinitions="*,Auto,Auto,Auto,Auto,Auto" RowSpacing="5">
+                <ScrollViewer Grid.Row="0">
+                  <ItemsControl ItemsSource="{Binding SelectedComputedStyles}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="inspection:DomPropertyItem">
+                        <Grid ColumnDefinitions="*,*" Margin="0,2">
+                          <TextBlock FontFamily="Consolas" Foreground="#005CC5" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Grid.Column="1" FontFamily="Consolas" Text="{Binding Value}" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+                <TextBlock Grid.Row="1" FontWeight="SemiBold" Text="Matched CSS rule" />
+                <ComboBox Grid.Row="2" ItemsSource="{Binding MatchedCssRules}" SelectedItem="{Binding SelectedCssRule, Mode=TwoWay}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="inspection:DomCssRuleItem">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock FontFamily="Consolas" Text="{Binding Selector}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Margin="8,0,0,0" Foreground="#6A737D" Text="{Binding Source}" TextTrimming="CharacterEllipsis" MaxWidth="120" />
+                      </Grid>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Grid.Row="3" FontWeight="SemiBold" Text="CSS declarations (changes apply immediately)" />
+                <TextBox Grid.Row="4" AcceptsReturn="True" MinHeight="72" FontFamily="Consolas" TextWrapping="Wrap"
+                         Text="{Binding EditableCss, Mode=TwoWay}" />
+                <Button Grid.Row="5" HorizontalAlignment="Left" Content="Apply CSS rule" Command="{Binding ApplyCssCommand}" />
+              </Grid>
+            </TabItem>
+            <TabItem Header="Attributes">
+              <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding SelectedAttributes}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="inspection:DomPropertyItem">
+                      <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                        <TextBlock FontFamily="Consolas" Foreground="#005CC5" Text="{Binding Name}" />
+                        <TextBlock Grid.Column="1" Margin="8,0,0,0" FontFamily="Consolas" Text="{Binding Value}" TextTrimming="CharacterEllipsis" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </TabItem>
+          </TabControl>
+          <Expander Grid.Row="3" Header="Linked resource">
+            <StackPanel Spacing="4">
+              <TextBox IsReadOnly="True" Text="{Binding SelectedResourceUrl}" />
+              <Button HorizontalAlignment="Left" Content="Open linked resource" Command="{Binding OpenSelectedResourceCommand}" />
+            </StackPanel>
+          </Expander>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

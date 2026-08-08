@@ -1,0 +1,63 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hackermes.Inspector.ViewModels"
+             x:Class="Hackermes.Inspector.Views.RepeaterWorkbenchView"
+             x:DataType="vm:RepeaterWorkbenchViewModel">
+  <Grid RowDefinitions="2*,2*,3*,Auto,Auto">
+    <DataGrid Grid.Row="0" ItemsSource="{Binding Drafts}" SelectedItem="{Binding Selected}"
+              AutoGenerateColumns="False" IsReadOnly="True">
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="Name" Width="*" Binding="{Binding Name}" x:DataType="vm:RepeaterDraftItem" />
+        <DataGridTextColumn Header="Revision" Width="70" Binding="{Binding Revision}" x:DataType="vm:RepeaterDraftItem" />
+        <DataGridTextColumn Header="Sends" Width="60" Binding="{Binding SendCount}" x:DataType="vm:RepeaterDraftItem" />
+        <DataGridTextColumn Header="Latest" Width="110" Binding="{Binding LatestStatus}" x:DataType="vm:RepeaterDraftItem" />
+        <DataGridTextColumn Header="Metrics" Width="180" Binding="{Binding LatestMetrics}" x:DataType="vm:RepeaterDraftItem" />
+      </DataGrid.Columns>
+    </DataGrid>
+
+    <DataGrid Grid.Row="1" ItemsSource="{Binding Rounds}" SelectedItem="{Binding ViewedRound, Mode=TwoWay}"
+              AutoGenerateColumns="False" IsReadOnly="True" Margin="0,4">
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="Draft" Width="*" Binding="{Binding DraftName}" x:DataType="vm:RepeaterRoundItem" />
+        <DataGridTextColumn Header="#" Width="55" Binding="{Binding Sequence}" x:DataType="vm:RepeaterRoundItem" />
+        <DataGridTextColumn Header="Status" Width="100" Binding="{Binding Status}" x:DataType="vm:RepeaterRoundItem" />
+        <DataGridTextColumn Header="Metrics" Width="220" Binding="{Binding Metrics}" x:DataType="vm:RepeaterRoundItem" />
+      </DataGrid.Columns>
+    </DataGrid>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,*" RowDefinitions="Auto,*">
+      <TextBox Grid.Row="0" Grid.Column="0" Margin="4" PlaceholderText="Draft name" Text="{Binding Name}" />
+      <TextBlock Grid.Row="0" Grid.Column="1" Margin="8" Text="{Binding Status}" />
+      <TextBox Grid.Row="1" Grid.Column="0" Margin="4" AcceptsReturn="True" FontFamily="Consolas,monospace"
+               Text="{Binding RequestEditor}" />
+      <TextBox Grid.Row="1" Grid.Column="1" Margin="4" AcceptsReturn="True" IsReadOnly="True" FontFamily="Consolas,monospace"
+               Text="{Binding ResponseViewer}" />
+    </Grid>
+
+    <Grid Grid.Row="3" Margin="8,6" ColumnDefinitions="*,*,100,180,Auto,Auto">
+      <ComboBox Grid.Column="0" Margin="0,0,6,0" ItemsSource="{Binding Rounds}" SelectedItem="{Binding LeftRound}"
+                DisplayMemberBinding="{Binding Label}" PlaceholderText="Left round" />
+      <ComboBox Grid.Column="1" Margin="0,0,6,0" ItemsSource="{Binding Rounds}" SelectedItem="{Binding RightRound}"
+                DisplayMemberBinding="{Binding Label}" PlaceholderText="Right round" />
+      <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="request/response" Text="{Binding ComparisonSide}" />
+      <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="Session name" Text="{Binding ComparisonName}" />
+      <Button Grid.Column="4" Content="Compare rounds" Command="{Binding CompareRoundsCommand}" />
+      <Button Grid.Column="5" Margin="6,0,0,0" Content="Save session" Command="{Binding SaveRoundComparisonCommand}" />
+    </Grid>
+
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" Margin="8,0,8,6">
+      <Button Grid.Column="0" Content="Send" Command="{Binding SendCommand}" />
+      <Button Grid.Column="1" Margin="8,0,0,0" Content="Cancel send" Command="{Binding CancelSendCommand}" />
+      <StackPanel Grid.Column="2" Margin="12,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock Text="Timeout" VerticalAlignment="Center" />
+        <NumericUpDown Width="80" Margin="6,0,0,0" Minimum="0.1" Maximum="600" Increment="1"
+                       FormatString="0.###" Value="{Binding TimeoutSeconds}" />
+        <TextBlock Margin="4,0,0,0" Text="s" VerticalAlignment="Center" />
+      </StackPanel>
+      <Button Grid.Column="3" Margin="8,0,0,0" Content="Clear history" Command="{Binding ClearHistoryCommand}" />
+      <Button Grid.Column="4" Margin="8,0,0,0" Content="Delete draft" Command="{Binding DeleteCommand}" />
+      <SelectableTextBlock Grid.Column="5" Margin="12,0,0,0" VerticalAlignment="Center"
+                           Text="{Binding ComparisonResult}" TextWrapping="Wrap" />
+    </Grid>
+  </Grid>
+</UserControl>

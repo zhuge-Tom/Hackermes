@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetExt>.dll</TargetExt>
+    <UsesAvalonia>true</UsesAvalonia>
+    <RootNamespace>Hackermes.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!-- WebView2 包会拖进 WPF 程序集,与 net10.0 的 WindowsBase 冲突 -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="Semi.Avalonia" />
+    <PackageReference Include="Irihi.Ursa" />
+    <PackageReference Include="Irihi.Ursa.Themes.Semi" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Dock\Hackermes.Dock.csproj" />
+    <ProjectReference Include="..\Hackermes.Platform\Hackermes.Platform.csproj" />
+    <ProjectReference Include="..\Hackermes.Browser\Hackermes.Browser.csproj" />
+    <ProjectReference Include="..\Hackermes.Inspector\Hackermes.Inspector.csproj" />
+    <ProjectReference Include="..\Hackermes.Automation\Hackermes.Automation.csproj" />
+    <ProjectReference Include="..\Hackermes.Terminal\Hackermes.Terminal.csproj" />
+    <ProjectReference Include="..\Hackermes.AiPanel\Hackermes.AiPanel.csproj" />
+    <ProjectReference Include="..\Hackermes.Traffic\Hackermes.Traffic.csproj" />
+  </ItemGroup>
+
+  <!-- Compile the Dock control theme into the executable as well.  Avalonia's
+       XAML compiler otherwise has to inspect a just-built dependency DLL,
+       which is unreliable on Windows machines that briefly lock new DLLs. -->
+  <ItemGroup>
+    <AvaloniaResource Include="..\Hackermes.Dock\Themes\PersistTabControl.axaml"
+                      Link="Themes\PersistTabControl.axaml" />
+  </ItemGroup>
+
+</Project>

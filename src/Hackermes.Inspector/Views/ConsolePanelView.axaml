@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hackermes.Inspector.ViewModels"
+             xmlns:svc="using:Hackermes.Inspector.Services"
+             x:Class="Hackermes.Inspector.Views.ConsolePanelView"
+             x:DataType="vm:ConsolePanelViewModel">
+
+  <DockPanel LastChildFill="True">
+
+    <Border DockPanel.Dock="Top" Padding="6,4" BorderThickness="0,0,0,1"
+            BorderBrush="{DynamicResource SemiColorBorder}">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+        <Button Grid.Column="0" Content="清空" Padding="8,2" Command="{Binding ClearCommand}" />
+        <TextBox Grid.Column="1" Margin="6,0" PlaceholderText="过滤输出内容"
+                 Text="{Binding FilterText, Mode=TwoWay}" />
+        <CheckBox Grid.Column="2" Content="只看错误和警告" VerticalAlignment="Center"
+                  IsChecked="{Binding ErrorsOnly, Mode=TwoWay}" />
+        <TextBlock Grid.Column="3" Margin="10,0,4,0" VerticalAlignment="Center"
+                   FontSize="11" Opacity="0.7" Text="{Binding Summary}" />
+      </Grid>
+    </Border>
+
+    <ListBox ItemsSource="{Binding Visible}" FontSize="11">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="svc:ConsoleEntry">
+          <Grid ColumnDefinitions="60,54,*" Margin="0,1">
+            <TextBlock Grid.Column="0" Opacity="0.5" FontFamily="Consolas,monospace"
+                       Text="{Binding At, StringFormat='HH:mm:ss'}" />
+
+            <Border Grid.Column="1" CornerRadius="2" Padding="4,0" Margin="0,0,6,0"
+                    HorizontalAlignment="Left" VerticalAlignment="Center">
+              <TextBlock Text="{Binding Level}" FontSize="10" />
+            </Border>
+
+            <SelectableTextBlock Grid.Column="2" Text="{Binding Text}" TextWrapping="Wrap" />
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+  </DockPanel>
+</UserControl>

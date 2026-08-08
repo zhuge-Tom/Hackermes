@@ -1,14 +1,14 @@
-# Hookmes 架构方案
+# Hackermes 架构方案
 
 > 本地桌面端网页调试自动化工具 — 交互式命令终端 + 内置浏览器 + 人工操作 + AI 辅助前端调试
 
-本文给出 Hookmes 的分层、模块划分、目录结构与关键机制设计。实现过程中的具体决策与踩坑记录见 [`DESIGN-NOTES.md`](DESIGN-NOTES.md)。
+本文给出 Hackermes 的分层、模块划分、目录结构与关键机制设计。实现过程中的具体决策与踩坑记录见 [`DESIGN-NOTES.md`](DESIGN-NOTES.md)。
 
 ---
 
 ## 一、定位与范围
 
-Hookmes 是**前端调试自动化工作台**,核心主张是:调试工具不应该只是旁观者,而应该能**进入页面内部并驱动它**。
+Hackermes 是**前端调试自动化工作台**,核心主张是:调试工具不应该只是旁观者,而应该能**进入页面内部并驱动它**。
 
 这条主张划出了能力边界:
 
@@ -49,7 +49,7 @@ Hookmes 是**前端调试自动化工作台**,核心主张是:调试工具不应
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Hookmes.App          宿主 / 启动装配 / 主窗口 / ViewLocator  │
+│  Hackermes.App          宿主 / 启动装配 / 主窗口 / ViewLocator  │
 ├─────────────────────────────────────────────────────────────┤
 │  功能模块层(互不引用,靠事件与注册表通信)                      │
 │  Browser  Inspector  Automation  Terminal  AiPanel           │
@@ -59,11 +59,11 @@ Hookmes 是**前端调试自动化工作台**,核心主张是:调试工具不应
 │  Cdp(会话/域封装/事件流)   PageAgent(页面内驻留 JS)          │
 │  Dock(布局/Tab 保活)      Editor      DataTable              │
 ├─────────────────────────────────────────────────────────────┤
-│  Hookmes.Platform     应用平台层:配置/事件词典/注册表/存储     │
+│  Hackermes.Platform     应用平台层:配置/事件词典/注册表/存储     │
 ├─────────────────────────────────────────────────────────────┤
-│  Hookmes.Base         契约与基础设施:IModule/EventBus/AiTool  │
+│  Hackermes.Base         契约与基础设施:IModule/EventBus/AiTool  │
 ├─────────────────────────────────────────────────────────────┤
-│  Hookmes.ToolGen(Roslyn 源生成器)  Hookmes.DomToMarkdown     │
+│  Hackermes.ToolGen(Roslyn 源生成器)  Hackermes.DomToMarkdown     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,7 +99,7 @@ App                  → 全部功能模块
 
 ## 三、核心设计:统一动作模型
 
-这是 Hookmes 区别于普通"内嵌浏览器 + AI 聊天"的关键,也是整个架构的灵魂。
+这是 Hackermes 区别于普通"内嵌浏览器 + AI 聊天"的关键,也是整个架构的灵魂。
 
 **问题**:同一个"点击按钮"动作有四个来源——用户手点、终端敲 `click #submit`、AI 调 `page_click` 工具、回放脚本执行。如果四条路径各写一份实现,行为必然发散,录制也无从下手。
 
@@ -114,7 +114,7 @@ App                  → 全部功能模块
 ```
 
 ```csharp
-// Hookmes.Automation/Model/ActionDescriptor.cs
+// Hackermes.Automation/Model/ActionDescriptor.cs
 public sealed record ActionDescriptor(
     ActionKind Kind,              // Navigate/Click/Type/Select/Scroll/Hover/Press/Wait/Eval/Assert
     TargetSelector? Target,       // 选择器 + 备选策略链
@@ -140,11 +140,11 @@ public sealed record ActionDescriptor(
 5. 结构化 CSS 路径(带 nth-child 锚点)      (兜底)
 ```
 
-生成逻辑在 Page Agent 内(能看到运行时 DOM),评分与降级逻辑在 `Hookmes.Automation/Selectors/`。
+生成逻辑在 Page Agent 内(能看到运行时 DOM),评分与降级逻辑在 `Hackermes.Automation/Selectors/`。
 
 ---
 
-## 四、CDP 层设计(`Hookmes.Cdp`)
+## 四、CDP 层设计(`Hackermes.Cdp`)
 
 ### 4.1 取得 CDP 通道
 
@@ -213,9 +213,9 @@ CDP 调用还需注意:**WebView2 按调用顺序派发但可能乱序完成**,�
 
 ---
 
-## 五、Page Agent(`Hookmes.PageAgent`)
+## 五、Page Agent(`Hackermes.PageAgent`)
 
-页面内驻留的 TypeScript,经 `Page.addScriptToEvaluateOnNewDocument` 在**任何页面脚本之前**执行。这是 Hookmes 区别于纯协议层观测工具的关键部分。
+页面内驻留的 TypeScript,经 `Page.addScriptToEvaluateOnNewDocument` 在**任何页面脚本之前**执行。这是 Hackermes 区别于纯协议层观测工具的关键部分。
 
 ### 职责
 
@@ -232,7 +232,7 @@ CDP 调用还需注意:**WebView2 按调用顺序派发但可能乱序完成**,�
 
 ### 回传通道
 
-`Runtime.addBinding(name: "__hookmes__")` 在页面注入一个宿主函数。Page Agent 调用它,宿主收到 `Runtime.bindingCalled` 事件。这是页面→宿主的唯一通道,消息为 JSON 字符串,带序号与分片(单条 binding 调用有长度限制,大 payload 需分片重组)。
+`Runtime.addBinding(name: "__hackermes__")` 在页面注入一个宿主函数。Page Agent 调用它,宿主收到 `Runtime.bindingCalled` 事件。这是页面→宿主的唯一通道,消息为 JSON 字符串,带序号与分片(单条 binding 调用有长度限制,大 payload 需分片重组)。
 
 ### 执行世界的划分(关键约束)
 
@@ -255,7 +255,7 @@ CDP 调用还需注意:**WebView2 按调用顺序派发但可能乱序完成**,�
 
 ### 已知平台问题
 
-WebView2 的 `AddScriptToExecuteOnDocumentCreated` 与 `NavigateWithWebResourceRequest` 同时使用时注入不生效(简单 `Navigate` 正常)。Hookmes 走 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 而非 WebView2 托管方法,可规避此问题;但若某条路径退回托管 API,需注意这个坑。
+WebView2 的 `AddScriptToExecuteOnDocumentCreated` 与 `NavigateWithWebResourceRequest` 同时使用时注入不生效(简单 `Navigate` 正常)。Hackermes 走 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 而非 WebView2 托管方法,可规避此问题;但若某条路径退回托管 API,需注意这个坑。
 
 ### 构建
 
@@ -265,29 +265,29 @@ TypeScript → esbuild 单文件 IIFE → `build.mjs` 写成 C# raw string liter
 
 ## 六、模块划分
 
-### Hookmes.Base
+### Hackermes.Base
 契约与基础设施,保持轻量(目标 < 40 个文件),不含任何业务模型。
 
 `IModule`(两段式)、`IEventBus` / `EventBus`、`ViewModelBase`(带自动退订的 `SubscribeEvent`)、`[AiTool]` / `[ToolParam]` 特性、`AiToolRegistry`、`IToolPolicyGate`、`IAppLogger`、`IDataProvider`。
 
-### Hookmes.ToolGen
+### Hackermes.ToolGen
 Roslyn 增量源生成器(netstandard2.0)。扫描 `[AiTool]` 方法,生成 `AiToolRegistration_{ClassName}.Register(registry, serviceProvider)`,内含 JSON Schema 与参数绑定执行器闭包。
 
 要点:支持嵌套对象参数(不能遇到非基元类型就 fallback 成 string)、支持 `[ToolParam(Enum = ...)]` 显式枚举值、生成时校验工具名唯一性并在重复时报编译错误。
 
-### Hookmes.Platform
+### Hackermes.Platform
 应用平台层。`AppSettings`(源生成 `JsonSerializerContext`)、`PlatformEvents`(共享事件词典)、四个注册表(`IDockLayoutRegistry` / `IMenuRegistry` / `ISettingsRegistry` / `IContentFactoryRegistry`)、`UiThreadBridge`、`WorkspaceService`、`SqliteService`、`SecretStore`(DPAPI)、`OutboundHttpClientFactory`。
 
-### Hookmes.Cdp
+### Hackermes.Cdp
 见第四节。COM 互操作、会话注册表、域封装、事件泵。
 
-### Hookmes.PageAgent
+### Hackermes.PageAgent
 见第五节。TypeScript 源码 + 构建脚本 + 生成的 C# 常量。
 
-### Hookmes.Browser
+### Hackermes.Browser
 浏览器视图与标签管理。地址栏、导航、多标签、favicon、缩放、DevTools 唤起、Page Agent 注入编排、元素拾取器 UI、设备模拟工具条。
 
-### Hookmes.Inspector
+### Hackermes.Inspector
 类 DevTools 的检查面板,是"人工操作"的主阵地:
 
 - **DOM 树** — 可展开、可编辑属性、悬停联动页面高亮
@@ -297,16 +297,16 @@ Roslyn 增量源生成器(netstandard2.0)。扫描 `[AiTool]` 方法,生成 `AiT
 - **存储** — localStorage / sessionStorage / Cookie / IndexedDB 读写
 - **时间线** — 统一动作流水(人工 + AI + 脚本),可回溯、可导出为脚本
 
-### Hookmes.Automation
+### Hackermes.Automation
 `ActionDescriptor` 模型、`ActionExecutor`、选择器引擎、录制器、脚本存储与回放、断言库、终端 REPL 的命令定义(与 AI 工具共用同一份定义)。
 
-### Hookmes.Terminal
+### Hackermes.Terminal
 双会话类型:
 
 - **System Shell** — PTY(`Iciclecreek.Avalonia.Terminal`,底层 XTerm.NET + Porta.Pty),跑 cmd / pwsh / bash
-- **Hookmes Console** — 领域命令 REPL,直接操作页面
+- **Hackermes Console** — 领域命令 REPL,直接操作页面
 
-领域命令与 AI 工具**共用 `Hookmes.Automation` 中的同一份命令定义**,REPL 与 AI 只是同一组能力的两个前端。示例:
+领域命令与 AI 工具**共用 `Hackermes.Automation` 中的同一份命令定义**,REPL 与 AI 只是同一组能力的两个前端。示例:
 
 ```
 open https://example.com          导航
@@ -322,12 +322,12 @@ run ./scripts/login.hkm           回放脚本
 snap --full                       截图
 ```
 
-在 Hookmes Console 里以 `!` 前缀可直接执行系统命令,无需切换会话。
+在 Hackermes Console 里以 `!` 前缀可直接执行系统命令,无需切换会话。
 
-### Hookmes.AiPanel
+### Hackermes.AiPanel
 AI 对话面板。Vue 3 + Vite singlefile 前端烧进 C#,WebView 承载。OpenAI 兼容 API 客户端(手写 `HttpClient` + SSE 解析,兼容各类网关差异)、工具调用编排、上下文压缩、MCP 桥接、子 Agent。
 
-### Hookmes.Dock / DataTable / Editor / Sidebar / Settings / DomToMarkdown
+### Hackermes.Dock / DataTable / Editor / Sidebar / Settings / DomToMarkdown
 UI 基础设施。`Dock` 中的 `PersistTabControl`(Tab 保活)是 WebView2 与 PTY 能正常工作的前提,是这一层里最先要落地的东西。
 
 `DomToMarkdown` 保持零依赖,并且**直接消费 CDP 节点树而不解析 HTML 字符串**。这不只是省一步:走 HTML 解析器会反转义实体,页面若把内容藏在 `<textarea>` 文本节点里(常见于反爬手段),解析器会把它当成真标签,凭空造出结构。跳过解析阶段从根上规避,还顺带拿到 AOT 友好与 iframe 穿透。
@@ -400,7 +400,7 @@ public interface IToolPolicyGate
 
 ## 八、数据存储
 
-工作区 = 一个目录;数据库 = 该目录下的 `.hookmes.db`。`ProjectOpenedEvent` 是整个数据层的枢纽:各 store 订阅它拿到库路径,惰性建表,库文件由第一个写入者隐式创建(SQLite 打开即创建)。
+工作区 = 一个目录;数据库 = 该目录下的 `.hackermes.db`。`ProjectOpenedEvent` 是整个数据层的枢纽:各 store 订阅它拿到库路径,惰性建表,库文件由第一个写入者隐式创建(SQLite 打开即创建)。
 
 裸 `Microsoft.Data.Sqlite` + 手写 SQL,不引 ORM——查询形态简单,抽象成本高于收益。**但 schema 演进要有版本号**:用 `PRAGMA user_version` + 集中的迁移脚本列表,而不是让每个 store 各自用 `CREATE TABLE IF NOT EXISTS` 加 `PRAGMA table_info` 补列。后者写起来省事,但迁移逻辑一旦散落到十几个 store 里就再也理不清了。
 
@@ -454,8 +454,8 @@ public interface IToolPolicyGate
 ## 十、文件目录结构
 
 ```
-G:\Hookmes\
-├─ Hookmes.slnx
+G:\Hackermes\
+├─ Hackermes.slnx
 ├─ Directory.Build.props              公共属性(TFM/Nullable/Avalonia 编译绑定)
 ├─ Directory.Packages.props           中央包版本管理
 ├─ .gitignore
@@ -475,7 +475,7 @@ G:\Hookmes\
 ├─ scripts\                           构建/发布辅助脚本
 │
 └─ src\
-   ├─ Hookmes.Base\
+   ├─ Hackermes.Base\
    │  ├─ IModule.cs
    │  ├─ Events\           IEventBus, EventBus, EventSubscription
    │  ├─ Mvvm\             ViewModelBase
@@ -485,12 +485,12 @@ G:\Hookmes\
    │  ├─ Diagnostics\      IAppLogger, AppDiagnostics, UiScriptGate
    │  └─ Converters\
    │
-   ├─ Hookmes.ToolGen\                netstandard2.0 · IsRoslynComponent
+   ├─ Hackermes.ToolGen\                netstandard2.0 · IsRoslynComponent
    │  ├─ AiToolSourceGenerator.cs
    │  ├─ JsonSchemaMapper.cs
    │  └─ ExecutorEmitter.cs
    │
-   ├─ Hookmes.Platform\
+   ├─ Hackermes.Platform\
    │  ├─ Models\           AppSettings, Workspace, DeviceProfile
    │  ├─ Events\           PlatformEvents(共享事件词典)
    │  ├─ Registries\       IDockLayoutRegistry, IMenuRegistry,
@@ -502,7 +502,7 @@ G:\Hookmes\
    │  ├─ Storage\          Migrations, DbGateway
    │  └─ Serialization\    AppSettingsJsonContext
    │
-   ├─ Hookmes.Cdp\
+   ├─ Hackermes.Cdp\
    │  ├─ ComInterop\       WebView2ComVTable, WebView2NativeWrapper,
    │  │                    DevToolsEventReceiver
    │  ├─ Session\          ICdpSession, CdpSession, ICdpSessionRegistry,
@@ -514,7 +514,7 @@ G:\Hookmes\
    │  ├─ Events\           CdpEvents(强类型事件 record)
    │  └─ Binding\          HostBinding(Runtime.addBinding 分片重组)
    │
-   ├─ Hookmes.PageAgent\
+   ├─ Hackermes.PageAgent\
    │  ├─ src\
    │  │  ├─ main\          主世界:net-hook.ts, storage-hook.ts,
    │  │  │                 route-hook.ts, entry-main.ts
@@ -527,7 +527,7 @@ G:\Hookmes\
    │  └─ Generated\        PageAgentScript.g.cs(含 MainWorld / IsolatedWorld
    │                       两个常量,提交进 Git)
    │
-   ├─ Hookmes.Browser\
+   ├─ Hackermes.Browser\
    │  ├─ Views\            BrowserTabView, BrowserToolbarView, PickerOverlay
    │  ├─ ViewModels\       BrowserTabViewModel, BrowserHostViewModel
    │  ├─ Services\         BrowserTabManager, PageAgentInjector,
@@ -535,7 +535,7 @@ G:\Hookmes\
    │  ├─ Tools\            PageReadAiTools, PageInteractAiTools
    │  └─ BrowserModule.cs
    │
-   ├─ Hookmes.Inspector\
+   ├─ Hackermes.Inspector\
    │  ├─ Views\            DomTreeView, StylesView, NetworkView,
    │  │                    ConsoleView, StorageView, TimelineView
    │  ├─ ViewModels\
@@ -544,7 +544,7 @@ G:\Hookmes\
    │  ├─ Tools\            NetworkAiTools, ConsoleAiTools, StorageAiTools
    │  └─ InspectorModule.cs
    │
-   ├─ Hookmes.Automation\
+   ├─ Hackermes.Automation\
    │  ├─ Model\            ActionDescriptor, TargetSelector, ActionResult
    │  ├─ Execution\        ActionExecutor, WaitStrategies, RetryPolicy
    │  ├─ Selectors\        SelectorScorer, SelectorResolver
@@ -554,15 +554,15 @@ G:\Hookmes\
    │  ├─ Tools\            ScriptAiTools, AssertAiTools
    │  └─ AutomationModule.cs
    │
-   ├─ Hookmes.Terminal\
+   ├─ Hackermes.Terminal\
    │  ├─ Views\            TerminalView, TerminalHostView
    │  ├─ ViewModels\
-   │  ├─ Services\         ShellSessionService, HookmesConsoleService,
+   │  ├─ Services\         ShellSessionService, HackermesConsoleService,
    │  │                    CommandParser, TranscriptService
    │  ├─ Tools\            ShellAiTools
    │  └─ TerminalModule.cs
    │
-   ├─ Hookmes.AiPanel\
+   ├─ Hackermes.AiPanel\
    │  ├─ chat-web\         Vue 3 + Vite singlefile(同 PageAgent 的产物策略)
    │  ├─ Views\            AiChatWebView, AiChatHtml.g.cs
    │  ├─ ViewModels\       AiPanelViewModel
@@ -572,19 +572,19 @@ G:\Hookmes\
    │  ├─ Tools\            FileAiTools, SqlAiTools, TodoAiTools, AskAiTools
    │  └─ AiPanelModule.cs
    │
-   ├─ Hookmes.Dock\
+   ├─ Hackermes.Dock\
    │  ├─ Controls\         PersistTabControl, TabContent, DockTabControl
    │  ├─ ViewModels\       DockLayoutViewModel, DockPanelViewModel
    │  ├─ Services\         UiLayoutService, AppDialogService, ContentCreation
    │  └─ DockModule.cs
    │
-   ├─ Hookmes.DataTable\
-   ├─ Hookmes.Editor\      AvaloniaEdit 封装、语法高亮(JS/JSON/HTML/CSS)
-   ├─ Hookmes.Sidebar\
-   ├─ Hookmes.Settings\
-   ├─ Hookmes.DomToMarkdown\          零依赖,直接消费 CDP 节点树
+   ├─ Hackermes.DataTable\
+   ├─ Hackermes.Editor\      AvaloniaEdit 封装、语法高亮(JS/JSON/HTML/CSS)
+   ├─ Hackermes.Sidebar\
+   ├─ Hackermes.Settings\
+   ├─ Hackermes.DomToMarkdown\          零依赖,直接消费 CDP 节点树
    │
-   └─ Hookmes.App\
+   └─ Hackermes.App\
       ├─ Program.cs                   异常钩子 + AppBuilder
       ├─ App.axaml(.cs)               主题装配 + 分阶段异步初始化
       ├─ AppModuleBootstrap.cs        硬编码模块清单,两趟循环
@@ -621,8 +621,8 @@ Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面
 **阶段 5 — 人机共用数据包工作台**
 `Traffic` 以 CDP `Fetch.requestPaused` 为唯一流量修改核心，人工工作台、`packet` CLI 与 Agent 数据包工具只作为三个适配层。默认捕获后立即放行；显式开启 Intercept 后才允许编辑、丢弃和响应替换。Agent 工具按操作粒度进入策略闸门，读取原始包默认脱敏。
 
-**阶段 6 — 专业化流量工程与可验证性（进行中）**
-在阶段 5 的单次内存工作流上增加持久规则、请求/响应独立拦截、人工与 CLI 共用 codec 的 HAR/Hookmes JSON 历史交换、人工规则 JSON replace/merge import 与 export、范围分块 body 读取与 Hex/Base64 局部编辑、query/form/顶层 JSON 结构化参数编辑、跨三端的持久 analyst annotation、独立 Repeater、结构化 Comparer、历史复合查询/分页和跨重启持久化，以及 Packet/Traffic/loopback HTTP 和真实桌面 WebView2/CDP 自动化验收。参数和标注均已有人工、CLI、Agent 入口；当前源码等待统一构建验收后再把本阶段标记完成。
+**阶段 6 — 专业化流量工程与可验证性（基础稳定化进行中）**
+在阶段 5 的单次内存工作流上增加持久规则、请求/响应独立拦截、人工与 CLI 共用 codec 的 HAR/Hackermes JSON 历史交换、人工规则 JSON replace/merge import 与 export、范围分块 body 读取与 Hex/Base64 局部编辑、query/form/顶层 JSON 结构化参数编辑、跨三端的持久 analyst annotation、独立 Repeater、结构化 Comparer、历史复合查询/分页和跨重启持久化，以及 Packet/Traffic/loopback HTTP 和真实桌面 WebView2/CDP 自动化验收。参数和标注均已有人工、CLI、Agent 入口；当前源码等待统一构建验收后再把本阶段标记完成。
 
 三种操作入口的当前对等程度、剩余缺口和逐项验收门槛见 [`STAGE6-GAP-MATRIX.md`](STAGE6-GAP-MATRIX.md)。二进制修改已由 `IPacketEditDraftService` 固化为可查询、可放弃、失败可重试的草稿契约，并由人工、CLI、Agent 共享；可选 `IPacketCommitService` 在不破坏旧捕获后端的前提下，为 Continue、Drop、Edit/Fulfill 与 Discard 返回最终状态、前后版本、audit id 和安全错误码，三端只负责各自格式化。统一持久审计只记录修改前后规范元数据、入口和结果，不落原始包内容；`IPacketAuditExportService` 以 ECDSA P-256 对规范化载荷签名，文档内嵌 SPKI 公钥和 SHA-256 指纹以支持离线验证，可选 expected key id 提供信任固定。私钥适配器把 PKCS#8 存入 `ISecretStore`，人工、CLI 和 Agent 共用服务，Agent 只收发有界内容、不接收文件路径。Traffic 层以 `ITrafficRuleExecutionSource` 发布脱敏规则执行事件，Automation 层桥接现有审计，避免 Traffic 反向依赖上层。Comparer 的 Traffic/Repeater 来源选择和持久 Session CRUD 已进入人工工作台。Agent 归档边界不暴露文件系统路径，只允许显式格式的有限 JSON/HAR 内容（500 条、2 MiB），并按批量敏感导出 Dangerous、历史导入 Mutating 分级。Inspector 的文件对话以委托边界由 View 注入，ViewModel 不引用 Avalonia Storage API；最近 Archive/Rules 路径通过 `IRecentTrafficPathService` 适配平台设置，只在操作成功后持久化。Repeater 的每轮历史以 DraftId/SendResultId 稳定寻址；Inspector 通过 `IRepeaterWorkbenchService` 获取轮次 DTO，并调用既有 `ITrafficComparisonService` 比较来源，不在 UI 层复制 diff。Traffic Store 的版本化策略统一约束全局及站点条数/容量、保留期和自动清理，并向人工、CLI 与 Agent 暴露管理入口。
 

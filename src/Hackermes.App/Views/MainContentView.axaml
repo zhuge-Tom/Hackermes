@@ -1,0 +1,152 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hackermes.App.ViewModels"
+             xmlns:dock="using:Hackermes.Dock.Controls"
+             x:Class="Hackermes.App.Views.MainContentView"
+             x:DataType="vm:MainWindowViewModel">
+
+  <DockPanel LastChildFill="True">
+
+    <!-- 顶栏 -->
+    <Border DockPanel.Dock="Top"
+            Height="42"
+            Padding="8,0"
+            Background="{DynamicResource PanelBackgroundBrush}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+
+        <!-- 左:标识与主要操作 -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Classes="brand" Text="Hackermes" />
+          <Border Classes="toolbarSeparator" />
+
+          <Button Classes="toolbar" Command="{Binding OpenFolderCommand}" ToolTip.Tip="打开工作区目录">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Width="15" Height="15" Data="{StaticResource IconFolder}" />
+              <TextBlock Text="打开" FontSize="12" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <Button Classes="toolbar" Command="{Binding NewBrowserTabCommand}" ToolTip.Tip="新建浏览器标签页">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <PathIcon Width="13" Height="13" Data="{StaticResource IconPlus}" />
+              <TextBlock Text="新标签页" FontSize="12" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+
+        <!-- 中:当前工作区 -->
+        <TextBlock Grid.Column="1"
+                   Text="{Binding WorkspaceName}"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Center"
+                   Opacity="0.5"
+                   FontSize="12"
+                   TextTrimming="CharacterEllipsis" />
+
+        <!-- 右:布局与外观 -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="1" VerticalAlignment="Center">
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Left.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Left"
+                  ToolTip.Tip="左侧面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelLeft}" />
+          </Button>
+
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Bottom.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Bottom"
+                  ToolTip.Tip="底部面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelBottom}" />
+          </Button>
+
+          <Button Classes="toolbar iconOnly panelToggle"
+                  Classes.active="{Binding DockLayout.Right.IsVisible}"
+                  Command="{Binding TogglePanelCommand}" CommandParameter="Right"
+                  ToolTip.Tip="右侧面板">
+            <PathIcon Width="16" Height="16" Data="{StaticResource IconPanelRight}" />
+          </Button>
+
+          <Border Classes="toolbarSeparator" />
+
+          <Button Classes="toolbar iconOnly"
+                  Command="{Binding ToggleThemeCommand}"
+                  ToolTip.Tip="切换明暗主题">
+            <PathIcon Width="15" Height="15" Data="{StaticResource IconTheme}" />
+          </Button>
+        </StackPanel>
+
+      </Grid>
+    </Border>
+
+    <!-- 状态栏。本应用没有 Toast,状态栏就是它的替代 -->
+    <Border DockPanel.Dock="Bottom"
+            Height="24"
+            Padding="10,0"
+            Background="{DynamicResource PanelBackgroundBrush}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="0,1,0,0">
+      <TextBlock Text="{Binding StatusMessage}"
+                 VerticalAlignment="Center"
+                 FontSize="11"
+                 Opacity="0.75"
+                 TextTrimming="CharacterEllipsis" />
+    </Border>
+
+    <!-- 五区域。区域是编译期固定的,只有 Tab 动态 -->
+    <Grid Name="PART_RegionGrid"
+          ColumnDefinitions="240,Auto,*,Auto,300">
+
+      <!-- 左 -->
+      <dock:PersistTabControl Name="PART_LeftPanel"
+                              Grid.Column="0"
+                              Background="{DynamicResource PanelBackgroundBrush}"
+                              ItemsSource="{Binding DockLayout.Left.Tabs}"
+                              SelectedItem="{Binding DockLayout.Left.SelectedTab, Mode=TwoWay}" />
+
+      <GridSplitter Name="PART_LeftSplitter"
+                    Grid.Column="1"
+                    Width="4"
+                    Background="Transparent"
+                    ResizeDirection="Columns" />
+
+      <!-- 中 + 下 -->
+      <Grid Grid.Column="2" Name="PART_CenterGrid" RowDefinitions="*,Auto,200">
+
+        <dock:PersistTabControl Name="PART_ContentPanel"
+                                Grid.Row="0"
+                                Background="{DynamicResource PanelBackgroundBrush}"
+                                ItemsSource="{Binding DockLayout.Content.Tabs}"
+                                SelectedItem="{Binding DockLayout.Content.SelectedTab, Mode=TwoWay}" />
+
+        <GridSplitter Name="PART_BottomSplitter"
+                      Grid.Row="1"
+                      Height="4"
+                      Background="Transparent"
+                      ResizeDirection="Rows" />
+
+        <dock:PersistTabControl Name="PART_BottomPanel"
+                                Grid.Row="2"
+                                Background="{DynamicResource PanelBackgroundBrush}"
+                                ItemsSource="{Binding DockLayout.Bottom.Tabs}"
+                                SelectedItem="{Binding DockLayout.Bottom.SelectedTab, Mode=TwoWay}" />
+      </Grid>
+
+      <GridSplitter Name="PART_RightSplitter"
+                    Grid.Column="3"
+                    Width="4"
+                    Background="Transparent"
+                    ResizeDirection="Columns" />
+
+      <!-- 右 -->
+      <dock:PersistTabControl Name="PART_RightPanel"
+                              Grid.Column="4"
+                              Background="{DynamicResource PanelBackgroundBrush}"
+                              ItemsSource="{Binding DockLayout.Right.Tabs}"
+                              SelectedItem="{Binding DockLayout.Right.SelectedTab, Mode=TwoWay}" />
+
+    </Grid>
+
+  </DockPanel>
+</UserControl>

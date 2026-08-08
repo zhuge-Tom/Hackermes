@@ -1,8 +1,21 @@
 <Project>
+  <!-- Keep generated binaries away from the source tree on Windows.  The G:
+       workspace is watched by software that temporarily locks every new DLL,
+       which breaks project-reference builds before downstream projects can
+       read them.  Per-project folders also prevent output collisions. -->
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
+    <HackermesBuildRoot Condition="'$(HackermesBuildRoot)' == ''">$(LOCALAPPDATA)\Hackermes\Build</HackermesBuildRoot>
+    <BaseOutputPath>$(HackermesBuildRoot)\bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\bin\**;$(MSBuildProjectDirectory)\obj\**</DefaultItemExcludes>
+    <TargetExt>.bin</TargetExt>
+  </PropertyGroup>
+
   <!--
     公共属性集中在这里,叶子 csproj 只声明自己独有的东西;包版本统一由
     Directory.Packages.props 管理,避免同一个包的版本号在多个 csproj 里各写一份。
-    源生成器项目 (Hookmes.ToolGen) 需 netstandard2.0,通过 IsToolGenProject 显式退出下面的默认值。
+    源生成器项目 (Hackermes.ToolGen) 需 netstandard2.0,通过 IsToolGenProject 显式退出下面的默认值。
   -->
   <PropertyGroup Condition="'$(IsToolGenProject)' != 'true'">
     <TargetFramework>net10.0</TargetFramework>
@@ -12,6 +25,13 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <WarningsAsErrors>nullable</WarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- Avalonia design/build workers can retain generated DLL handles on Windows.
+         Keep compiler-server lifetime out of normal interactive runs. -->
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <!-- Avoid ref/refint DLL hand-offs between projects.  On this Windows
+         workspace those short-lived files are scanned and locked immediately,
+         causing AVLN9999/CS0009 during normal project-reference builds. -->
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
 
   <!-- Avalonia 相关项目统一开启编译期绑定,动态绑定处局部 x:CompileBindings="False" -->

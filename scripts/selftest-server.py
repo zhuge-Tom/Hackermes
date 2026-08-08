@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Dependency-free loopback HTTP server for Hookmes desktop acceptance tests."""
+"""Dependency-free loopback HTTP server for Hackermes desktop acceptance tests."""
 
 import argparse
+import base64
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,7 +26,12 @@ class Handler(BaseHTTPRequestHandler):
         self._api(self.rfile.read(length))
 
     def _api(self, body: bytes):
-        payload = json.dumps({"path": self.path.split("?", 1)[0], "body": body.decode("utf-8")}).encode()
+        payload = json.dumps({
+            "path": self.path.split("?", 1)[0],
+            "body": body.decode("utf-8", errors="replace"),
+            "bodyBase64": base64.b64encode(body).decode("ascii"),
+            "bodyHex": body.hex(),
+        }).encode()
         self._send(200, "application/json; charset=utf-8", payload)
 
     def _send(self, status: int, content_type: str, body: bytes):

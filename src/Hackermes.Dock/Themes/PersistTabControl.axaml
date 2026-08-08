@@ -1,0 +1,113 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:Hackermes.Dock.Controls;assembly=Hackermes.Dock"
+                    xmlns:registries="clr-namespace:Hackermes.Platform.Registries;assembly=Hackermes.Platform">
+
+  <!-- Tab 头:favicon 优先于矢量图标,脏标记与关闭按钮按需显示 -->
+  <DataTemplate x:Key="HackermesDockTabHeaderTemplate" DataType="registries:DockTabItemViewModel">
+    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+
+      <Image Width="14" Height="14"
+             VerticalAlignment="Center"
+             Source="{Binding FaviconImage}"
+             IsVisible="{Binding FaviconImage, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+      <PathIcon Width="14" Height="14"
+                VerticalAlignment="Center"
+                Data="{Binding Icon}"
+                Foreground="{DynamicResource SemiColorText2}">
+        <PathIcon.IsVisible>
+          <MultiBinding Converter="{x:Static BoolConverters.And}">
+            <Binding Path="Icon" Converter="{x:Static ObjectConverters.IsNotNull}" />
+            <Binding Path="FaviconImage" Converter="{x:Static ObjectConverters.IsNull}" />
+          </MultiBinding>
+        </PathIcon.IsVisible>
+      </PathIcon>
+
+      <TextBlock Text="{Binding Title}"
+                 VerticalAlignment="Center"
+                 TextTrimming="CharacterEllipsis"
+                 MaxWidth="180" />
+
+      <TextBlock Text="●"
+                 FontSize="10"
+                 VerticalAlignment="Center"
+                 Foreground="{DynamicResource SemiColorText2}"
+                 IsVisible="{Binding IsDirty}" />
+
+      <!--
+        关闭按钮用字符而不是 PathIcon:X 形路径没有闭合区域,
+        PathIcon 走的是填充渲染,画出来是一个实心方块而非叉号。
+      -->
+      <Button Padding="0"
+              Width="16" Height="16"
+              VerticalAlignment="Center"
+              Background="Transparent"
+              BorderThickness="0"
+              Command="{Binding CloseCommand}"
+              CommandParameter="{Binding}"
+              IsVisible="{Binding IsClosable}"
+              ToolTip.Tip="关闭">
+        <TextBlock Text="✕"
+                   FontSize="10"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   Foreground="{DynamicResource SemiColorText2}" />
+      </Button>
+
+    </StackPanel>
+  </DataTemplate>
+
+  <ControlTheme x:Key="{x:Type controls:PersistTabControl}" TargetType="controls:PersistTabControl">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="TabStripPlacement" Value="Top" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <DockPanel LastChildFill="True">
+
+          <!-- 标签栏。DockPanel.Dock 跟随 TabStripPlacement,支持顶部与左右侧栏两种形态 -->
+          <Panel Name="PART_TabStripHost"
+                 DockPanel.Dock="{TemplateBinding TabStripPlacement}">
+
+            <Grid Name="PART_TabStripLayout" ColumnDefinitions="*,Auto">
+              <ScrollViewer Name="PART_ScrollViewer"
+                            Grid.Column="0"
+                            HorizontalScrollBarVisibility="Auto"
+                            VerticalScrollBarVisibility="Disabled">
+                <TabStrip Name="PART_TabStrip"
+                          Background="Transparent"
+                          ItemTemplate="{StaticResource HackermesDockTabHeaderTemplate}" />
+              </ScrollViewer>
+
+              <ContentPresenter Name="PART_TabStripActions"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Right"
+                                Content="{TemplateBinding TabStripRightContent}" />
+            </Grid>
+
+            <Border Name="PART_BorderSeparator"
+                    Height="1"
+                    VerticalAlignment="Bottom"
+                    HorizontalAlignment="Stretch"
+                    Background="{DynamicResource SemiColorBorder}" />
+          </Panel>
+
+          <!--
+            内容区。两层叠放,同一时刻只有一层有内容:
+              PART_SelectedContentHost  — 可重载内容,切 Tab 卸载/重挂
+              PART_NonReloadableOverlay — 不可重载内容,永久驻留,只改显隐
+            叠层在上,因为它承载 WebView2 这类需要接收输入的原生控件。
+          -->
+          <Panel Background="{TemplateBinding Background}">
+            <ContentPresenter Name="PART_SelectedContentHost" />
+            <Panel Name="PART_NonReloadableOverlay" />
+          </Panel>
+
+        </DockPanel>
+      </ControlTemplate>
+    </Setter>
+  </ControlTheme>
+
+</ResourceDictionary>

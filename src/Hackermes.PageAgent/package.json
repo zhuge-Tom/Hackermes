@@ -1,0 +1,13 @@
+{
+  "name": "hackermes-page-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hackermes 页面内驻留脚本。构建产物是 C# 源文件,提交进仓库,因此常规 dotnet build 不需要 Node。",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

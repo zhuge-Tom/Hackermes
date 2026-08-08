@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Hackermes.App.ViewModels"
+        x:Class="Hackermes.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title, FallbackValue=Hackermes}"
+        Width="1120" Height="720"
+        MinWidth="800" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource ShellBackgroundBrush}">
+
+  <Panel>
+    <!-- 装配完成后由 AttachMainContent 注入真正的内容 -->
+    <Panel Name="PART_ContentHost" />
+
+    <!-- 加载遮罩。装配在后台进行,这里给出可见反馈 -->
+    <Border Name="PART_LoadingOverlay"
+            Background="{DynamicResource ShellBackgroundBrush}">
+      <StackPanel VerticalAlignment="Center"
+                  HorizontalAlignment="Center"
+                  Spacing="16">
+        <TextBlock Text="Hackermes"
+                   FontSize="28"
+                   FontWeight="SemiBold"
+                   HorizontalAlignment="Center" />
+        <ProgressBar IsIndeterminate="True"
+                     Width="200"
+                     Height="3" />
+        <TextBlock Name="PART_LoadingText"
+                   Text="正在启动…"
+                   FontSize="12"
+                   Opacity="0.6"
+                   TextWrapping="Wrap"
+                   MaxWidth="520"
+                   TextAlignment="Center"
+                   HorizontalAlignment="Center" />
+      </StackPanel>
+    </Border>
+  </Panel>
+
+</Window>

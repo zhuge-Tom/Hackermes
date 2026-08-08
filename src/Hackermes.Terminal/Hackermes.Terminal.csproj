@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UsesAvalonia>true</UsesAvalonia>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Semi.Avalonia" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Iciclecreek.Avalonia.Terminal" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Base\Hackermes.Base.csproj" />
+    <ProjectReference Include="..\Hackermes.Platform\Hackermes.Platform.csproj" />
+    <ProjectReference Include="..\Hackermes.Dock\Hackermes.Dock.csproj" />
+    <ProjectReference Include="..\Hackermes.Automation\Hackermes.Automation.csproj" />
+  </ItemGroup>
+
+</Project>

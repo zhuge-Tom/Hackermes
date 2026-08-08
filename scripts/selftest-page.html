@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>Hookmes Self Test</title></head>
+<head><meta charset="utf-8"><title>Hackermes Self Test</title></head>
 <body>
-  <h1>Hookmes Self Test</h1>
+  <h1>Hackermes Self Test</h1>
   <button id="test-btn" type="button">测试点击</button>
   <span id="btn-result">未点击</span>
   <label>输入 <input id="test-input"></label>
@@ -15,13 +15,13 @@
     document.querySelector('#test-input').addEventListener('input', event => {
       document.querySelector('#input-echo').textContent = event.target.value;
     });
-    console.info('hookmes-selftest-ready');
-    fetch('selftest-page.html?probe=1').then(() => console.info('hookmes-selftest-fetch-ok'));
+    console.info('hackermes-selftest-ready');
+    fetch('selftest-page.html?probe=1').then(() => console.info('hackermes-selftest-fetch-ok'));
     fetch('/api/capture', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain', 'X-Hookmes-Selftest': 'capture' },
+      headers: { 'Content-Type': 'text/plain', 'X-Hackermes-Selftest': 'capture' },
       body: 'capture-body'
-    }).then(response => response.json()).then(() => console.info('hookmes-traffic-capture-ok'));
+    }).then(response => response.json()).then(() => console.info('hackermes-traffic-capture-ok'));
   </script>
 </body>
 </html>

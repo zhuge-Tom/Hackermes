@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Hackermes.Browser.ViewModels"
+             x:Class="Hackermes.Browser.Views.BrowserTabView"
+             x:DataType="vm:BrowserTabViewModel">
+  <DockPanel LastChildFill="True">
+    <Border DockPanel.Dock="Top" Height="36" Padding="6,0" Background="{DynamicResource PanelBackgroundBrush}"
+            BorderBrush="{DynamicResource SemiColorBorder}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
+        <Button Grid.Column="0" Content="←" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding BackCommand}" ToolTip.Tip="Back" />
+        <Button Grid.Column="1" Content="→" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ForwardCommand}" ToolTip.Tip="Forward" />
+        <Button Grid.Column="2" Content="↻" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ReloadCommand}" ToolTip.Tip="Reload" />
+        <TextBox Grid.Column="3" Margin="6,0" VerticalAlignment="Center" PlaceholderText="Enter URL or search"
+                 Text="{Binding AddressText, Mode=TwoWay}">
+          <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding NavigateCommand}" /></TextBox.KeyBindings>
+        </TextBox>
+        <Panel Grid.Column="4" Width="8" Height="8" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="CDP connection">
+          <Border CornerRadius="4" Background="#4CAF50" IsVisible="{Binding IsCdpReady}" />
+          <Border CornerRadius="4" Background="#757575" IsVisible="{Binding !IsCdpReady}" />
+        </Panel>
+        <Button Grid.Column="5" Content="CDP test" Padding="8,2" Command="{Binding SelfTestCommand}" ToolTip.Tip="Verify the CDP request-response channel" />
+      </Grid>
+    </Border>
+    <Border DockPanel.Dock="Bottom" MinHeight="20" Padding="8,2" Background="{DynamicResource PanelBackgroundBrush}"
+            BorderBrush="{DynamicResource SemiColorBorder}" BorderThickness="0,1,0,0">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock VerticalAlignment="Center" FontSize="10" Opacity="0.7" TextTrimming="CharacterEllipsis" Text="{Binding StatusText}" />
+        <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="10" Foreground="#4CAF50"
+                   Text="{Binding SelfTestResult}" IsVisible="{Binding SelfTestResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" TextTrimming="CharacterEllipsis" MaxWidth="700" />
+      </Grid>
+    </Border>
+    <Panel Name="PART_WebViewHost" Background="#FFFFFF" ClipToBounds="True" />
+  </DockPanel>
+</UserControl>

@@ -24,14 +24,14 @@ dist/
 npm-debug.log*
 
 ## 注意:生成的 C# 源文件是刻意提交进仓库的,不要忽略
-## src/Hookmes.PageAgent/Generated/PageAgentScript.g.cs
-## src/Hookmes.AiPanel/Views/AiChatHtml.g.cs
+## src/Hackermes.PageAgent/Generated/PageAgentScript.g.cs
+## src/Hackermes.AiPanel/Views/AiChatHtml.g.cs
 
 ## 运行时产物
 *.log
-.hookmes.db
-.hookmes.db-shm
-.hookmes.db-wal
+.hackermes.db
+.hackermes.db-shm
+.hackermes.db-wal
 
 ## 本机配置
 appsettings.Local.json

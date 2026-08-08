@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UsesAvalonia>true</UsesAvalonia>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Base\Hackermes.Base.csproj" />
+    <ProjectReference Include="..\Hackermes.Platform\Hackermes.Platform.csproj" />
+    <ProjectReference Include="..\Hackermes.Cdp\Hackermes.Cdp.csproj" />
+    <ProjectReference Include="..\Hackermes.Traffic\Hackermes.Traffic.csproj" />
+  </ItemGroup>
+
+</Project>

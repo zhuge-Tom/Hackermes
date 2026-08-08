@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UsesAvalonia>true</UsesAvalonia>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Controls.DataGrid" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Semi.Avalonia" />
+    <PackageReference Include="Semi.Avalonia.DataGrid" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <!--
+    刻意不引用 Hackermes.Browser。检查面板通过 ICdpSessionRegistry 拿会话、
+    通过事件总线拿 Page Agent 回传,与浏览器模块之间零直接依赖。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Base\Hackermes.Base.csproj" />
+    <ProjectReference Include="..\Hackermes.Platform\Hackermes.Platform.csproj" />
+    <ProjectReference Include="..\Hackermes.Cdp\Hackermes.Cdp.csproj" />
+    <ProjectReference Include="..\Hackermes.Dock\Hackermes.Dock.csproj" />
+  </ItemGroup>
+
+</Project>

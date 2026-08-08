@@ -1,4 +1,4 @@
-# Hookmes
+# Hackermes
 
 本地桌面端网页调试自动化工具。内置浏览器、页面内 Hook、交互式终端与 AI 辅助,在一个窗口里完成前端调试的完整闭环。
 
@@ -10,7 +10,7 @@
 
 前端调试的日常是这样的:打开 DevTools、点点页面、翻网络面板、看 console、猜哪个请求出了问题。信息散落在多个面板里,操作无法复现,更没法交给别人(或 AI)代劳。
 
-Hookmes 把这套流程变成可编程、可录制、可自动化的工作台:
+Hackermes 把这套流程变成可编程、可录制、可自动化的工作台:
 
 **零配置的完整流量视图** — 通过 CDP 直接观测,不需要配置代理,也不需要安装根证书就能看到 HTTPS 明文。
 
@@ -41,7 +41,7 @@ rec start
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Hookmes.App          宿主 / 启动装配 / 主窗口             │
+│  Hackermes.App          宿主 / 启动装配 / 主窗口             │
 ├──────────────────────────────────────────────────────────┤
 │  功能模块层(互不引用,靠事件与注册表通信)                  │
 │  Browser  Inspector  Automation  Terminal  AiPanel        │
@@ -50,9 +50,9 @@ rec start
 │  Cdp(会话/域封装/事件泵)   PageAgent(页面内驻留 JS)      │
 │  Dock(布局/Tab 保活)      Editor      DataTable          │
 ├──────────────────────────────────────────────────────────┤
-│  Hookmes.Platform     应用平台层:配置/事件词典/注册表/存储  │
+│  Hackermes.Platform     应用平台层:配置/事件词典/注册表/存储  │
 ├──────────────────────────────────────────────────────────┤
-│  Hookmes.Base         契约与基础设施                       │
+│  Hackermes.Base         契约与基础设施                       │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -78,7 +78,7 @@ rec start
 | 3 | 统一动作模型:执行器、选择器引擎、录制回放、交互式终端 | ✅ 完成 |
 | 4 | AI 集成:工具集、策略闸门、MCP | ✅ 完成 |
 | 5 | 数据包工作台:拦截、分析、编辑、丢弃、响应替换与重放 | ✅ 完成 |
-| 6 | 专业化流量工程:持久规则、响应拦截、HAR/JSON 归档、可重复测试 | 🚧 进行中 |
+| 6 | 专业化流量工程:持久规则、响应拦截、HAR/JSON 归档、可重复测试 | 🚧 基础稳定化进行中 |
 
 已可用:内置浏览器多标签、CDP 请求-响应与事件订阅、页面内 Hook 与调用栈捕获、网络面板(协议数据与调用栈合并)、控制台面板(console / 未捕获异常 / 浏览器级日志三源合并)、五区域布局与布局持久化。
 
@@ -86,9 +86,13 @@ rec start
 
 阶段 4 已接入 OpenAI 兼容流式对话和多轮工具调用。页面工具复用阶段 3 的命令注册表，AI 可查询页面、点击、输入、截图、读取 console 与网络流；所有调用统一经过默认保守的策略闸门，写操作弹窗确认，危险工具拒绝，也可显式启用信任模式。MCP 支持配置 stdio server，自动发现并注册其工具。
 
+AI 助手右上角“设置”可选择 OpenAI、DeepSeek、OpenRouter、SiliconFlow、阿里云百炼、Moonshot/Kimi、Ollama 或自定义 OpenAI-compatible API，并配置 Endpoint、模型、API Key、工具轮数与信任模式。API Key 由 Windows DPAPI 加密保存，不写入 `settings.json`。
+
 阶段 5 新增基于 CDP `Fetch` 域的数据包工作台，无需系统代理或根证书即可对内置浏览器的 HTTP(S) 请求/响应执行类似 Burp Intercept / Repeater 的操作。人工可在底部“数据包”页签编辑原始 HTTP，CLI 可使用 `packet ls|query|show|analyze|diff|replay|intercept|continue|drop|edit`；内部 Agent 共享同一核心服务，并按只读、修改和高风险分级确认。Agent 查看原始包时默认遮蔽认证头与 Cookie。
 
-阶段 6 已开始：请求和响应现在可以独立拦截；持久化流量规则支持增删改查、启停、排序及 JSON 导入导出，人工、CLI 与 Agent 可共同管理；人工可在 Rules Workbench 通过文件路径执行规则 JSON replace/merge import 与 export。Traffic Workbench 的 `Archive` 路径栏以及 `packet export` / `packet import` 支持 Hookmes JSON v1 与 HAR 1.2，并以 Base64 元数据无损保存二进制 body。大包可先查询长度/SHA-256，再以最大 256 KiB 的范围分块读取；二进制编辑支持 Hex/Base64 的 Replace/Insert/Delete 及 Content-Length 规范化。三端还可结构化读取并修改 query、form、顶层 JSON、重复 Header 与 Cookie 参数：人工使用 `Parameters` 页，CLI 使用 `packet param-list/param-set`，Agent 使用 `packet_parameters/packet_parameter_set`。Header 修改拒绝换行/控制字符，Cookie 修改保留其他键值和 `Set-Cookie` 属性；Agent 查询始终遮蔽 Cookie 及认证 Header 值。数据包可持久保存 starred、tags、note 与 review status 标注，对应人工 `Annotation` 页、CLI `annotation` 命令和 Agent `packet_annotation_*` 工具。独立 Repeater 支持命名草稿、编辑、多轮发送历史以及耗时/大小/状态记录；Comparer 提供起始行、重复 Header 和二进制 body 摘要差异；历史列表支持复合筛选和分页。Traffic 历史使用版本化压缩文件落盘，Repeater/Comparer/Annotation 使用版本化文件，均具备原子替换、备份恢复和跨重启加载。上述源码仍按当前开发安排等待后续统一构建验收。
+阶段 6 基础源码已完成：请求和响应现在可以独立拦截；持久化流量规则支持增删改查、启停、排序及 JSON 导入导出，人工、CLI 与 Agent 可共同管理；人工可在 Rules Workbench 通过文件路径执行规则 JSON replace/merge import 与 export。Traffic Workbench 的 `Archive` 路径栏以及 `packet export` / `packet import` 支持 Hackermes JSON v1 与 HAR 1.2，并以 Base64 元数据无损保存二进制 body。大包可先查询长度/SHA-256，再以最大 256 KiB 的范围分块读取；二进制编辑支持 Hex/Base64 的 Replace/Insert/Delete 及 Content-Length 规范化。浏览器设置中的响应体捕获上限会在 Traffic 服务边界再次收紧到 64 KiB–64 MiB，超限响应仅保留元数据，避免异常配置导致历史记录无限占用内存。三端还可结构化读取并修改 query、form、顶层 JSON、重复 Header 与 Cookie 参数：人工使用 `Parameters` 页，CLI 使用 `packet param-list/param-set`，Agent 使用 `packet_parameters/packet_parameter_set`。Header 修改拒绝换行/控制字符，Cookie 修改保留其他键值和 `Set-Cookie` 属性；Agent 查询始终遮蔽 Cookie 及认证 Header 值。数据包可持久保存 starred、tags、note 与 review status 标注，对应人工 `Annotation` 页、CLI `annotation` 命令和 Agent `packet_annotation_*` 工具；工作台可按精确标签/状态筛选并删除标注。独立 Repeater 支持命名草稿、编辑、多轮发送历史以及耗时/大小/状态记录，并支持 0.1–600 秒超时与取消；Comparer 提供起始行、重复 Header 和二进制 body 摘要差异；历史列表支持复合筛选和分页。Traffic 历史使用版本化压缩文件落盘，Repeater/Comparer/Annotation 使用版本化文件，均具备原子替换、备份恢复和跨重启加载。真实桌面/CDP 验收按当前“不构建”安排待后续执行。
+
+DOM 检查器现支持树形父子结构、页面拾取器、页面与 DOM 双向悬停/点击定位、匹配 CSS 规则编辑和导航后陈旧节点清理。Traffic 捕获生命周期已防止同一页面重复注册 Fetch 回调，CDP Continue/Fulfill 也不会再发送值为 `null` 的可选字段；这些修复已有定向测试，仍需在重新构建的真实桌面进程上完成 loopback 精确字节验收。
 
 流量元数据查询现由有界 `PacketQuery` 契约统一：人工工作台与 `packet query [text|*] [method|*] [status|*] [resourceType|*] [held|all] [offset] [limit]`、Agent `packet_query` 具有相同的文本/方法/状态/资源类型/暂停状态复合筛选和 offset/limit 分页语义。CLI 返回稳定分页头，Agent 返回结构化 camelCase 页面；两者都不返回 Header 或 Body 值。
 
@@ -96,7 +100,7 @@ rec start
 
 二进制编辑现在以公共草稿契约保存首次编辑前快照、前后长度/SHA-256/Content-Length 和最近提交失败；人工 Binary editor、CLI `packet draft-*` 与 Agent `packet_edit_*` 均可查询或 Discard，提交失败时保留草稿供重试。Comparer 工作台也已支持从当前 Traffic/Repeater 来源创建、重命名、重算和删除持久 Session。
 
-Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2 MiB 的 Hookmes JSON/HAR 内容，不接受任意文件路径；批量导出可能包含敏感包数据，按 Dangerous 确认，导入按 Mutating 确认。Repeater Workbench 可选择每次发送的稳定历史轮次，查看该轮请求、响应、耗时和大小，把任意两轮直接比较并一键保存为持久 Comparison Session。数据包修改、Discard、继续、丢弃、Fulfill、重放及规则自动命中统一写入持久审计；规则审计不保存 URL 查询、路径原文、Header 值或 Body，只保留规范元数据摘要。人工、CLI `packet audit` 和 Agent `packet_audit` 均可查询；三端还共享 ECDSA P-256 签名导出与离线验签，人工使用 Audit 页，CLI 使用 `packet audit-export/audit-verify`，Agent 使用 `packet_audit_export/packet_audit_verify`。签名文档仅含有界元数据，内嵌 SPKI 公钥及 SHA-256 指纹，并可通过期望指纹固定信任身份；私钥由平台密钥存储保护。Traffic 历史除全局条数、容量、保留期和自动清理外，还支持精确主机或 `*.domain` 配额，人工、CLI `traffic-history site-*` 与 Agent `traffic_history_site_quota_*` 共用同一策略。Binary editor 现有固定长度/SHA-256 摘要、64 KiB 分块导航、字节范围和进度；协议与敏感数据分析返回统一的结构化 Finding，CLI/Agent 可获得 Header 重复项或 UTF-8 body 字节定位，人工选择 Finding 可精确选中 Header/StartLine 或跳转 Body 字节范围。`IPacketCommitService` 将 Continue、Drop、Edit/Fulfill 与 Discard 统一为包含最终状态、前后摘要、审计 ID 和安全错误码的结果；人工显示摘要，CLI 输出稳定 `key=value`，Agent 返回 camelCase JSON，旧后端继续使用兼容路径。Traffic Archive 与 Rules Workbench 已使用系统文件选择器，提供 HAR/JSON 过滤、保存覆盖确认、规则 replace 确认及最近目录恢复；设置仅保存规范化文件路径，不保存包或规则内容。
+Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2 MiB 的 Hackermes JSON/HAR 内容，不接受任意文件路径；批量导出可能包含敏感包数据，按 Dangerous 确认，导入按 Mutating 确认。Repeater Workbench 可选择每次发送的稳定历史轮次，查看该轮请求、响应、耗时和大小，把任意两轮直接比较并一键保存为持久 Comparison Session。数据包修改、Discard、继续、丢弃、Fulfill、重放及规则自动命中统一写入持久审计；规则审计不保存 URL 查询、路径原文、Header 值或 Body，只保留规范元数据摘要。人工、CLI `packet audit` 和 Agent `packet_audit` 均可查询；三端还共享 ECDSA P-256 签名导出与离线验签，人工使用 Audit 页，CLI 使用 `packet audit-export/audit-verify`，Agent 使用 `packet_audit_export/packet_audit_verify`。签名文档仅含有界元数据，内嵌 SPKI 公钥及 SHA-256 指纹，并可通过期望指纹固定信任身份；私钥由平台密钥存储保护。Traffic 历史除全局条数、容量、保留期和自动清理外，还支持精确主机或 `*.domain` 配额，人工、CLI `traffic-history site-*` 与 Agent `traffic_history_site_quota_*` 共用同一策略。Binary editor 现有固定长度/SHA-256 摘要、64 KiB 分块导航、字节范围和进度；协议与敏感数据分析返回统一的结构化 Finding，CLI/Agent 可获得 Header 重复项或 UTF-8 body 字节定位，人工选择 Finding 可精确选中 Header/StartLine 或跳转 Body 字节范围。`IPacketCommitService` 将 Continue、Drop、Edit/Fulfill 与 Discard 统一为包含最终状态、前后摘要、审计 ID 和安全错误码的结果；人工显示摘要，CLI 输出稳定 `key=value`，Agent 返回 camelCase JSON，旧后端继续使用兼容路径。Traffic Archive 与 Rules Workbench 已使用系统文件选择器，提供 HAR/JSON 过滤、保存覆盖确认、规则 replace 确认及最近目录恢复；设置仅保存规范化文件路径，不保存包或规则内容。
 
 冷启动到界面就绪约 350 ms,CDP 会话在标签页创建后约 500 ms 就绪。
 
@@ -104,18 +108,18 @@ Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2
 
 | 项目 | 职责 |
 |---|---|
-| `Hookmes.Base` | 模块契约、事件总线、ViewModel 基类、脚本闸门、日志抽象 |
-| `Hookmes.Platform` | 注册表、共享事件词典、UI 线程桥、设置持久化、DPAPI 密钥库、工作区 |
-| `Hookmes.Cdp` | COM vtable 互操作、CDP 会话(请求-响应 + 事件泵)、会话注册表 |
-| `Hookmes.PageAgent` | 页面内驻留脚本(TypeScript),经 binding 回传 |
-| `Hookmes.Dock` | Tab 保活控件、布局 ViewModel、懒物化 |
-| `Hookmes.Browser` | 浏览器标签页、WebView 生命周期、Agent 装配 |
-| `Hookmes.Inspector` | 网络/控制台、数据包、规则、Repeater 与 Comparer 工作台 |
-| `Hookmes.Automation` | 统一动作、录制回放、CLI、HTTP 包编解码、归档、分块读取与二进制编辑 |
-| `Hookmes.Terminal` | 领域 REPL 与真实 PTY System Shell |
-| `Hookmes.AiPanel` | OpenAI 兼容对话、AI 工具编排、策略闸门和 MCP stdio 桥接 |
-| `Hookmes.Traffic` | CDP Fetch 捕获/拦截/重放、持久规则与历史、Repeater、Comparer、查询分页 |
-| `Hookmes.App` | 启动装配、主窗口、视图定位 |
+| `Hackermes.Base` | 模块契约、事件总线、ViewModel 基类、脚本闸门、日志抽象 |
+| `Hackermes.Platform` | 注册表、共享事件词典、UI 线程桥、设置持久化、DPAPI 密钥库、工作区 |
+| `Hackermes.Cdp` | COM vtable 互操作、CDP 会话(请求-响应 + 事件泵)、会话注册表 |
+| `Hackermes.PageAgent` | 页面内驻留脚本(TypeScript),经 binding 回传 |
+| `Hackermes.Dock` | Tab 保活控件、布局 ViewModel、懒物化 |
+| `Hackermes.Browser` | 浏览器标签页、WebView 生命周期、Agent 装配 |
+| `Hackermes.Inspector` | 网络/控制台、数据包、规则、Repeater 与 Comparer 工作台 |
+| `Hackermes.Automation` | 统一动作、录制回放、CLI、HTTP 包编解码、归档、分块读取与二进制编辑 |
+| `Hackermes.Terminal` | 领域 REPL 与真实 PTY System Shell |
+| `Hackermes.AiPanel` | OpenAI 兼容对话、AI 工具编排、策略闸门和 MCP stdio 桥接 |
+| `Hackermes.Traffic` | CDP Fetch 捕获/拦截/重放、持久规则与历史、Repeater、Comparer、查询分页 |
+| `Hackermes.App` | 启动装配、主窗口、视图定位 |
 
 ---
 
@@ -133,23 +137,22 @@ Agent 归档使用 `packet_archive_export/import` 直接交换最多 500 条、2
 
 ## 构建与运行
 
-```bash
-dotnet restore
-dotnet build Hookmes.slnx
-dotnet run --project src/Hookmes.App/Hookmes.App.csproj
-```
-
-流量核心测试与真实桌面 CDP 验收：
+源码检查可使用 `dotnet build Hackermes.slnx`。在 Windows 上实际启动请使用安全启动脚本；它会串行构建、处理安全软件造成的 DLL 短时占用、整理运行时依赖后启动程序。若 Hackermes 已经运行，脚本不会关闭现有窗口：
 
 ```powershell
-dotnet test tests/Hookmes.PacketTraffic.Tests/Hookmes.PacketTraffic.Tests.csproj
+powershell -ExecutionPolicy Bypass -File scripts/run-hackermes.ps1
+```
+
+真实桌面 CDP/loopback 验收：
+
+```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-traffic-selftest.ps1
 ```
 
 修改 Page Agent 的 TypeScript 源码后需重新生成:
 
 ```bash
-cd src/Hookmes.PageAgent
+cd src/Hackermes.PageAgent
 npm install
 npm run build      # esbuild 打包 → 生成 Generated/PageAgentScript.g.cs
 ```
@@ -158,11 +161,11 @@ npm run build      # esbuild 打包 → 生成 Generated/PageAgentScript.g.cs
 
 | 环境变量 | 作用 |
 |---|---|
-| `HOOKMES_LOG_LEVEL` | `Debug` / `Info` / `Warn` / `Error`,默认 `Info` |
-| `HOOKMES_AUTOOPEN_URL` | 启动后自动打开该地址,用于无人值守验证 |
-| `HOOKMES_SELFTEST` | 设为 `1` 时,CDP 就绪后自动跑一次自检并把结果写进日志 |
+| `HACKERMES_LOG_LEVEL` | `Debug` / `Info` / `Warn` / `Error`,默认 `Info` |
+| `HACKERMES_AUTOOPEN_URL` | 启动后自动打开该地址,用于无人值守验证 |
+| `HACKERMES_SELFTEST` | 设为 `1` 时,CDP 就绪后自动跑一次自检并把结果写进日志 |
 
-日志位于 `%LocalAppData%\Hookmes\logs\`。
+日志位于 `%LocalAppData%\Hackermes\logs\`。
 
 ---
 
@@ -170,6 +173,7 @@ npm run build      # esbuild 打包 → 生成 Generated/PageAgentScript.g.cs
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/DEVELOPMENT-STATUS.md`](docs/DEVELOPMENT-STATUS.md) | 当前阶段基线、暂停范围与后续入口 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 分层、模块划分、CDP 层设计、Page Agent 协议、AI 工具规划、实施路线 |
 | [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) | 关键设计决策、平台陷阱清单、明确的取舍、待偿还的技术债 |
 | [`docs/STAGE6-GAP-MATRIX.md`](docs/STAGE6-GAP-MATRIX.md) | 人工、CLI、Agent 流量分析/修改能力对照、下一阶段缺口与验收门槛 |

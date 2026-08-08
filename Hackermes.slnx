@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hackermes.Base/Hackermes.Base.csproj" />
+    <Project Path="src/Hackermes.Platform/Hackermes.Platform.csproj" />
+    <Project Path="src/Hackermes.Cdp/Hackermes.Cdp.csproj" />
+    <Project Path="src/Hackermes.PageAgent/Hackermes.PageAgent.csproj" />
+    <Project Path="src/Hackermes.Dock/Hackermes.Dock.csproj" />
+    <Project Path="src/Hackermes.Browser/Hackermes.Browser.csproj" />
+    <Project Path="src/Hackermes.Inspector/Hackermes.Inspector.csproj" />
+    <Project Path="src/Hackermes.Automation/Hackermes.Automation.csproj" />
+    <Project Path="src/Hackermes.Terminal/Hackermes.Terminal.csproj" />
+    <Project Path="src/Hackermes.AiPanel/Hackermes.AiPanel.csproj" />
+    <Project Path="src/Hackermes.Traffic/Hackermes.Traffic.csproj" />
+    <Project Path="src/Hackermes.App/Hackermes.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hackermes.PacketTraffic.Tests/Hackermes.PacketTraffic.Tests.csproj" />
+  </Folder>
+</Solution>

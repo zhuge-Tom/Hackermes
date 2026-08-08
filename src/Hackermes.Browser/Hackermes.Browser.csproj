@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UsesAvalonia>true</UsesAvalonia>
+    <!-- Avalonia.Controls.WebView 会拖进 WebView2 的 WPF 程序集,与 net10.0 的 WindowsBase 冲突 -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Controls.WebView" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Semi.Avalonia" />
+    <PackageReference Include="Irihi.Ursa" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Base\Hackermes.Base.csproj" />
+    <ProjectReference Include="..\Hackermes.Platform\Hackermes.Platform.csproj" />
+    <ProjectReference Include="..\Hackermes.Cdp\Hackermes.Cdp.csproj" />
+    <ProjectReference Include="..\Hackermes.Dock\Hackermes.Dock.csproj" />
+    <ProjectReference Include="..\Hackermes.PageAgent\Hackermes.PageAgent.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+<Project>
+  <!-- Imported after each project file, when OutputType/IsTestProject are known.
+       Libraries are loaded through the host dependency graph, so standalone
+       .deps.json files are redundant and can race on freshly written DLLs. -->
+  <PropertyGroup Condition="'$(OutputType)' == 'Library' and '$(IsTestProject)' != 'true'">
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+  </PropertyGroup>
+
+</Project>
