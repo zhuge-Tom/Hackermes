@@ -44,16 +44,21 @@ internal static class TrafficSelfTestRunner
     private static async Task RunAsync(IServiceProvider services, ICdpSession session)
     {
         var log = services.GetRequiredService<IAppLogger>().ForCategory("TrafficSelfTest");
-        var store = services.GetRequiredService<ITrafficStore>();
-        var traffic = services.GetRequiredService<ITrafficService>();
-        var packets = services.GetRequiredService<IPacketCommandService>();
-        var modes = services.GetRequiredService<IPacketInterceptionModeService>();
-        var bodyEdits = services.GetRequiredService<IPacketBodyEditService>();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(50));
         var passed = 0;
+        IPacketInterceptionModeService? modes = null;
 
         try
         {
+            var store = services.GetRequiredService<ITrafficStore>();
+            var traffic = services.GetRequiredService<ITrafficService>();
+            var packets = services.GetRequiredService<IPacketCommandService>();
+            modes = services.GetRequiredService<IPacketInterceptionModeService>();
+            var bodyEdits = services.GetRequiredService<IPacketBodyEditService>();
+            var signingKey = services.GetRequiredService<IPacketAuditSigningKey>();
+            // A public-key fingerprint is safe to log and lets the desktop acceptance
+            // runner prove that the default current-user DPAPI secret survives restart.
+            log.Info($"TRAFFIC_SELFTEST DPAPI_KEY {signingKey.KeyId}");
             var captured = await WaitForAsync(store, session.PageId,
                 item => item.Url.Contains("/api/capture", StringComparison.Ordinal) && item.ResponseStatus is not null,
                 timeout.Token).ConfigureAwait(false);
@@ -140,7 +145,8 @@ internal static class TrafficSelfTestRunner
         }
         finally
         {
-            try { await modes.SetInterceptionModeAsync(PacketInterceptionMode.Off, CancellationToken.None).ConfigureAwait(false); } catch { }
+            if (modes is not null)
+                try { await modes.SetInterceptionModeAsync(PacketInterceptionMode.Off, CancellationToken.None).ConfigureAwait(false); } catch { }
         }
     }
 

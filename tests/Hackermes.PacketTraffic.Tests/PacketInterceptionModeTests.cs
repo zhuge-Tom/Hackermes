@@ -1,5 +1,7 @@
+using Hackermes.App;
 using Hackermes.Automation.Commands;
 using Hackermes.Automation.Packet;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +11,17 @@ namespace Hackermes.PacketTraffic.Tests;
 
 public sealed class PacketInterceptionModeTests
 {
+    [Fact]
+    public void IntegrationModule_RegistersIndependentInterceptionModeService()
+    {
+        var services = new ServiceCollection();
+
+        new TrafficIntegrationModule().RegisterServices(services);
+
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IPacketInterceptionModeService));
+    }
+
     [Theory]
     [InlineData("request", PacketInterceptionMode.Request)]
     [InlineData("response", PacketInterceptionMode.Response)]

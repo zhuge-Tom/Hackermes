@@ -746,8 +746,7 @@ public sealed class TrafficIntegrationService :
                 await _traffic.FulfillAsync(id, new TrafficResponseEdit(source.ResponseStatus ?? 200,
                     source.ResponseStatusText, source.ResponseHeaders, source.ResponseBody), cancellationToken).ConfigureAwait(false);
             else
-                await _traffic.ContinueAsync(id, new TrafficRequestEdit(source.Url, source.Method,
-                    source.RequestHeaders, source.RequestBody), cancellationToken).ConfigureAwait(false);
+                await _traffic.ContinueAsync(id, BuildDraftRequestEdit(source, _editDrafts[key]), cancellationToken).ConfigureAwait(false);
             ClearDraft(key);
             RecordAudit(source.Stage == TrafficStage.Response ? PacketAuditOperation.Fulfill : PacketAuditOperation.Continue,
                 "cli-agent", id, side, beforeVersion, afterVersion);
@@ -906,6 +905,22 @@ public sealed class TrafficIntegrationService :
             normalized.Add(new TrafficHeader("Content-Length", bodyLength.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         return normalized;
     }
+
+    private static TrafficRequestEdit BuildDraftRequestEdit(TrafficMessage source, EditDraftState draft)
+    {
+        // Fetch.continueRequest computes Content-Length from postData. Re-sending an
+        // otherwise untouched captured header set can make WebView2 reject the request.
+        // Preserve explicit user header changes, but leave a body-only draft minimal.
+        var headersChanged = !HeadersEqualExceptContentLength(draft.OriginalHeaders, source.RequestHeaders);
+        return new TrafficRequestEdit(
+            Headers: headersChanged ? source.RequestHeaders : null,
+            Body: source.RequestBody);
+    }
+
+    private static bool HeadersEqualExceptContentLength(
+        IReadOnlyList<TrafficHeader> first, IReadOnlyList<TrafficHeader> second) =>
+        first.Where(header => !header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+            .SequenceEqual(second.Where(header => !header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)));
 
     private PacketEditDraftStatus ToDraftStatus(EditDraftState draft)
     {

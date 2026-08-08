@@ -33,6 +33,7 @@ public sealed class TrafficIntegrationModule : IModule
         services.AddSingleton<IPacketArchiveService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketBodyReadService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketBodyEditService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
+        services.AddSingleton<IPacketInterceptionModeService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketAuditQueryService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<IPacketCommitService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
         services.AddSingleton<ITrafficWorkbenchService>(sp => sp.GetRequiredService<TrafficIntegrationService>());

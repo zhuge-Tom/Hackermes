@@ -152,7 +152,7 @@ try {
     }
     if ($resultLine -notmatch 'RESULT 5/5 PASS') { throw "Traffic acceptance failed: $resultLine" }
     Write-Host $resultLine
-    Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'TRAFFIC_SELFTEST (PASS|RESULT)' }
+    Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'TRAFFIC_SELFTEST (DPAPI_KEY|PASS|RESULT)' }
 }
 finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
