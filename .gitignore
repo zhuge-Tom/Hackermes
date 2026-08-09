@@ -10,6 +10,8 @@ obj/
 artifacts/
 publish/
 *.binlog
+__pycache__/
+*.py[cod]
 
 ## Rider / VS / VS Code
 .idea/
@@ -36,3 +38,13 @@ npm-debug.log*
 ## 本机配置
 appsettings.Local.json
 *.local.props
+
+## 本地第三方运行时与未核验再分发许可的组件
+## 源码仓库只提交可审阅的工具源码、清单和许可证；公开发布包由打包脚本按许可白名单组装。
+third_party/tools/_runtime/
+third_party/tools/crypto.ctf/
+third_party/tools/recon.nmap.terminal/
+third_party/tools/recon.layer/
+third_party/tools/detect.unauthorized.terminal/
+third_party/tools/exploit.dnslog-sqli.terminal/
+third_party/tools/exploit.xss-fuzzer.terminal/windows/

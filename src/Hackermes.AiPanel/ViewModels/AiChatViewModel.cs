@@ -2,9 +2,12 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Tools;
+using Hackermes.AiPanel.Agent;
 using Hackermes.Base.Events;
 using Hackermes.Base.Mvvm;
 using Hackermes.Platform.Events;
+using Hackermes.Platform.Models;
+using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -25,12 +28,17 @@ public partial class AiChatLine : ObservableObject
 
 public partial class AiChatViewModel : ViewModelBase
 {
+    private const string LegacyWelcomeMessage = "你好，我可以结合当前页面帮助定位问题。";
     private readonly IOpenAiChatClient _client;
     private readonly IAiToolRegistry _tools;
     private readonly AiToolDispatcher _dispatcher;
-    private readonly int _maxToolRounds;
+    private readonly ISettingsService _settings;
+    private readonly IAgentSkillStore _skills;
+    private readonly IAgentMemoryStore _memory;
+    private readonly AgentContextCompactor _context;
     private readonly string _sessionId = Guid.NewGuid().ToString("N");
     private readonly List<ChatMessage> _history = [];
+    private string _summary = string.Empty;
     private CancellationTokenSource? _request;
 
     public AiChatViewModel(
@@ -38,15 +46,21 @@ public partial class AiChatViewModel : ViewModelBase
         IAiToolRegistry tools,
         AiToolDispatcher dispatcher,
         IEventBus eventBus,
-        int maxToolRounds = 12)
+        ISettingsService settings,
+        IAgentSkillStore skills,
+        IAgentMemoryStore memory,
+        AgentContextCompactor context)
     {
         _client = client;
         _tools = tools;
         _dispatcher = dispatcher;
-        _maxToolRounds = Math.Clamp(maxToolRounds, 1, 64);
+        _settings = settings;
+        _skills = skills;
+        _memory = memory;
+        _context = context;
         SubscribeEvent<ActiveContentTabChangedEvent>(eventBus, e =>
             ActivePageId = e.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal) ? id : null);
-        Messages.Add(new AiChatLine("assistant", "你好，我可以结合当前页面帮助定位问题。"));
+        RestoreMemory();
     }
 
     public ObservableCollection<AiChatLine> Messages { get; } = [];
@@ -77,7 +91,11 @@ public partial class AiChatViewModel : ViewModelBase
         }
         catch (OperationCanceledException) { answer.Content += "\n（已停止）"; }
         catch (Exception ex) { Error = ex.Message; answer.Content = "请求失败。"; }
-        finally { _request.Dispose(); _request = null; IsBusy = false; }
+        finally
+        {
+            PersistMemory();
+            _request.Dispose(); _request = null; IsBusy = false;
+        }
     }
 
     [RelayCommand]
@@ -86,11 +104,15 @@ public partial class AiChatViewModel : ViewModelBase
     private async Task RunToolLoopAsync(
         List<ChatMessage> history, AiChatLine answer, string? pageId, CancellationToken ct)
     {
-        for (var round = 0; round < _maxToolRounds; round++)
+        var aiSettings = _settings.Load().Ai;
+        var maxToolRounds = Math.Clamp(aiSettings.MaxToolRounds, 1, 64);
+        for (var round = 0; round < maxToolRounds; round++)
         {
             var content = new StringBuilder();
             var calls = new Dictionary<int, ToolCallBuilder>();
-            var request = new OpenAiChatRequest(Model, history, _tools.All);
+            var request = new OpenAiChatRequest(Model,
+                _context.BuildRequest(history, _memory.Load(), _skills.Snapshot(), aiSettings),
+                AvailableTools());
 
             await foreach (var delta in _client.StreamChatAsync(request, ct).ConfigureAwait(true))
             {
@@ -138,7 +160,49 @@ public partial class AiChatViewModel : ViewModelBase
             }
         }
 
-        answer.Content += $"\n\n（已达到 {_maxToolRounds} 轮工具调用上限）";
+        answer.Content += $"\n\n（已达到 {maxToolRounds} 轮工具调用上限）";
+        history.Add(new ChatMessage("assistant", answer.Content));
+    }
+
+    private IReadOnlyList<AiToolDefinition> AvailableTools()
+    {
+        var active = _skills.Snapshot().Where(skill => skill.Enabled).ToArray();
+        var listed = active.SelectMany(skill => skill.ToolNames).ToHashSet(StringComparer.Ordinal);
+        if (listed.Count == 0) return _tools.All;
+
+        // Workflow management remains available so an Agent can repair a restrictive workflow,
+        // but any mutation still travels through the shared policy gate.
+        string[] control = ["agent_skill_list", "agent_skill_upsert", "agent_skill_remove", "agent_memory_read", "agent_memory_write", "agent_memory_clear"];
+        foreach (var tool in control) listed.Add(tool);
+        return _tools.All.Where(tool => listed.Contains(tool.Name)).ToArray();
+    }
+
+    private void RestoreMemory()
+    {
+        var settings = _settings.Load().Ai;
+        if (!settings.MemoryEnabled) return;
+
+        var stored = _memory.Load();
+        _summary = stored.Summary;
+        foreach (var message in stored.RecentMessages
+                     .Where(message => !string.Equals(message.Content, LegacyWelcomeMessage, StringComparison.Ordinal))
+                     .TakeLast(settings.MaxRecentMessages))
+        {
+            _history.Add(new ChatMessage(message.Role, message.Content));
+            Messages.Add(new AiChatLine(message.Role, message.Content));
+        }
+    }
+
+    private void PersistMemory()
+    {
+        var settings = _settings.Load().Ai;
+        if (!settings.MemoryEnabled) return;
+        _summary = _context.CompactCompletedTurns(_history, _summary, settings);
+        var recent = _history.Where(message => message.Role is "user" or "assistant")
+            .Where(message => message.ToolCalls is null || message.ToolCalls.Count == 0)
+            .Select(message => new AgentMemoryMessage { Role = message.Role, Content = message.Content ?? string.Empty })
+            .TakeLast(settings.MaxRecentMessages).ToArray();
+        _memory.SaveConversation(_summary, recent);
     }
 
     private sealed class ToolCallBuilder

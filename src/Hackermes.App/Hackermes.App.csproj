@@ -6,12 +6,17 @@
     <UsesAvalonia>true</UsesAvalonia>
     <RootNamespace>Hackermes.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\hackermes.ico</ApplicationIcon>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <!-- WebView2 包会拖进 WPF 程序集,与 net10.0 的 WindowsBase 冲突 -->
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets\hackermes-icon.png" />
+    <AvaloniaResource Include="Assets\hackermes.ico" />
+    <ProjectReference Include="..\Hackermes.Assessment\Hackermes.Assessment.csproj" />
+    <ProjectReference Include="..\Hackermes.ToolHost\Hackermes.ToolHost.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug'" />
@@ -39,5 +44,15 @@
     <AvaloniaResource Include="..\Hackermes.Dock\Themes\PersistTabControl.axaml"
                       Link="Themes\PersistTabControl.axaml" />
   </ItemGroup>
+
+  <Target Name="CopyToolHost" AfterTargets="Build">
+    <ItemGroup>
+      <ToolHostFiles Include="$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.exe" Condition="Exists('$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.exe')" />
+      <ToolHostFiles Include="$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.dll" Condition="Exists('$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.dll')" />
+      <ToolHostFiles Include="$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.deps.json" Condition="Exists('$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.deps.json')" />
+      <ToolHostFiles Include="$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.runtimeconfig.json" Condition="Exists('$(HackermesBuildRoot)\bin\Hackermes.ToolHost\$(Configuration)\net10.0\Hackermes.ToolHost.runtimeconfig.json')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ToolHostFiles)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

@@ -31,6 +31,9 @@ internal static class TrafficAnnotationToolRegistrar
         tools.Register(new AiToolDefinition("packet_annotation_set",
             "Persist bookmark, tags, note and review status for one captured packet.", SetSchema(),
             AiToolRisk.Mutating, (invocation, _) => ValueTask.FromResult(Set(annotations, invocation.Arguments))));
+        tools.Register(new AiToolDefinition("packet_annotation_batch_set",
+            "Apply bookmark, tags, note and review status to up to 500 captured packets.", BatchSetSchema(),
+            AiToolRisk.Mutating, (invocation, _) => ValueTask.FromResult(BatchSet(annotations, invocation.Arguments))));
         tools.Register(new AiToolDefinition("packet_annotation_delete",
             "Delete persistent analyst annotation for one packet.", GetSchema(),
             AiToolRisk.Mutating, (invocation, _) => ValueTask.FromResult(Delete(annotations, invocation.Arguments))));
@@ -58,15 +61,26 @@ internal static class TrafficAnnotationToolRegistrar
             {
                 "show" => CommandResult.Ok(FormatOne(service.Get(Required(context, 1, "packet id")))),
                 "set" => SetCommand(service, context),
+                "batch-set" => BatchSetCommand(service, context),
                 "delete" => CommandResult.Ok(service.Delete(Required(context, 1, "packet id")) ? "Annotation deleted." : "No annotation."),
                 "prune" => CommandResult.Ok($"Pruned {service.PruneMissingPackets()} annotation(s)."),
-                _ => CommandResult.Fail("Usage: annotation <list [tag] [status] [starred]|show <id>|set <id> <starred|keep> <status|keep> <tags|keep> [note]|delete <id>|prune>")
+                _ => CommandResult.Fail("Usage: annotation <list [tag] [status] [starred]|show <id>|set <id> <starred|keep> <status|keep> <tags|keep> [note]|batch-set <id,id,...> <starred|keep> <status|keep> <tags|keep> [note]|delete <id>|prune>")
             };
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.Collections.Generic.KeyNotFoundException)
         {
             return CommandResult.Fail(ex.Message);
         }
+    }
+
+    private static CommandResult BatchSetCommand(ITrafficAnnotationService service, CommandContext context)
+    {
+        var ids = Required(context, 1, "packet ids").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var tags = NullIfKeep(context.Arg(4)) is { } value ? value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) : null;
+        var hasNote = context.Args.Count > 5;
+        var result = service.UpdateMany(ids, new TrafficAnnotationUpdate(ParseOptionalBool(context.Arg(2)), tags,
+            hasNote ? context.Rest(5) : null, hasNote, ParseOptionalStatus(context.Arg(3))));
+        return CommandResult.Ok($"Updated {result.Count} annotation(s).");
     }
 
     private static CommandResult SetCommand(ITrafficAnnotationService service, CommandContext context)
@@ -110,6 +124,17 @@ internal static class TrafficAnnotationToolRegistrar
         return ToolResult.Ok(JsonSerializer.Serialize(result));
     }
 
+    private static ToolResult BatchSet(ITrafficAnnotationService service, JsonElement args)
+    {
+        var ids = args.TryGetProperty("ids", out var idsElement) ? idsElement.EnumerateArray().Select(item => item.GetString() ?? string.Empty).ToArray() : [];
+        var tags = args.TryGetProperty("tags", out var tagsElement) ? tagsElement.EnumerateArray().Select(item => item.GetString() ?? string.Empty).ToArray() : null;
+        var status = args.TryGetProperty("status", out var statusElement) ? Enum.Parse<TrafficReviewStatus>(statusElement.GetString()!, true) : (TrafficReviewStatus?)null;
+        var hasNote = args.TryGetProperty("note", out var note);
+        var result = service.UpdateMany(ids, new TrafficAnnotationUpdate(args.TryGetProperty("starred", out var starred) ? starred.GetBoolean() : null,
+            tags, hasNote ? note.GetString() : null, hasNote, status));
+        return ToolResult.Ok(JsonSerializer.Serialize(result));
+    }
+
     private static ToolResult Delete(ITrafficAnnotationService service, JsonElement args) =>
         ToolResult.Ok(service.Delete(Required(args, "id")) ? "Annotation deleted." : "No annotation.");
 
@@ -141,6 +166,16 @@ internal static class TrafficAnnotationToolRegistrar
             status = new { type = "string", @enum = new[] { "unreviewed", "inReview", "resolved", "ignored" } }
         },
         additionalProperties = false
+    });
+
+    private static JsonElement BatchSetSchema() => JsonSerializer.SerializeToElement(new
+    {
+        type = "object", properties = new
+        {
+            ids = new { type = "array", items = new { type = "string" }, minItems = 1, maxItems = 500 },
+            starred = new { type = "boolean" }, tags = new { type = "array", items = new { type = "string" }, maxItems = 32 },
+            note = new { type = new[] { "string", "null" } }, status = new { type = "string" }
+        }, required = new[] { "ids" }, additionalProperties = false
     });
 
     private static JsonElement EmptySchema() => JsonSerializer.SerializeToElement(new

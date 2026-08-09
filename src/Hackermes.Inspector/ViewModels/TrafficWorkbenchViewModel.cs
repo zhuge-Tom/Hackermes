@@ -258,8 +258,8 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DeleteAnnotationCommand))]
     private bool _hasAnnotation;
-    [ObservableProperty] private string _historyMaxEntries = "5000";
-    [ObservableProperty] private string _historyMaxBytes = (256L * 1024 * 1024).ToString();
+    [ObservableProperty] private string _historyMaxEntries = "2000";
+    [ObservableProperty] private string _historyMaxBytes = (64L * 1024 * 1024).ToString();
     [ObservableProperty] private string _historyRetentionDays = "30";
     [ObservableProperty] private bool _historyAutoPrune = true;
     [ObservableProperty] private string _historySitePattern = string.Empty;

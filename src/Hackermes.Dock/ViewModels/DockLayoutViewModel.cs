@@ -127,6 +127,8 @@ public partial class DockLayoutViewModel : ViewModelBase
             Title = registration.Title,
             Icon = IconHelper.GetIcon(registration.IconKey),
             IsClosable = registration.IsClosable,
+            HeaderActionCommand = registration.HeaderActionCommand,
+            HeaderActionToolTip = registration.HeaderActionToolTip,
             Content = null
         };
 

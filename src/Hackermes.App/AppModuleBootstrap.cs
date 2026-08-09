@@ -65,6 +65,7 @@ internal static class AppModuleBootstrap
         new Automation.AutomationModule(),
         new Terminal.TerminalModule(),
         new TrafficIntegrationModule(),
+        new AssessmentIntegrationModule(),
         new AiPanel.AiPanelModule()
         // 后续扩展模块:SidebarModule、SettingsModule
     ];

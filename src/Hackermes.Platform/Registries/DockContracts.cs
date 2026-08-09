@@ -44,6 +44,10 @@ public sealed class DockTabRegistration
     public string? IconKey { get; init; }
     public bool IsClosable { get; init; } = true;
 
+    /// <summary>Optional compact action displayed in the tab header.</summary>
+    public ICommand? HeaderActionCommand { get; init; }
+    public string? HeaderActionToolTip { get; init; }
+
     /// <summary>false 表示不进 Tab 栏,等待 <c>SwitchDockTabRequestedEvent</c> 时按需补壳。</summary>
     public bool IsDefaultVisible { get; init; } = true;
 
@@ -79,6 +83,12 @@ public partial class DockTabItemViewModel : ObservableObject
     /// <summary>Tab 是否有未保存的更改,用于头部显示脏标记。</summary>
     [ObservableProperty]
     private bool _isDirty;
+
+    [ObservableProperty]
+    private ICommand? _headerActionCommand;
+
+    [ObservableProperty]
+    private string? _headerActionToolTip;
 
     /// <summary>
     /// 关闭命令,由所属面板在建壳时注入。

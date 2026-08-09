@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetExt>.dll</TargetExt>
+    <RootNamespace>Hackermes.ToolHost</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Hackermes.Assessment\Hackermes.Assessment.csproj" />
+  </ItemGroup>
+</Project>

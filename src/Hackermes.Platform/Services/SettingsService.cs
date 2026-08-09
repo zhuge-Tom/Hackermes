@@ -226,8 +226,13 @@ public sealed class SettingsService : ISettingsService
         settings.Terminal ??= new TerminalSettings();
         settings.Ai ??= new AiSettings();
         settings.Traffic ??= new TrafficSettings();
+        settings.SecurityTools ??= new SecurityToolsSettings();
 
         settings.Browser.PageAgentDisabledHosts ??= new();
+        settings.Browser.HomePage = string.IsNullOrWhiteSpace(settings.Browser.HomePage) ||
+                                    string.Equals(settings.Browser.HomePage.Trim(), "about:blank", StringComparison.OrdinalIgnoreCase)
+            ? "https://www.bing.com/"
+            : settings.Browser.HomePage.Trim();
 
         var layout = settings.Layout;
         layout.LeftPanelWidth = Math.Clamp(layout.LeftPanelWidth, 160, 800);
@@ -241,17 +246,51 @@ public sealed class SettingsService : ISettingsService
         settings.Ai.Endpoint = string.IsNullOrWhiteSpace(settings.Ai.Endpoint)
             ? "https://api.openai.com/v1"
             : settings.Ai.Endpoint.TrimEnd('/');
+        if (settings.Ai.Endpoint.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            settings.Ai.Endpoint = settings.Ai.Endpoint[..^"/chat/completions".Length].TrimEnd('/');
+        settings.Ai.ChatCompletionsPath = string.IsNullOrWhiteSpace(settings.Ai.ChatCompletionsPath)
+            ? "/chat/completions"
+            : "/" + settings.Ai.ChatCompletionsPath.Trim().TrimStart('/');
         settings.Ai.Model = string.IsNullOrWhiteSpace(settings.Ai.Model) ? "gpt-5-mini" : settings.Ai.Model.Trim();
+        // trustedMode existed before the three-way policy. Preserve an explicit prior choice
+        // instead of unexpectedly downgrading it when the application first upgrades.
+        if (settings.Ai.TrustedMode)
+        {
+            settings.Ai.PermissionMode = AiPermissionMode.FullAccess;
+            settings.Ai.TrustedMode = false;
+        }
+        if (!Enum.IsDefined(settings.Ai.PermissionMode))
+            settings.Ai.PermissionMode = AiPermissionMode.RequestApproval;
         settings.Ai.MaxToolRounds = Math.Clamp(settings.Ai.MaxToolRounds, 1, 64);
+        settings.Ai.MaxContextCharacters = Math.Clamp(settings.Ai.MaxContextCharacters, 4_000, 120_000);
+        settings.Ai.MaxRecentMessages = Math.Clamp(settings.Ai.MaxRecentMessages, 2, 64);
+        // Persistent compaction/memory is a system capability, not an operator preference.
+        // Keep reading the legacy setting for compatibility, but always run it enabled.
+        settings.Ai.MemoryEnabled = true;
+        settings.Ai.MaxToolDownloadBytes = Math.Clamp(settings.Ai.MaxToolDownloadBytes, 1 * 1024 * 1024, 512 * 1024 * 1024);
         settings.Ai.McpServers ??= new();
         settings.Ai.McpServers.RemoveAll(server => string.IsNullOrWhiteSpace(server.Id) || string.IsNullOrWhiteSpace(server.Command));
         foreach (var server in settings.Ai.McpServers) server.Arguments ??= new();
 
+        // Migrate the former 2 MiB default to the leaner 512 KiB default. Larger
+        // explicit values remain supported when users intentionally configure them.
+        if (settings.Browser.MaxCapturedBodyBytes == 2 * 1024 * 1024)
+            settings.Browser.MaxCapturedBodyBytes = 512 * 1024;
         settings.Browser.MaxCapturedBodyBytes =
             Math.Clamp(settings.Browser.MaxCapturedBodyBytes, 64 * 1024, 64 * 1024 * 1024);
+        settings.Browser.ProxyMode = string.Equals(settings.Browser.ProxyMode, "burp", StringComparison.OrdinalIgnoreCase)
+            ? "burp"
+            : "direct";
 
         settings.Traffic.LastArchivePath = NormalizeRecentPath(settings.Traffic.LastArchivePath);
         settings.Traffic.LastRulesPath = NormalizeRecentPath(settings.Traffic.LastRulesPath);
+        settings.SecurityTools.PrimaryToolRoot = NormalizeToolRoot(settings.SecurityTools.PrimaryToolRoot, @"E:\tool");
+        settings.SecurityTools.SecondaryToolRoot = NormalizeToolRoot(settings.SecurityTools.SecondaryToolRoot, @"F:\racetools");
+        settings.SecurityTools.TerminalMode = settings.SecurityTools.TerminalMode is "Auto" or "WindowsTerminal" or "PowerShell" or "CommandPrompt"
+            ? settings.SecurityTools.TerminalMode : "Auto";
+        settings.SecurityTools.WslDistribution = (settings.SecurityTools.WslDistribution ?? string.Empty).Trim();
+        settings.SecurityTools.WorkingDirectory = NormalizeRecentPath(settings.SecurityTools.WorkingDirectory) ?? string.Empty;
+        settings.SecurityTools.DefaultTimeoutSeconds = Math.Clamp(settings.SecurityTools.DefaultTimeoutSeconds, 10, 120);
     }
 
     private static string? NormalizeRecentPath(string? path)
@@ -262,5 +301,12 @@ public sealed class SettingsService : ISettingsService
         {
             return null;
         }
+    }
+
+    private static string NormalizeToolRoot(string? path, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return fallback;
+        try { return Path.GetFullPath(path.Trim()); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return fallback; }
     }
 }

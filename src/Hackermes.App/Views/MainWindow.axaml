@@ -4,6 +4,7 @@
         x:Class="Hackermes.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding Title, FallbackValue=Hackermes}"
+        Icon="/Assets/hackermes-icon.png"
         Width="1120" Height="720"
         MinWidth="800" MinHeight="520"
         WindowStartupLocation="CenterScreen"

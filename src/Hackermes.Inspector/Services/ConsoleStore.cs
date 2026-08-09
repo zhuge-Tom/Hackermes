@@ -11,7 +11,7 @@ using System.Text.Json;
 
 namespace Hackermes.Inspector.Services;
 
-public sealed record ConsoleEntry(DateTime At, string Level, string Text, string? Source);
+public sealed record ConsoleEntry(DateTime At, string Level, string Text, string? Source, string PageId = "");
 
 /// <summary>
 /// 控制台记录。三个来源合并:
@@ -23,10 +23,11 @@ public sealed record ConsoleEntry(DateTime At, string Level, string Text, string
 /// </summary>
 public sealed class ConsoleStore : IConsoleQueryService
 {
-    private const int MaxEntries = 1000;
+    private const int MaxEntries = 500;
 
     private readonly IAppLogger _logger;
-    private readonly List<IDisposable> _subscriptions = [];
+    private readonly Dictionary<string, List<IDisposable>> _subscriptionsByPage = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
 
     public ConsoleStore(ICdpSessionRegistry registry, IAppLogger logger)
     {
@@ -36,6 +37,7 @@ public sealed class ConsoleStore : IConsoleQueryService
             _ = AttachAsync(session);
 
         registry.SessionOpened += session => _ = AttachAsync(session);
+        registry.SessionClosed += OnSessionClosed;
     }
 
     public ObservableCollection<ConsoleEntry> Entries { get; } = [];
@@ -44,7 +46,7 @@ public sealed class ConsoleStore : IConsoleQueryService
 
     public IReadOnlyList<ConsoleObservation> Read(int last = 100, string? level = null) => Entries
         .Where(entry => string.IsNullOrWhiteSpace(level) || string.Equals(entry.Level, level, StringComparison.OrdinalIgnoreCase))
-        .Take(Math.Clamp(last, 1, 1000))
+        .Take(Math.Clamp(last, 1, MaxEntries))
         .Select(entry => new ConsoleObservation(entry.At.ToString("O"), entry.Level, entry.Text, entry.Source))
         .ToArray();
 
@@ -61,9 +63,23 @@ public sealed class ConsoleStore : IConsoleQueryService
             await session.EnableDomainAsync("Runtime").ConfigureAwait(false);
             await session.EnableDomainAsync("Log").ConfigureAwait(false);
 
-            _subscriptions.Add(await session.SubscribeAsync("Runtime.consoleAPICalled", OnConsoleApi).ConfigureAwait(false));
-            _subscriptions.Add(await session.SubscribeAsync("Runtime.exceptionThrown", OnException).ConfigureAwait(false));
-            _subscriptions.Add(await session.SubscribeAsync("Log.entryAdded", OnLogEntry).ConfigureAwait(false));
+            var subscriptions = new List<IDisposable>
+            {
+                await session.SubscribeAsync("Runtime.consoleAPICalled", e => OnConsoleApi(session.PageId, e)).ConfigureAwait(false),
+                await session.SubscribeAsync("Runtime.exceptionThrown", e => OnException(session.PageId, e)).ConfigureAwait(false),
+                await session.SubscribeAsync("Log.entryAdded", e => OnLogEntry(session.PageId, e)).ConfigureAwait(false)
+            };
+            lock (_gate)
+            {
+                if (!session.IsAlive)
+                {
+                    foreach (var subscription in subscriptions) subscription.Dispose();
+                    return;
+                }
+                if (_subscriptionsByPage.Remove(session.PageId, out var previous))
+                    foreach (var subscription in previous) subscription.Dispose();
+                _subscriptionsByPage[session.PageId] = subscriptions;
+            }
 
             _logger.Info($"已接入页面控制台: {session.PageId}");
         }
@@ -73,29 +89,29 @@ public sealed class ConsoleStore : IConsoleQueryService
         }
     }
 
-    private void OnConsoleApi(CdpEventArgs e)
+    private void OnConsoleApi(string pageId, CdpEventArgs e)
     {
         var level = CdpJson.TryGetString(e.ParametersJson, "type") ?? "log";
         var text = FormatArguments(e.ParametersJson);
-        Add(new ConsoleEntry(DateTime.Now, NormalizeLevel(level), text, "console"));
+        Add(new ConsoleEntry(DateTime.Now, NormalizeLevel(level), text, "console", pageId));
     }
 
-    private void OnException(CdpEventArgs e)
+    private void OnException(string pageId, CdpEventArgs e)
     {
         var text = CdpJson.TryGetString(e.ParametersJson, "exceptionDetails", "exception", "description")
                    ?? CdpJson.TryGetString(e.ParametersJson, "exceptionDetails", "text")
                    ?? "未捕获异常";
 
-        Add(new ConsoleEntry(DateTime.Now, "error", text, "exception"));
+        Add(new ConsoleEntry(DateTime.Now, "error", text, "exception", pageId));
     }
 
-    private void OnLogEntry(CdpEventArgs e)
+    private void OnLogEntry(string pageId, CdpEventArgs e)
     {
         var level = CdpJson.TryGetString(e.ParametersJson, "entry", "level") ?? "info";
         var text = CdpJson.TryGetString(e.ParametersJson, "entry", "text") ?? string.Empty;
         var source = CdpJson.TryGetString(e.ParametersJson, "entry", "source");
 
-        Add(new ConsoleEntry(DateTime.Now, NormalizeLevel(level), text, source ?? "browser"));
+        Add(new ConsoleEntry(DateTime.Now, NormalizeLevel(level), text, source ?? "browser", pageId));
     }
 
     private static string NormalizeLevel(string level) => level switch
@@ -155,4 +171,19 @@ public sealed class ConsoleStore : IConsoleQueryService
 
         Changed?.Invoke();
     });
+
+    private void OnSessionClosed(string pageId)
+    {
+        lock (_gate)
+        {
+            if (_subscriptionsByPage.Remove(pageId, out var subscriptions))
+                foreach (var subscription in subscriptions) subscription.Dispose();
+        }
+        UiThreadBridge.Post(() =>
+        {
+            foreach (var entry in Entries.Where(entry => entry.PageId == pageId).ToArray())
+                Entries.Remove(entry);
+            Changed?.Invoke();
+        });
+    }
 }

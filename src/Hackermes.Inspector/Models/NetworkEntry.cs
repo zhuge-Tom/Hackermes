@@ -12,6 +12,8 @@ namespace Hackermes.Inspector.Models;
 /// </summary>
 public partial class NetworkEntry : ObservableObject
 {
+    public required string PageId { get; init; }
+
     /// <summary>CDP 的 requestId,是本条记录的主键。</summary>
     public required string RequestId { get; init; }
 

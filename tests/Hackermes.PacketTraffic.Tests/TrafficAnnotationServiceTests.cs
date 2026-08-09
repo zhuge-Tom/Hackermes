@@ -94,6 +94,19 @@ public sealed class TrafficAnnotationServiceTests : IDisposable
             service.Update("missing", new TrafficAnnotationUpdate(Starred: true)));
     }
 
+    [Fact]
+    public void Batch_update_is_atomic_and_bounded_to_existing_packets()
+    {
+        var service = new TrafficAnnotationService(StoreWith("packet-1", "packet-2"), StoragePath);
+        var changed = service.UpdateMany(["packet-1", "packet-2", "packet-1"],
+            new TrafficAnnotationUpdate(Tags: ["triage"], Status: TrafficReviewStatus.InReview));
+
+        Assert.Equal(2, changed.Count);
+        Assert.All(changed, annotation => Assert.Equal(TrafficReviewStatus.InReview, annotation.Status));
+        Assert.Throws<System.Collections.Generic.KeyNotFoundException>(() => service.UpdateMany(["packet-1", "missing"], new TrafficAnnotationUpdate(Starred: true)));
+        Assert.False(service.Get("packet-1")!.Starred);
+    }
+
     private static TrafficStore StoreWith(params string[] ids)
     {
         var store = new TrafficStore();

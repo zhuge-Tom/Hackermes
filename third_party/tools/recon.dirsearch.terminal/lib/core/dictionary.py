@@ -1,0 +1,117 @@
+# -*- coding: utf-8 -*-
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#  MA 02110-1301, USA.
+#
+#  Author: Mauro Soria
+
+from __future__ import annotations
+from typing import Any, Iterator
+
+from lib.core.decorators import locked
+from lib.core.settings import SCRIPT_PATH
+from lib.core.wordlist_backend import get_wordlist_backend
+from lib.utils.file import FileUtils
+
+
+# Get ignore paths for status codes.
+# Reference: https://github.com/maurosoria/dirsearch#Blacklist
+def get_blacklists() -> dict[int, Dictionary]:
+    blacklists = {}
+
+    for status in [400, 403, 500]:
+        blacklist_file_name = FileUtils.build_path(SCRIPT_PATH, "db")
+        blacklist_file_name = FileUtils.build_path(
+            blacklist_file_name, f"{status}_blacklist.txt"
+        )
+
+        if not FileUtils.can_read(blacklist_file_name):
+            # Skip if cannot read file
+            continue
+
+        blacklists[status] = Dictionary(
+            files=[blacklist_file_name],
+            is_blacklist=True,
+        )
+
+    return blacklists
+
+
+class Dictionary:
+    def __init__(self, **kwargs: Any) -> None:
+        self._index = 0
+        self._items = self.generate(**kwargs)
+        # Items in self._extra will be cleared when self.reset() is called
+        self._extra_index = 0
+        self._extra = []
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    @locked
+    def __next__(self) -> str:
+        if len(self._extra) > self._extra_index:
+            self._extra_index += 1
+            return self._extra[self._extra_index - 1]
+        elif len(self._items) > self._index:
+            self._index += 1
+            return self._items[self._index - 1]
+        else:
+            raise StopIteration
+
+    def __contains__(self, item: str) -> bool:
+        return item in self._items
+
+    def __getstate__(self) -> tuple[list[str], int]:
+        return self._items, self._index, self._extra, self._extra_index
+
+    def __setstate__(self, state: tuple[list[str], int]) -> None:
+        self._items, self._index, self._extra, self._extra_index = state
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def generate(self, files: list[str] = [], is_blacklist: bool = False) -> list[str]:
+        """
+        Dictionary.generate() behaviour
+
+        Classic dirsearch wordlist:
+          1. If %EXT% keyword is present, append one with each extension REPLACED.
+          2. If the special word is no present, append line unmodified.
+
+        Forced extensions wordlist (NEW):
+          This type of wordlist processing is a mix between classic processing
+          and DirBuster processing.
+              1. If %EXT% keyword is present in the line, immediately process as "classic dirsearch" (1).
+              2. If the line does not include the special word AND is NOT terminated by a slash,
+                append one with each extension APPENDED (line.ext) and ONLY ONE with a slash.
+              3. If the line does not include the special word and IS ALREADY terminated by slash,
+                append line unmodified.
+        """
+
+        return get_wordlist_backend().generate(files, is_blacklist=is_blacklist)
+
+    def add_extra(self, path) -> None:
+        if path in self._items or path in self._extra:
+            return
+
+        self._extra.append(path)
+
+    def reset(self) -> None:
+        self._index = self._extra_index = 0
+        self._extra.clear()

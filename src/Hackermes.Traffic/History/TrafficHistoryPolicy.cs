@@ -4,8 +4,8 @@ using System.Collections.Generic;
 namespace Hackermes.Traffic.History;
 
 public sealed record TrafficHistoryPolicy(
-    int MaxEntries = 5000,
-    long MaxStorageBytes = 256L * 1024 * 1024,
+    int MaxEntries = 2000,
+    long MaxStorageBytes = 64L * 1024 * 1024,
     int RetentionDays = 30,
     bool AutoPrune = true,
     IReadOnlyList<TrafficSiteQuota>? SiteQuotas = null);

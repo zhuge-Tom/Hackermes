@@ -26,6 +26,7 @@ public sealed class TrafficHistoryPersistence : ITrafficHistoryPersistence
     private readonly Timer _timer;
     private TrafficMessage[]? _pending;
     private bool _disposed;
+    private bool _primaryWasReadable;
 
     public TrafficHistoryPersistence() : this(ResolveDefaultPath()) { }
 
@@ -37,7 +38,18 @@ public sealed class TrafficHistoryPersistence : ITrafficHistoryPersistence
 
     public string FilePath { get; }
 
-    public IReadOnlyList<TrafficMessage> Load() => TryRead(FilePath) ?? TryRead(FilePath + ".bak") ?? [];
+    public IReadOnlyList<TrafficMessage> Load()
+    {
+        var primary = TryRead(FilePath);
+        if (primary is not null)
+        {
+            _primaryWasReadable = true;
+            return primary;
+        }
+
+        _primaryWasReadable = false;
+        return TryRead(FilePath + ".bak") ?? [];
+    }
 
     public void ScheduleSave(IReadOnlyList<TrafficMessage> messages)
     {
@@ -45,7 +57,9 @@ public sealed class TrafficHistoryPersistence : ITrafficHistoryPersistence
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _pending = messages.Select(NormalizeForPersistence).ToArray();
+            // TrafficMessage is treated as immutable after insertion.  A shallow
+            // snapshot avoids cloning every body byte array on every request.
+            _pending = messages.ToArray();
             _timer.Change(300, Timeout.Infinite);
         }
     }
@@ -81,8 +95,13 @@ public sealed class TrafficHistoryPersistence : ITrafficHistoryPersistence
             using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
             using (var gzip = new GZipStream(file, CompressionLevel.Fastest))
                 JsonSerializer.Serialize(gzip, new HistoryDocument(SchemaVersion, messages));
-            if (TryRead(FilePath) is not null) File.Copy(FilePath, FilePath + ".bak", true);
+            // The primary was validated during Load or by our previous successful
+            // write. Re-deserializing a large compressed history before every save
+            // previously doubled transient allocations and startup pressure.
+            if (_primaryWasReadable && File.Exists(FilePath))
+                File.Copy(FilePath, FilePath + ".bak", true);
             File.Move(temporary, FilePath, true);
+            _primaryWasReadable = true;
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

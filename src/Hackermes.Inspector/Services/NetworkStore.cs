@@ -18,7 +18,7 @@ namespace Hackermes.Inspector.Services;
 public sealed class NetworkStore : INetworkQueryService
 {
     /// <summary>列表上限。超出后丢弃最旧的 —— 长时间运行的页面能产生上万条请求。</summary>
-    private const int MaxEntries = 2000;
+    private const int MaxEntries = 1000;
 
     /// <summary>Agent 记录与 CDP 请求的配对时间窗。同一个请求两边上报的时刻会有几十毫秒差。</summary>
     private static readonly TimeSpan MatchWindow = TimeSpan.FromSeconds(3);
@@ -26,7 +26,7 @@ public sealed class NetworkStore : INetworkQueryService
     private readonly IAppLogger _logger;
     private readonly Dictionary<string, NetworkEntry> _byRequestId = new(StringComparer.Ordinal);
     private readonly List<PendingInitiator> _pendingInitiators = [];
-    private readonly List<IDisposable> _subscriptions = [];
+    private readonly Dictionary<string, List<IDisposable>> _subscriptionsByPage = new(StringComparer.Ordinal);
     private readonly object _gate = new();
 
     public NetworkStore(ICdpSessionRegistry registry, IEventBus eventBus, IAppLogger logger)
@@ -37,7 +37,7 @@ public sealed class NetworkStore : INetworkQueryService
             _ = AttachAsync(session);
 
         registry.SessionOpened += session => _ = AttachAsync(session);
-        registry.SessionClosed += pageId => _logger.Debug($"会话关闭: {pageId}");
+        registry.SessionClosed += OnSessionClosed;
 
         eventBus.Subscribe<PageAgentMessageEvent>(OnAgentMessage);
     }
@@ -49,7 +49,7 @@ public sealed class NetworkStore : INetworkQueryService
 
     public IReadOnlyList<NetworkObservation> Read(int last = 100, bool failuresOnly = false) => Entries
         .Where(entry => !failuresOnly || entry.IsFailed)
-        .Take(Math.Clamp(last, 1, 2000))
+        .Take(Math.Clamp(last, 1, MaxEntries))
         .Select(entry => new NetworkObservation(
             entry.RequestId, entry.Method, entry.Url, entry.Status, entry.StatusText,
             entry.IsFailed, entry.DurationMs, entry.InitiatorKind, entry.InitiatorStack))
@@ -76,10 +76,24 @@ public sealed class NetworkStore : INetworkQueryService
         {
             await session.EnableDomainAsync("Network").ConfigureAwait(false);
 
-            _subscriptions.Add(await session.SubscribeAsync("Network.requestWillBeSent", OnRequestWillBeSent).ConfigureAwait(false));
-            _subscriptions.Add(await session.SubscribeAsync("Network.responseReceived", OnResponseReceived).ConfigureAwait(false));
-            _subscriptions.Add(await session.SubscribeAsync("Network.loadingFinished", OnLoadingFinished).ConfigureAwait(false));
-            _subscriptions.Add(await session.SubscribeAsync("Network.loadingFailed", OnLoadingFailed).ConfigureAwait(false));
+            var subscriptions = new List<IDisposable>
+            {
+                await session.SubscribeAsync("Network.requestWillBeSent", e => OnRequestWillBeSent(session.PageId, e)).ConfigureAwait(false),
+                await session.SubscribeAsync("Network.responseReceived", OnResponseReceived).ConfigureAwait(false),
+                await session.SubscribeAsync("Network.loadingFinished", OnLoadingFinished).ConfigureAwait(false),
+                await session.SubscribeAsync("Network.loadingFailed", OnLoadingFailed).ConfigureAwait(false)
+            };
+            lock (_gate)
+            {
+                if (!session.IsAlive)
+                {
+                    foreach (var subscription in subscriptions) subscription.Dispose();
+                    return;
+                }
+                if (_subscriptionsByPage.Remove(session.PageId, out var previous))
+                    foreach (var subscription in previous) subscription.Dispose();
+                _subscriptionsByPage[session.PageId] = subscriptions;
+            }
 
             _logger.Info($"已接入页面网络流: {session.PageId}");
         }
@@ -89,7 +103,7 @@ public sealed class NetworkStore : INetworkQueryService
         }
     }
 
-    private void OnRequestWillBeSent(CdpEventArgs e)
+    private void OnRequestWillBeSent(string pageId, CdpEventArgs e)
     {
         var requestId = CdpJson.TryGetString(e.ParametersJson, "requestId");
         var url = CdpJson.TryGetString(e.ParametersJson, "request", "url");
@@ -99,6 +113,7 @@ public sealed class NetworkStore : INetworkQueryService
 
         var entry = new NetworkEntry
         {
+            PageId = pageId,
             RequestId = requestId,
             Method = CdpJson.TryGetString(e.ParametersJson, "request", "method") ?? "GET",
             Url = url,
@@ -130,6 +145,26 @@ public sealed class NetworkStore : INetworkQueryService
 
             Changed?.Invoke();
         });
+    }
+
+    private void OnSessionClosed(string pageId)
+    {
+        lock (_gate)
+        {
+            if (_subscriptionsByPage.Remove(pageId, out var subscriptions))
+                foreach (var subscription in subscriptions) subscription.Dispose();
+            foreach (var id in _byRequestId.Where(pair => pair.Value.PageId == pageId).Select(pair => pair.Key).ToArray())
+                _byRequestId.Remove(id);
+            _pendingInitiators.Clear();
+        }
+
+        UiThreadBridge.Post(() =>
+        {
+            foreach (var entry in Entries.Where(entry => entry.PageId == pageId).ToArray())
+                Entries.Remove(entry);
+            Changed?.Invoke();
+        });
+        _logger.Debug($"会话关闭并释放网络记录: {pageId}");
     }
 
     private void OnResponseReceived(CdpEventArgs e)

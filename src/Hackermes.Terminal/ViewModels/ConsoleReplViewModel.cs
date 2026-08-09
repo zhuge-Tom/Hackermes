@@ -59,7 +59,7 @@ public partial class ConsoleReplViewModel : ViewModelBase
                 UpdatePrompt(e.Title);
         });
 
-        Lines.Add(new ReplLine("Hackermes 控制台。输入 help 查看命令。", ReplLineKind.Hint));
+        Lines.Add(new ReplLine("Hackermes 控制台命令：输入 help；安全工具先输入 assessment tools。不要在“系统 Shell”或 PowerShell 中输入 assessment。", ReplLineKind.Hint));
     }
 
     public ObservableCollection<ReplLine> Lines { get; } = [];

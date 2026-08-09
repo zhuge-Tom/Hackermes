@@ -13,7 +13,10 @@ using Hackermes.Platform.Events;
 using Hackermes.Platform.Services;
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Hackermes.Browser.Views;
@@ -42,19 +45,31 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
     private readonly ICdpSessionRegistry _registry;
     private readonly WebViewCreationCoordinator _coordinator;
     private readonly PageAgentInjector _agentInjector;
+    private readonly ISettingsService _settings;
 
     private Panel? _host;
     private NativeWebView? _webView;
+    private Button? _proxyButton;
+    private ContextMenu? _proxyMenu;
+    private MenuItem? _directProxyItem;
+    private MenuItem? _burpProxyItem;
+    private MenuItem? _proxyStatusItem;
+    private MenuItem? _telemetryFilterItem;
     private BrowserTabViewModel? _vm;
     private CdpSession? _session;
     private IDisposable? _registration;
     private IDisposable? _pickerStateSubscription;
     private IDisposable? _deviceModeRequestSubscription;
+    private IDisposable? _proxyModeSubscription;
+    private IDisposable? _telemetryFilterSubscription;
     private IDisposable? _creationLease;
     private BrowserDeviceProfile? _appliedDeviceProfile;
+    private BrowserProxyMode _activeProxyMode;
+    private bool _suppressKnownTelemetry;
 
     private bool _cdpAttached;
     private bool _released;
+    private bool _proxySwitching;
     private string? _pendingNavigation;
 
     public BrowserTabView(
@@ -63,6 +78,7 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
         ICdpSessionRegistry registry,
         WebViewCreationCoordinator coordinator,
         PageAgentInjector agentInjector,
+        ISettingsService settings,
         IAppLogger logger)
     {
         InitializeComponent();
@@ -72,10 +88,15 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
         _registry = registry;
         _coordinator = coordinator;
         _agentInjector = agentInjector;
+        _settings = settings;
         _logger = logger.ForCategory($"Browser:{viewModel.PageId}");
+        _activeProxyMode = BrowserProxyConfiguration.ParseMode(settings.Load().Browser.ProxyMode);
+        _suppressKnownTelemetry = settings.Load().Browser.SuppressKnownTelemetry;
 
         DataContext = viewModel;
         _host = this.FindControl<Panel>("PART_WebViewHost");
+        _proxyButton = this.FindControl<Button>("PART_ProxyButton");
+        InitializeProxyMenu();
 
         viewModel.NavigateRequested += OnNavigateRequested;
         viewModel.ReloadRequested += OnReloadRequested;
@@ -87,6 +108,8 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
         viewModel.DeviceEmulationRequested += OnDeviceEmulationRequested;
         _pickerStateSubscription = eventBus.SubscribeDisposable<ElementPickerStateChangedEvent>(OnPickerStateChanged);
         _deviceModeRequestSubscription = eventBus.SubscribeDisposable<BrowserDeviceModeToggleRequestedEvent>(OnDeviceModeToggleRequested);
+        _proxyModeSubscription = eventBus.SubscribeDisposable<BrowserProxyModeChangedEvent>(OnProxyModeChanged);
+        _telemetryFilterSubscription = eventBus.SubscribeDisposable<BrowserTelemetryFilterChangedEvent>(OnTelemetryFilterChanged);
 
         if (_host is not null)
             _host.SizeChanged += OnWebViewHostSizeChanged;
@@ -97,6 +120,218 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    #region 内部浏览器代理插件
+
+    private void InitializeProxyMenu()
+    {
+        if (_proxyButton is null)
+            return;
+
+        _directProxyItem = new MenuItem { Header = "直连（不使用系统代理）" };
+        _burpProxyItem = new MenuItem { Header = $"Burp 代理 · {BrowserProxyConfiguration.BurpEndpoint}" };
+        _proxyStatusItem = new MenuItem { Header = "检测 Burp 监听器" };
+        _telemetryFilterItem = new MenuItem { Header = "过滤已知页面遥测" };
+        var caItem = new MenuItem { Header = "打开 Burp CA 页面" };
+
+        _directProxyItem.Click += OnDirectProxySelected;
+        _burpProxyItem.Click += OnBurpProxySelected;
+        _proxyStatusItem.Click += OnCheckBurpListener;
+        _telemetryFilterItem.Click += OnTelemetryFilterClicked;
+        caItem.Click += OnOpenBurpCertificatePage;
+
+        _proxyMenu = new ContextMenu
+        {
+            ItemsSource = new object[]
+            {
+                _directProxyItem,
+                _burpProxyItem,
+                new Separator(),
+                _telemetryFilterItem,
+                _proxyStatusItem,
+                caItem
+            }
+        };
+        _proxyButton.ContextMenu = _proxyMenu;
+        UpdateProxyMenuState();
+    }
+
+    private void OnProxyButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_proxyButton is not null)
+            _proxyMenu?.Open(_proxyButton);
+    }
+
+    private void OnDirectProxySelected(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
+        ChangeProxyMode(BrowserProxyMode.Direct);
+
+    private void OnBurpProxySelected(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
+        ChangeProxyMode(BrowserProxyMode.Burp);
+
+    private void ChangeProxyMode(BrowserProxyMode mode)
+    {
+        if (mode == _activeProxyMode || _proxySwitching)
+            return;
+
+        var saved = _settings.Update(
+            settings => settings.Browser.ProxyMode = BrowserProxyConfiguration.ToSetting(mode),
+            SettingsSection.Browser);
+
+        if (!saved)
+        {
+            SetStatus("代理模式保存失败，浏览器配置未改变。");
+            return;
+        }
+
+        _eventBus.Publish(new BrowserProxyModeChangedEvent(mode));
+    }
+
+    private void OnProxyModeChanged(BrowserProxyModeChangedEvent changed) =>
+        UiThreadBridge.Post(() => _ = RecreateWebViewForProxyAsync(changed.Mode));
+
+    private void OnTelemetryFilterClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var enabled = !_suppressKnownTelemetry;
+        if (!_settings.Update(settings => settings.Browser.SuppressKnownTelemetry = enabled, SettingsSection.Browser))
+        {
+            SetStatus("页面遥测过滤设置保存失败。");
+            return;
+        }
+
+        _eventBus.Publish(new BrowserTelemetryFilterChangedEvent(enabled));
+    }
+
+    private void OnTelemetryFilterChanged(BrowserTelemetryFilterChangedEvent changed)
+    {
+        _suppressKnownTelemetry = changed.Enabled;
+        UpdateProxyMenuState();
+        if (_session is not null)
+            _ = ApplyTelemetryFilterAsync(_session, changed.Enabled);
+    }
+
+    private async Task ApplyTelemetryFilterAsync(CdpSession session, bool enabled)
+    {
+        try
+        {
+            await session.SendAsync(
+                "Network.setBlockedURLs",
+                BrowserTrafficNoiseFilter.BuildSetBlockedUrlsParameters(enabled)).ConfigureAwait(false);
+            UiThreadBridge.Post(() => SetStatus(enabled
+                ? "已过滤已知页面遥测；普通网站请求仍会进入代理。"
+                : "页面遥测过滤已关闭；所有网站请求都会进入代理。"));
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"设置页面遥测过滤失败: {ex.Message}");
+            UiThreadBridge.Post(() => SetStatus($"页面遥测过滤设置失败: {ex.Message}"));
+        }
+    }
+
+    private async Task RecreateWebViewForProxyAsync(BrowserProxyMode mode)
+    {
+        if (_released || _proxySwitching || mode == _activeProxyMode)
+            return;
+
+        _proxySwitching = true;
+
+        try
+        {
+            _pendingNavigation = _vm?.CurrentUrl is { Length: > 0 } current
+                ? current
+                : _vm?.AddressText;
+            _activeProxyMode = mode;
+            UpdateProxyMenuState();
+            SetStatus($"正在切换到 {BrowserProxyConfiguration.Create(mode).DisplayName}…");
+
+            DisposeCurrentWebView();
+            if (_vm is not null)
+            {
+                _vm.IsCdpReady = false;
+                _vm.IsAgentReady = false;
+            }
+
+            _cdpAttached = false;
+            _appliedDeviceProfile = null;
+            await CreateWebViewAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _proxySwitching = false;
+        }
+    }
+
+    private async void OnCheckBurpListener(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_proxyStatusItem is null)
+            return;
+
+        _proxyStatusItem.IsEnabled = false;
+        _proxyStatusItem.Header = $"正在检测 {BrowserProxyConfiguration.BurpEndpoint}…";
+
+        try
+        {
+            using var client = new TcpClient(AddressFamily.InterNetwork);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
+            await client.ConnectAsync(IPAddress.Loopback, BrowserProxyConfiguration.BurpPort, timeout.Token);
+            _proxyStatusItem.Header = "● Burp 监听器可连接";
+            SetStatus($"Burp 监听器在线：{BrowserProxyConfiguration.BurpEndpoint}");
+        }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+        {
+            _proxyStatusItem.Header = "○ Burp 监听器未启动（点击重试）";
+            SetStatus($"无法连接 Burp：请确认监听器已启动在 {BrowserProxyConfiguration.BurpEndpoint}");
+        }
+        finally
+        {
+            _proxyStatusItem.IsEnabled = true;
+        }
+    }
+
+    private void OnOpenBurpCertificatePage(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        const string certificatePage = "http://burpsuite";
+
+        if (_activeProxyMode == BrowserProxyMode.Burp)
+        {
+            if (_vm is not null)
+                _vm.AddressText = certificatePage;
+            OnNavigateRequested(certificatePage);
+            return;
+        }
+
+        if (_vm is not null)
+        {
+            _vm.AddressText = certificatePage;
+            _vm.CurrentUrl = certificatePage;
+        }
+        ChangeProxyMode(BrowserProxyMode.Burp);
+    }
+
+    private void UpdateProxyMenuState()
+    {
+        var configuration = BrowserProxyConfiguration.Create(_activeProxyMode);
+
+        if (_proxyButton is not null)
+        {
+            _proxyButton.Content = configuration.DisplayName;
+            ToolTip.SetTip(_proxyButton,
+                _activeProxyMode == BrowserProxyMode.Burp
+                    ? $"内部浏览器正在通过 {BrowserProxyConfiguration.BurpEndpoint} 连接 Burp"
+                    : "内部浏览器为直连模式，不使用系统代理");
+        }
+
+        if (_directProxyItem is not null)
+            _directProxyItem.Header = (_activeProxyMode == BrowserProxyMode.Direct ? "✓ " : string.Empty)
+                                      + "直连（不使用系统代理）";
+        if (_burpProxyItem is not null)
+            _burpProxyItem.Header = (_activeProxyMode == BrowserProxyMode.Burp ? "✓ " : string.Empty)
+                                    + $"Burp 代理 · {BrowserProxyConfiguration.BurpEndpoint}";
+        if (_telemetryFilterItem is not null)
+            _telemetryFilterItem.Header = (_suppressKnownTelemetry ? "✓ " : string.Empty)
+                                          + "过滤已知页面遥测";
+    }
+
+    #endregion
 
     #region WebView 生命周期
 
@@ -140,19 +375,20 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
     }
 
     /// <summary>
-    /// 环境参数只在创建时读取一次。用户数据目录固定在临时区,
-    /// 避免多个实例共用默认目录时互相锁定。
+    /// 环境参数只在创建时读取一次。直连与 Burp 使用独立的持久配置目录，
+    /// 避免切换期间不同 WebView2 环境互相锁定。
     /// </summary>
-    private static void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs e)
+    private void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs e)
     {
         if (!OperatingSystem.IsWindows() || e is not WindowsWebView2EnvironmentRequestedEventArgs win)
             return;
 
         try
         {
-            var profileDir = Path.Combine(Path.GetTempPath(), "Hackermes", "WebView2");
-            Directory.CreateDirectory(profileDir);
-            win.UserDataFolder = profileDir;
+            var proxy = BrowserProxyConfiguration.Create(_activeProxyMode);
+            Directory.CreateDirectory(proxy.UserDataFolder);
+            win.UserDataFolder = proxy.UserDataFolder;
+            win.AdditionalBrowserArguments = proxy.AdditionalBrowserArguments;
         }
         catch
         {
@@ -235,6 +471,10 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
             await session.EnableDomainAsync("Runtime").ConfigureAwait(false);
             await session.EnableDomainAsync("Network").ConfigureAwait(false);
             await session.EnableDomainAsync("Log").ConfigureAwait(false);
+
+            // Apply before the first navigation so filtered telemetry never reaches
+            // an external proxy such as Burp Suite.
+            await ApplyTelemetryFilterAsync(session, _suppressKnownTelemetry).ConfigureAwait(false);
 
             // Page Agent 必须赶在导航之前装好 —— 预注入只对之后加载的文档生效。
             var agentInstalled = await _agentInjector.InstallAsync(session).ConfigureAwait(false);
@@ -640,6 +880,35 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
         _creationLease = null;
     }
 
+    private void DisposeCurrentWebView()
+    {
+        _registration?.Dispose();
+        _registration = null;
+
+        _session?.Dispose();
+        _session = null;
+
+        ReleaseCreationLease();
+
+        if (_webView is null)
+            return;
+
+        _webView.EnvironmentRequested -= OnEnvironmentRequested;
+        _webView.AdapterCreated -= OnAdapterCreated;
+
+        try
+        {
+            _host?.Children.Remove(_webView);
+            (_webView as IDisposable)?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"释放 WebView 失败: {ex.Message}");
+        }
+
+        _webView = null;
+    }
+
     // ── Tab 显隐。切 Tab 不销毁任何东西,只是通知 ──────────────────────────────
     public void OnTabBecameVisible()
     {
@@ -677,36 +946,20 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
         _deviceModeRequestSubscription?.Dispose();
         _deviceModeRequestSubscription = null;
 
+        _proxyModeSubscription?.Dispose();
+        _proxyModeSubscription = null;
+
+        _telemetryFilterSubscription?.Dispose();
+        _telemetryFilterSubscription = null;
+
         if (_host is not null)
             _host.SizeChanged -= OnWebViewHostSizeChanged;
 
-        _registration?.Dispose();
-        _registration = null;
-
-        _session?.Dispose();
-        _session = null;
-
-        ReleaseCreationLease();
-
-        if (_webView is not null)
-        {
-            _webView.EnvironmentRequested -= OnEnvironmentRequested;
-            _webView.AdapterCreated -= OnAdapterCreated;
-
-            try
-            {
-                _host?.Children.Remove(_webView);
-                (_webView as IDisposable)?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn($"释放 WebView 失败: {ex.Message}");
-            }
-
-            _webView = null;
-        }
+        DisposeCurrentWebView();
 
         _vm = null;
         _host = null;
+        _proxyButton = null;
+        _proxyMenu = null;
     }
 }

@@ -21,7 +21,8 @@ $prefix = "http://127.0.0.1:$Port/"
 $buildOrder = @(
     'Hackermes.Base', 'Hackermes.PageAgent', 'Hackermes.Platform', 'Hackermes.Dock',
     'Hackermes.Cdp', 'Hackermes.Traffic', 'Hackermes.Browser', 'Hackermes.Inspector',
-    'Hackermes.Automation', 'Hackermes.Terminal', 'Hackermes.AiPanel', 'Hackermes.App'
+    'Hackermes.Automation', 'Hackermes.Terminal', 'Hackermes.AiPanel',
+    'Hackermes.Assessment', 'Hackermes.ToolHost', 'Hackermes.App'
 )
 
 function Wait-SelfTestAssembly {
@@ -41,7 +42,7 @@ function Wait-SelfTestAssembly {
 function Build-SelfTestProject {
     param([Parameter(Mandatory)] [string]$Name)
     $projectPath = Join-Path $repoRoot "src\$Name\$Name.csproj"
-    $extension = if ($Name -eq 'Hackermes.App') { '.dll' } else { '.bin' }
+    $extension = if ($Name -in @('Hackermes.App', 'Hackermes.ToolHost')) { '.dll' } else { '.bin' }
     $assemblyPath = Join-Path $buildRoot "bin\$Name\TrafficSelfTest\net10.0\$Name$extension"
     $maximumAttempts = if ($Name -eq 'Hackermes.App') { 20 } else { 8 }
     for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
@@ -79,7 +80,7 @@ if (-not (Test-Path -LiteralPath $appExe)) { throw "Self-test executable not fou
 # security-scanner DLL locks. Stage CLR-loadable names immediately before the
 # acceptance process starts, matching the normal launcher.
 $runtimeDirectory = Split-Path -Parent $appExe
-$runtimeLibraries = $buildOrder | Where-Object { $_ -ne 'Hackermes.App' }
+$runtimeLibraries = $buildOrder | Where-Object { $_ -notin @('Hackermes.App', 'Hackermes.ToolHost') }
 foreach ($name in $runtimeLibraries) {
     $source = Join-Path $runtimeDirectory "$name.bin"
     $destination = Join-Path $runtimeDirectory "$name.dll"
@@ -103,6 +104,14 @@ if (Test-Path -LiteralPath $depsPath) {
         $deps = $deps.Replace("$name.bin", "$name.dll")
     }
     [IO.File]::WriteAllText($depsPath, $deps, [Text.UTF8Encoding]::new($false))
+}
+$toolHostDepsPath = Join-Path $runtimeDirectory 'Hackermes.ToolHost.deps.json'
+if (Test-Path -LiteralPath $toolHostDepsPath) {
+    $toolHostDeps = [IO.File]::ReadAllText($toolHostDepsPath)
+    foreach ($name in $runtimeLibraries) {
+        $toolHostDeps = $toolHostDeps.Replace("$name.bin", "$name.dll")
+    }
+    [IO.File]::WriteAllText($toolHostDepsPath, $toolHostDeps, [Text.UTF8Encoding]::new($false))
 }
 Write-Host 'Waiting for security scanning to release self-test runtime files...'
 Start-Sleep -Seconds 45

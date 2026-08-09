@@ -9,6 +9,7 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Hackermes.AiPanel.OpenAI;
 
@@ -21,6 +22,73 @@ public sealed class OpenAiCompatibleClient : IOpenAiChatClient
 
     public Uri Endpoint { get; set; } = new("https://api.openai.com/v1/chat/completions");
     public string? ApiKey { get; set; }
+
+    public async Task<IReadOnlyList<string>> ListModelsAsync(
+        Uri modelsEndpoint,
+        string? apiKey,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(modelsEndpoint);
+        using var message = new HttpRequestMessage(HttpMethod.Get, modelsEndpoint);
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+
+        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateHttpErrorAsync(response, ct).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("服务已响应，但 /models 没有返回 OpenAI 兼容的 data 列表。");
+
+        return data.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.Object &&
+                           item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetProperty("id").GetString() ?? string.Empty)
+            .Where(id => id.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Performs a real, bounded chat-completions request against an unsaved configuration.
+    /// This validates the URL, credential and model together without mutating the live client.
+    /// </summary>
+    public async Task TestConnectionAsync(Uri endpoint, string model, string? apiKey, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("模型名称不能为空。", nameof(model));
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonContent.Create(new
+            {
+                model = model.Trim(),
+                messages = new[] { new { role = "user", content = "Reply with OK." } },
+                stream = false
+            }, options: JsonOptions)
+        };
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+
+        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode) return;
+
+        throw await CreateHttpErrorAsync(response, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<HttpRequestException> CreateHttpErrorAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        detail = detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (detail.Length > 240) detail = detail[..240] + "…";
+        return new HttpRequestException($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}" +
+                                        (detail.Length == 0 ? string.Empty : $"：{detail}"));
+    }
 
     public async IAsyncEnumerable<ChatStreamDelta> StreamChatAsync(
         OpenAiChatRequest request,

@@ -73,7 +73,12 @@
           <Button Classes="toolbar iconOnly"
                   Command="{Binding ToggleThemeCommand}"
                   ToolTip.Tip="切换明暗主题">
-            <PathIcon Width="15" Height="15" Data="{StaticResource IconTheme}" />
+            <Grid Width="17" Height="17">
+              <PathIcon Width="17" Height="17" Data="{StaticResource IconThemeSun}"
+                        IsVisible="{Binding !IsDarkMode}" />
+              <PathIcon Width="17" Height="17" Data="{StaticResource IconThemeMoon}"
+                        IsVisible="{Binding IsDarkMode}" />
+            </Grid>
           </Button>
         </StackPanel>
 
@@ -103,7 +108,18 @@
                               Grid.Column="0"
                               Background="{DynamicResource PanelBackgroundBrush}"
                               ItemsSource="{Binding DockLayout.Left.Tabs}"
-                              SelectedItem="{Binding DockLayout.Left.SelectedTab, Mode=TwoWay}" />
+                              SelectedItem="{Binding DockLayout.Left.SelectedTab, Mode=TwoWay}">
+        <dock:PersistTabControl.TabStripRightContent>
+          <Button Width="28" Height="28" Margin="0,0,4,0" Padding="5"
+                  Background="Transparent" BorderThickness="0"
+                  Command="{Binding DockLayout.Left.SelectedTab.HeaderActionCommand}"
+                  IsVisible="{Binding DockLayout.Left.SelectedTab.HeaderActionCommand, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  ToolTip.Tip="{Binding DockLayout.Left.SelectedTab.HeaderActionToolTip}">
+            <PathIcon Width="16" Height="16"
+                      Data="M19.14,12.94 C19.18,12.64 19.2,12.32 19.2,12 C19.2,11.68 19.18,11.36 19.13,11.06 L21.16,9.48 C21.34,9.34 21.39,9.07 21.27,8.87 L19.35,5.55 C19.23,5.33 18.96,5.26 18.74,5.35 L16.35,6.31 C15.85,5.92 15.3,5.59 14.7,5.35 L14.34,2.81 C14.3,2.57 14.1,2.4 13.85,2.4 H10.01 C9.76,2.4 9.56,2.57 9.53,2.81 L9.17,5.35 C8.57,5.59 8.02,5.93 7.52,6.31 L5.13,5.35 C4.91,5.27 4.64,5.33 4.52,5.55 L2.6,8.87 C2.47,9.09 2.53,9.34 2.72,9.48 L4.75,11.06 C4.7,11.36 4.66,11.69 4.66,12 C4.66,12.31 4.68,12.64 4.73,12.94 L2.7,14.52 C2.52,14.66 2.47,14.93 2.59,15.13 L4.51,18.45 C4.63,18.67 4.9,18.74 5.12,18.65 L7.51,17.69 C8.01,18.08 8.56,18.41 9.16,18.65 L9.52,21.19 C9.56,21.43 9.76,21.6 10,21.6 H13.84 C14.09,21.6 14.29,21.43 14.32,21.19 L14.68,18.65 C15.28,18.41 15.83,18.07 16.33,17.69 L18.72,18.65 C18.94,18.73 19.21,18.67 19.33,18.45 L21.25,15.13 C21.37,14.91 21.32,14.66 21.13,14.52 L19.14,12.94 M12,15.6 C10.02,15.6 8.4,13.98 8.4,12 C8.4,10.02 10.02,8.4 12,8.4 C13.98,8.4 15.6,10.02 15.6,12 C15.6,13.98 13.98,15.6 12,15.6" />
+          </Button>
+        </dock:PersistTabControl.TabStripRightContent>
+      </dock:PersistTabControl>
 
       <GridSplitter Name="PART_LeftSplitter"
                     Grid.Column="1"

@@ -3,7 +3,6 @@ using Hackermes.Base.Events;
 using Hackermes.Platform.Registries;
 using Microsoft.Extensions.DependencyInjection;
 using System;
-using System.Runtime.InteropServices;
 
 namespace Hackermes.Platform.Services;
 
@@ -37,15 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WebViewCreationCoordinator>();
 
         services.AddSingleton<ISecretStore>(sp =>
-        {
-            var logger = sp.GetRequiredService<IAppLogger>();
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                return new DpapiSecretStore(logger);
-
-            throw new PlatformNotSupportedException(
-                "当前仅实现了 Windows 的密钥存储(DPAPI)。移植到其他平台需补充对应实现。");
-        });
+            SecretStoreFactory.Create(sp.GetRequiredService<IAppLogger>()));
 
         return services;
     }

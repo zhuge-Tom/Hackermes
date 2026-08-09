@@ -48,7 +48,7 @@ public sealed record TrafficCaptureOptions(
     bool PauseRequests = false,
     bool PauseResponses = false,
     bool CaptureResponseBodies = true,
-    int MaxResponseBodyBytes = 2 * 1024 * 1024)
+    int MaxResponseBodyBytes = 512 * 1024)
 {
     /// <summary>
     /// A lower bound keeps the capture feature useful, while the upper bound
@@ -56,7 +56,7 @@ public sealed record TrafficCaptureOptions(
     /// in the in-memory traffic history.
     /// </summary>
     public const int MinResponseBodyBytes = 64 * 1024;
-    public const int DefaultMaxResponseBodyBytes = 2 * 1024 * 1024;
+    public const int DefaultMaxResponseBodyBytes = 512 * 1024;
     public const int MaxAllowedResponseBodyBytes = 64 * 1024 * 1024;
 
     public TrafficCaptureOptions Normalize() => this with

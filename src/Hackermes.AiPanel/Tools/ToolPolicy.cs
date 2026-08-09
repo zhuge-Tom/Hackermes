@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using Hackermes.Platform.Models;
 
 namespace Hackermes.AiPanel.Tools;
 
@@ -20,39 +21,46 @@ public interface IToolPolicyGate
         AiToolDefinition tool, ToolInvocation invocation, CancellationToken ct);
 }
 
-/// <summary>Trust mode must be selected explicitly; conservative mode is the default.</summary>
+/// <summary>
+/// One policy point for every Agent tool. The default mirrors Codex's request-approval
+/// posture; the UI and CLI only select a mode, they do not bypass this gate.
+/// </summary>
 public sealed class DefaultToolPolicyGate : IToolPolicyGate
 {
-    public bool IsTrustedMode { get; private set; }
+    public AiPermissionMode Mode { get; private set; } = AiPermissionMode.RequestApproval;
 
-    public void SetTrustedMode(bool trusted) => IsTrustedMode = trusted;
+    public void SetMode(AiPermissionMode mode) => Mode = mode;
 
     public ValueTask<ToolPolicyDecision> EvaluateAsync(
         AiToolDefinition tool, ToolInvocation invocation, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        if (IsTrustedMode) return ValueTask.FromResult(ToolPolicyDecision.Allow());
-
         var payload = invocation.Arguments.ToString();
-        if (LooksDangerous(tool.Name, payload))
-            return ValueTask.FromResult(ToolPolicyDecision.Deny("操作命中危险模式，默认策略拒绝执行。"));
+        if (LooksIrrecoverablyDestructive(tool.Name, payload))
+            return ValueTask.FromResult(ToolPolicyDecision.Deny("操作命中不可恢复的系统破坏模式，已拒绝执行。"));
 
-        return ValueTask.FromResult(tool.Risk switch
+        var decision = Mode switch
         {
-            AiToolRisk.ReadOnly => ToolPolicyDecision.Allow(),
-            AiToolRisk.Mutating => ToolPolicyDecision.Confirm($"Tool '{tool.Name}' changes external state."),
-            _ => ToolPolicyDecision.Deny($"Tool '{tool.Name}' is classified as dangerous.")
-        });
+            AiPermissionMode.RequestApproval => tool.Risk == AiToolRisk.ReadOnly
+                ? ToolPolicyDecision.Allow()
+                : ToolPolicyDecision.Confirm($"'{tool.Name}' may change external state or use the network."),
+            AiPermissionMode.HelpApproval => tool.Risk == AiToolRisk.Dangerous
+                ? ToolPolicyDecision.Confirm($"'{tool.Name}' is classified as high risk." )
+                : ToolPolicyDecision.Allow(),
+            AiPermissionMode.FullAccess => ToolPolicyDecision.Allow(),
+            _ => ToolPolicyDecision.Confirm("Unknown Agent permission mode.")
+        };
+
+        return ValueTask.FromResult(decision);
     }
 
-    private static bool LooksDangerous(string toolName, string payload)
+    private static bool LooksIrrecoverablyDestructive(string toolName, string payload)
     {
         var text = (toolName + " " + payload).ToLowerInvariant();
         string[] patterns =
         [
             "rm -rf", "remove-item", "format ", "format.com", "diskpart",
-            "shutdown ", "reboot ", "chmod 777", "takeown ", "reg delete",
-            "credential", "api_key", "private key"
+            "reg delete", "cipher /w", "clear-disk", "remove-partition"
         ];
         return Array.Exists(patterns, text.Contains);
     }

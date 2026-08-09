@@ -34,7 +34,7 @@ public sealed class TerminalModule : IModule
         {
             Region = DockPosition.Bottom,
             TabId = "system-shell",
-            Title = "System Shell",
+            Title = "系统 Shell（外部命令）",
             IconKey = "SemiIconTerminal",
             IsClosable = false,
             Order = 1,
@@ -44,7 +44,7 @@ public sealed class TerminalModule : IModule
                 return new DockTabItemViewModel
                 {
                     Id = "system-shell",
-                    Title = view.ShellName,
+                    Title = "系统 Shell（外部命令）",
                     Content = TabContent.NonReloadable(view)
                 };
             }
@@ -54,14 +54,14 @@ public sealed class TerminalModule : IModule
         {
             Region = DockPosition.Bottom,
             TabId = "console-repl",
-            Title = "控制台命令",
+            Title = "控制台命令（Hackermes）",
             IconKey = "SemiIconTerminal",
             IsClosable = false,
             Order = 2,
             CreateTab = () => new DockTabItemViewModel
             {
                 Id = "console-repl",
-                Title = "控制台命令",
+                Title = "控制台命令（Hackermes）",
                 Content = new ConsoleReplView { DataContext = new ConsoleReplViewModel(commands, eventBus, shellService) }
             }
         });

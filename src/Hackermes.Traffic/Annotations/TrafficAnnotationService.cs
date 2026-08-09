@@ -14,6 +14,7 @@ public interface ITrafficAnnotationService
     IReadOnlyList<TrafficAnnotation> GetAll();
     IReadOnlyList<TrafficAnnotation> Query(TrafficAnnotationQuery query);
     TrafficAnnotation Update(string packetId, TrafficAnnotationUpdate update);
+    IReadOnlyList<TrafficAnnotation> UpdateMany(IReadOnlyList<string> packetIds, TrafficAnnotationUpdate update);
     bool Delete(string packetId);
     int PruneMissingPackets();
     void Reload();
@@ -113,6 +114,39 @@ public sealed class TrafficAnnotationService : ITrafficAnnotationService
         var snapshot = Clone(changed);
         Changed?.Invoke(new TrafficAnnotationChanged("update", packetId, snapshot));
         return snapshot;
+    }
+
+    public IReadOnlyList<TrafficAnnotation> UpdateMany(IReadOnlyList<string> packetIds, TrafficAnnotationUpdate update)
+    {
+        ArgumentNullException.ThrowIfNull(packetIds);
+        ArgumentNullException.ThrowIfNull(update);
+        var ids = packetIds.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim()).Distinct(StringComparer.Ordinal).Take(500).ToArray();
+        if (ids.Length == 0) return [];
+        foreach (var id in ids)
+            if (_trafficStore.Get(id) is null) throw new KeyNotFoundException($"Traffic item '{id}' was not found.");
+
+        TrafficAnnotation[] changed;
+        lock (_gate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            changed = ids.Select(id =>
+            {
+                var current = _annotations.GetValueOrDefault(id) ?? new TrafficAnnotation(id, false, [], null, TrafficReviewStatus.Unreviewed, now, now, 0);
+                return current with
+                {
+                    Starred = update.Starred ?? current.Starred,
+                    Tags = update.Tags is null ? current.Tags : NormalizeTags(update.Tags),
+                    Note = update.ReplaceNote ? NormalizeNote(update.Note) : current.Note,
+                    Status = update.Status ?? current.Status,
+                    UpdatedAt = now,
+                    Revision = checked(current.Revision + 1)
+                };
+            }).ToArray();
+            CommitLocked(next => { foreach (var annotation in changed) next[annotation.PacketId] = annotation; });
+        }
+        foreach (var annotation in changed)
+            Changed?.Invoke(new TrafficAnnotationChanged("update", annotation.PacketId, Clone(annotation)));
+        return changed.Select(Clone).ToArray();
     }
 
     public bool Delete(string packetId)

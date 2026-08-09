@@ -71,7 +71,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         var pageId = "page-" + Guid.NewGuid().ToString("N")[..8];
 
         var viewModel = new BrowserTabViewModel(pageId, target);
-        var view = new BrowserTabView(viewModel, _eventBus, _registry, _coordinator, _agentInjector, _logger);
+        var view = new BrowserTabView(viewModel, _eventBus, _registry, _coordinator, _agentInjector, _settings, _logger);
 
         var tab = new DockTabItemViewModel
         {

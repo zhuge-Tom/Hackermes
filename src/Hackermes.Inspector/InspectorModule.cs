@@ -98,16 +98,6 @@ public sealed class InspectorModule : IModule
 
         // Security tools stay in the left region; DOM-linked resources are shown
         // in the DOM inspector, and protocol traffic remains in Network/数据包.
-        dock.RegisterTab(new DockTabRegistration
-        {
-            Region = DockPosition.Left, TabId = "security-tools", Title = "Security Tools",
-            IconKey = "SemiIconFolder", IsClosable = false, Order = 0,
-            CreateTab = () => new DockTabItemViewModel
-            {
-                Id = "security-tools", Title = "Security Tools",
-                Content = new SecurityToolsView()
-            }
-        });
     }
 
     /// <summary>

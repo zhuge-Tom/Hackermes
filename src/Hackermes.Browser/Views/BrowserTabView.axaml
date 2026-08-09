@@ -6,7 +6,7 @@
   <DockPanel LastChildFill="True">
     <Border DockPanel.Dock="Top" Height="36" Padding="6,0" Background="{DynamicResource PanelBackgroundBrush}"
             BorderBrush="{DynamicResource SemiColorBorder}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto">
         <Button Grid.Column="0" Content="←" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding BackCommand}" ToolTip.Tip="Back" />
         <Button Grid.Column="1" Content="→" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ForwardCommand}" ToolTip.Tip="Forward" />
         <Button Grid.Column="2" Content="↻" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ReloadCommand}" ToolTip.Tip="Reload" />
@@ -14,11 +14,14 @@
                  Text="{Binding AddressText, Mode=TwoWay}">
           <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding NavigateCommand}" /></TextBox.KeyBindings>
         </TextBox>
-        <Panel Grid.Column="4" Width="8" Height="8" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="CDP connection">
+        <Button Name="PART_ProxyButton" Grid.Column="4" MinWidth="62" Margin="2,0" Padding="8,2"
+                Background="Transparent" BorderThickness="0" Click="OnProxyButtonClick"
+                ToolTip.Tip="内部浏览器代理插件（不修改系统代理）" />
+        <Panel Grid.Column="5" Width="8" Height="8" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="CDP connection">
           <Border CornerRadius="4" Background="#4CAF50" IsVisible="{Binding IsCdpReady}" />
           <Border CornerRadius="4" Background="#757575" IsVisible="{Binding !IsCdpReady}" />
         </Panel>
-        <Button Grid.Column="5" Content="CDP test" Padding="8,2" Command="{Binding SelfTestCommand}" ToolTip.Tip="Verify the CDP request-response channel" />
+        <Button Grid.Column="6" Content="CDP test" Padding="8,2" Command="{Binding SelfTestCommand}" ToolTip.Tip="Verify the CDP request-response channel" />
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" MinHeight="20" Padding="8,2" Background="{DynamicResource PanelBackgroundBrush}"

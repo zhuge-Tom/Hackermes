@@ -6,7 +6,9 @@
   <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="8">
     <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
       <TextBlock VerticalAlignment="Center" Text="模型" Margin="0,0,6,0" />
-      <TextBox Grid.Column="1" Text="{Binding Model}" PlaceholderText="模型名称" />
+      <Border Grid.Column="1" Padding="10,7" Background="{DynamicResource SemiColorFill0}" CornerRadius="4">
+        <TextBlock Text="{Binding Model}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+      </Border>
       <Button Grid.Column="2" Margin="6,0,0,0" Content="设置" Click="OpenSettings" />
     </Grid>
     <ScrollViewer Grid.Row="1">

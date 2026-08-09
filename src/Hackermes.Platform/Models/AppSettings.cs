@@ -27,6 +27,32 @@ public sealed class AppSettings
 
     [JsonPropertyName("traffic")]
     public TrafficSettings Traffic { get; set; } = new();
+
+    [JsonPropertyName("securityTools")]
+    public SecurityToolsSettings SecurityTools { get; set; } = new();
+}
+
+/// <summary>Non-sensitive defaults for the authorized local-tool launcher.</summary>
+public sealed class SecurityToolsSettings
+{
+    [JsonPropertyName("primaryToolRoot")]
+    public string PrimaryToolRoot { get; set; } = @"E:\tool";
+
+    [JsonPropertyName("secondaryToolRoot")]
+    public string SecondaryToolRoot { get; set; } = @"F:\racetools";
+
+    [JsonPropertyName("terminalMode")]
+    public string TerminalMode { get; set; } = "Auto";
+
+    [JsonPropertyName("wslDistribution")]
+    public string WslDistribution { get; set; } = string.Empty;
+
+    [JsonPropertyName("workingDirectory")]
+    public string WorkingDirectory { get; set; } = string.Empty;
+
+    [JsonPropertyName("defaultTimeoutSeconds")]
+    public int DefaultTimeoutSeconds { get; set; } = 120;
+
 }
 
 /// <summary>Non-sensitive traffic UI state. Packet and rule contents are never stored here.</summary>
@@ -95,7 +121,21 @@ public sealed class LayoutSettings
 public sealed class BrowserSettings
 {
     [JsonPropertyName("homePage")]
-    public string HomePage { get; set; } = "about:blank";
+    public string HomePage { get; set; } = "https://www.bing.com/";
+
+    /// <summary>
+    /// Proxy mode used only by Hackermes' embedded browser. Supported values are
+    /// <c>direct</c> and <c>burp</c>; it never changes the operating-system proxy.
+    /// </summary>
+    [JsonPropertyName("proxyMode")]
+    public string ProxyMode { get; set; } = "direct";
+
+    /// <summary>
+    /// Removes only explicitly catalogued page telemetry before it reaches an
+    /// intercepting proxy. It does not filter ordinary site requests.
+    /// </summary>
+    [JsonPropertyName("suppressKnownTelemetry")]
+    public bool SuppressKnownTelemetry { get; set; } = true;
 
     /// <summary>是否注入 Page Agent。关闭后仍可用 CDP 只读能力,属于降级而非失效。</summary>
     [JsonPropertyName("pageAgentEnabled")]
@@ -107,7 +147,7 @@ public sealed class BrowserSettings
 
     /// <summary>网络记录保留的响应体大小上限,超过只存元数据。</summary>
     [JsonPropertyName("maxCapturedBodyBytes")]
-    public int MaxCapturedBodyBytes { get; set; } = 2 * 1024 * 1024;
+    public int MaxCapturedBodyBytes { get; set; } = 512 * 1024;
 }
 
 public sealed class TerminalSettings
@@ -128,18 +168,58 @@ public sealed class AiSettings
     [JsonPropertyName("endpoint")]
     public string Endpoint { get; set; } = "https://api.openai.com/v1";
 
+    /// <summary>
+    /// OpenAI-compatible chat route, kept separate from the base URL so private
+    /// gateways can expose a custom route without changing client code.
+    /// </summary>
+    [JsonPropertyName("chatCompletionsPath")]
+    public string ChatCompletionsPath { get; set; } = "/chat/completions";
+
     [JsonPropertyName("model")]
     public string Model { get; set; } = "gpt-5-mini";
 
-    /// <summary>显式信任模式；默认关闭。API Key 始终存放在 ISecretStore。</summary>
+    /// <summary>
+    /// Legacy compatibility switch. Existing installs with this flag enabled migrate to
+    /// <see cref="AiPermissionMode.FullAccess"/> when settings are next normalized.
+    /// </summary>
     [JsonPropertyName("trustedMode")]
     public bool TrustedMode { get; set; }
+
+    /// <summary>Agent capability policy. Defaults to per-operation approval.</summary>
+    [JsonPropertyName("permissionMode")]
+    public AiPermissionMode PermissionMode { get; set; } = AiPermissionMode.RequestApproval;
 
     [JsonPropertyName("maxToolRounds")]
     public int MaxToolRounds { get; set; } = 12;
 
+    /// <summary>Bounded character budget used when preparing a model request.</summary>
+    [JsonPropertyName("maxContextCharacters")]
+    public int MaxContextCharacters { get; set; } = 24_000;
+
+    /// <summary>Number of recent human/assistant messages retained after compaction.</summary>
+    [JsonPropertyName("maxRecentMessages")]
+    public int MaxRecentMessages { get; set; } = 16;
+
+    [JsonPropertyName("memoryEnabled")]
+    public bool MemoryEnabled { get; set; } = true;
+
+    /// <summary>Maximum size of one HTTPS artifact cached for an approved Agent download.</summary>
+    [JsonPropertyName("maxToolDownloadBytes")]
+    public int MaxToolDownloadBytes { get; set; } = 128 * 1024 * 1024;
+
     [JsonPropertyName("mcpServers")]
     public List<McpServerSettings> McpServers { get; set; } = new();
+}
+
+/// <summary>
+/// Mirrors the three interaction modes exposed by Codex-style agents. The policy gate,
+/// rather than individual tools, owns their enforcement.
+/// </summary>
+public enum AiPermissionMode
+{
+    RequestApproval,
+    HelpApproval,
+    FullAccess
 }
 
 public sealed class McpServerSettings

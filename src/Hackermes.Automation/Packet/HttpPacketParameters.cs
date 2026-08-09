@@ -61,6 +61,19 @@ public static class HttpPacketParameters
         };
     }
 
+    public static IReadOnlyList<JsonPointerEntry> ReadJsonPointers(HttpPacket packet, int maximumDepth = BoundedJsonPointer.DefaultMaximumDepth,
+        int maximumEntries = BoundedJsonPointer.DefaultMaximumEntries)
+    {
+        RequireJson(packet);
+        return BoundedJsonPointer.Read(packet.Body, maximumDepth, maximumEntries);
+    }
+
+    public static HttpPacket SetJsonPointer(HttpPacket packet, string pointer, string value)
+    {
+        RequireJson(packet);
+        return packet with { Body = BoundedJsonPointer.Set(packet.Body, pointer, value) };
+    }
+
     private static HttpPacket SetHeader(HttpPacket packet, string name, int occurrence, string value)
     {
         ValidateHeaderValue(value);
@@ -276,6 +289,14 @@ public static class HttpPacketParameters
         var actual = packet.HeaderValues("Content-Type").FirstOrDefault()?.Split(';')[0].Trim();
         if (!expected.Equals(actual, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"{location} parameter editing requires Content-Type {expected}.");
+    }
+
+    private static void RequireJson(HttpPacket packet)
+    {
+        var mediaType = packet.HeaderValues("Content-Type").FirstOrDefault()?.Split(';')[0].Trim();
+        if (mediaType?.Equals("application/json", StringComparison.OrdinalIgnoreCase) != true &&
+            mediaType?.EndsWith("+json", StringComparison.OrdinalIgnoreCase) != true)
+            throw new InvalidDataException("JSON Pointer editing requires an application/json or +json Content-Type.");
     }
 
     private static KeyNotFoundException Missing(HttpParameterLocation location, string name, int occurrence) =>

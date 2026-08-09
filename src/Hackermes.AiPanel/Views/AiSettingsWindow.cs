@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
+using Hackermes.AiPanel.Agent;
 using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Tools;
 using Hackermes.Platform.Events;
@@ -8,6 +10,7 @@ using Hackermes.Platform.Models;
 using Hackermes.Platform.Services;
 using System;
 using System.Linq;
+using System.Threading;
 
 namespace Hackermes.AiPanel.Views;
 
@@ -17,91 +20,255 @@ public sealed class AiSettingsWindow : Window
     private readonly ISecretStore _secrets;
     private readonly OpenAiCompatibleClient _client;
     private readonly DefaultToolPolicyGate _policy;
+    private readonly IAgentSkillStore _skills;
+
     private readonly ComboBox _provider = new();
-    private readonly TextBox _endpoint = new();
-    private readonly TextBox _model = new();
+    private readonly TextBox _endpoint = new() { PlaceholderText = "https://example.com/v1" };
+    private readonly ComboBox _model = new() { PlaceholderText = "请先测试连接并获取模型" };
     private readonly TextBox _apiKey = new() { PasswordChar = '●' };
-    private readonly CheckBox _trusted = new() { Content = "信任模式（允许工具修改页面；请谨慎启用）" };
+    private readonly ComboBox _permission = new();
     private readonly NumericUpDown _rounds = new() { Minimum = 1, Maximum = 50, Increment = 1 };
-    private readonly TextBlock _error = new() { Foreground = Avalonia.Media.Brushes.IndianRed, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+    private readonly NumericUpDown _contextCharacters = new() { Minimum = 4_000, Maximum = 120_000, Increment = 1_000 };
+    private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly Button _testButton = new() { Content = "测试连接", MinWidth = 92 };
 
     public string SavedModel { get; private set; } = string.Empty;
 
-    public AiSettingsWindow(ISettingsService settings, ISecretStore secrets, OpenAiCompatibleClient client, DefaultToolPolicyGate policy)
+    public AiSettingsWindow(
+        ISettingsService settings,
+        ISecretStore secrets,
+        OpenAiCompatibleClient client,
+        DefaultToolPolicyGate policy,
+        IAgentSkillStore skills)
     {
-        _settings = settings; _secrets = secrets; _client = client; _policy = policy;
-        Title = "AI 助手设置"; Width = 560; Height = 520; MinWidth = 480; MinHeight = 450;
+        _settings = settings;
+        _secrets = secrets;
+        _client = client;
+        _policy = policy;
+        _skills = skills;
+
+        Title = "AI 助手设置";
+        Width = 650;
+        Height = 760;
+        MinWidth = 520;
+        MinHeight = 520;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
         _provider.ItemsSource = AiProviderPresets.All;
+        _permission.ItemsSource = PermissionOption.All;
         _provider.SelectionChanged += (_, _) => ApplyPreset();
+        _testButton.Click += async (_, _) => await TestConnectionAsync();
+
         Content = BuildContent();
         LoadCurrent();
     }
 
     private Control BuildContent()
     {
-        var form = new StackPanel { Spacing = 8 };
-        form.Children.Add(Field("API 类型", _provider));
-        form.Children.Add(Field("API Endpoint", _endpoint));
-        form.Children.Add(Field("模型名称", _model));
-        form.Children.Add(Field("API Key", _apiKey));
-        form.Children.Add(new TextBlock { Text = "API Key 使用当前 Windows 用户的 DPAPI 加密保存，不会写入 settings.json。", Opacity = .65, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
-        form.Children.Add(Field("最大工具轮数", _rounds));
-        form.Children.Add(_trusted);
-        form.Children.Add(_error);
+        var tabs = new TabControl
+        {
+            ItemsSource = new object[]
+            {
+                new TabItem { Header = "模型与 API", Content = BuildApiPage() },
+                new TabItem { Header = "Skills", Content = new AgentSkillSettingsView(_skills) }
+            }
+        };
+
         var cancel = new Button { Content = "取消", MinWidth = 80 };
         cancel.Click += (_, _) => Close(false);
         var save = new Button { Content = "保存", MinWidth = 80 };
         save.Click += (_, _) => Save();
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, save } };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 12, 0, 0),
+            Children = { cancel, save }
+        };
+
         var root = new DockPanel { Margin = new Thickness(18) };
-        DockPanel.SetDock(actions, Dock.Bottom); root.Children.Add(actions);
-        root.Children.Add(new ScrollViewer { Content = form });
+        DockPanel.SetDock(actions, Dock.Bottom);
+        root.Children.Add(actions);
+        root.Children.Add(tabs);
         return root;
+    }
+
+    private Control BuildApiPage()
+    {
+        var form = new StackPanel { Spacing = 9, Margin = new Thickness(4, 10, 4, 4) };
+        form.Children.Add(new TextBlock
+        {
+            Text = "选择常用服务，或使用“自定义”填写任意 OpenAI 兼容 Base URL。Chat 与模型接口按 OpenAI 标准自动解析。",
+            Opacity = .68,
+            TextWrapping = TextWrapping.Wrap
+        });
+        form.Children.Add(Field("API 类型", _provider));
+        form.Children.Add(Field("API URL", _endpoint));
+        form.Children.Add(Field("API Key", _apiKey));
+        form.Children.Add(new TextBlock
+        {
+            Text = "API Key 使用当前 Windows 用户的 DPAPI 加密保存，不写入 settings.json。",
+            Opacity = .65,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var testRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            Children = { _testButton, _status }
+        };
+        form.Children.Add(testRow);
+        form.Children.Add(Field("可用模型", _model));
+        form.Children.Add(new Border { Height = 1, Margin = new Thickness(0, 4), Background = Brushes.Gray, Opacity = .18 });
+        form.Children.Add(new TextBlock { Text = "Agent 运行", FontWeight = FontWeight.SemiBold, FontSize = 15 });
+        form.Children.Add(Field("最大工具轮数", _rounds));
+        form.Children.Add(Field("权限模式", _permission));
+        form.Children.Add(new TextBlock
+        {
+            Text = "请求批准：网络和修改操作会询问；帮我批准：仅风险操作询问；完全访问：允许已注册工具。不可恢复的破坏操作仍会被拒绝。",
+            Opacity = .65,
+            TextWrapping = TextWrapping.Wrap
+        });
+        form.Children.Add(Field("上下文上限（字符）", _contextCharacters));
+        form.Children.Add(new TextBlock
+        {
+            Text = "上下文压缩与持久记忆由系统内部自动管理，不保存 API Key 或工具原始敏感数据。",
+            Opacity = .65,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        return new ScrollViewer { Content = form };
     }
 
     private static Control Field(string label, Control editor) => new StackPanel
     {
         Spacing = 4,
-        Children = { new TextBlock { Text = label, FontWeight = Avalonia.Media.FontWeight.SemiBold }, editor }
+        Children = { new TextBlock { Text = label, FontWeight = FontWeight.SemiBold }, editor }
     };
 
     private void LoadCurrent()
     {
         var value = _settings.Load().Ai;
         _provider.SelectedItem = AiProviderPresets.All.FirstOrDefault(p =>
-            value.Endpoint.TrimEnd('/').Equals(p.Endpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) ?? AiProviderPresets.All[^1];
-        // Selection applies a preset, so restore the user's persisted values afterwards.
-        _endpoint.Text = value.Endpoint; _model.Text = value.Model;
+            p.Endpoint.Length > 0 && value.Endpoint.TrimEnd('/').Equals(p.Endpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            ?? AiProviderPresets.All.First(p => p.Id == "custom");
+
+        // Selecting a preset updates the fields, so persisted values are restored afterwards.
+        _endpoint.Text = value.Endpoint;
+        SetModels([value.Model], value.Model);
         _apiKey.Text = _secrets.Get("ai.apiKey") ?? string.Empty;
-        _trusted.IsChecked = value.TrustedMode; _rounds.Value = value.MaxToolRounds;
+        _permission.SelectedItem = PermissionOption.All.First(option => option.Mode == value.PermissionMode);
+        _rounds.Value = value.MaxToolRounds;
+        _contextCharacters.Value = value.MaxContextCharacters;
     }
 
     private void ApplyPreset()
     {
-        if (_provider.SelectedItem is not AiProviderPreset preset || preset.Id == "custom") return;
-        _endpoint.Text = preset.Endpoint; _model.Text = preset.DefaultModel;
+        if (_provider.SelectedItem is not AiProviderPreset preset) return;
+        if (preset.Id != "custom") _endpoint.Text = preset.Endpoint;
+        SetModels([], null);
+        SetStatus(string.Empty, false);
+    }
+
+    private async System.Threading.Tasks.Task TestConnectionAsync()
+    {
+        try
+        {
+            var modelsEndpoint = AiProviderPresets.ResolveModelsEndpoint((_endpoint.Text ?? string.Empty).Trim());
+            _testButton.IsEnabled = false;
+            _status.Foreground = Brushes.DodgerBlue;
+            _status.Text = "正在连接并读取模型…";
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var previous = _model.SelectedItem as string;
+            var models = await _client.ListModelsAsync(modelsEndpoint, EmptyToNull(_apiKey.Text), timeout.Token);
+            if (models.Count == 0) throw new InvalidOperationException("连接成功，但服务没有返回可用模型。");
+            SetModels(models, previous);
+            SetStatus($"连接成功，已获取 {models.Count} 个模型。", true);
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("连接超时，请检查地址、网络或服务状态。", false);
+        }
+        catch (Exception exception)
+        {
+            SetStatus("连接失败：" + exception.Message, false);
+        }
+        finally
+        {
+            _testButton.IsEnabled = true;
+        }
     }
 
     private void Save()
     {
         try
         {
-            var endpoint = (_endpoint.Text ?? string.Empty).Trim();
-            var model = (_model.Text ?? string.Empty).Trim();
-            if (model.Length == 0) throw new ArgumentException("模型名称不能为空。");
+            var endpoint = (_endpoint.Text ?? string.Empty).Trim().TrimEnd('/');
             var resolved = AiProviderPresets.ResolveChatEndpoint(endpoint);
+            var model = RequiredModel();
             var rounds = (int)(_rounds.Value ?? 12);
+            var contextCharacters = (int)(_contextCharacters.Value ?? 24_000);
+            var permission = (_permission.SelectedItem as PermissionOption)?.Mode ?? AiPermissionMode.RequestApproval;
+
             _settings.Update(s =>
             {
-                s.Ai.Endpoint = endpoint.TrimEnd('/'); s.Ai.Model = model;
-                s.Ai.TrustedMode = _trusted.IsChecked == true; s.Ai.MaxToolRounds = rounds;
+                s.Ai.Endpoint = endpoint;
+                s.Ai.ChatCompletionsPath = "/chat/completions";
+                s.Ai.Model = model;
+                s.Ai.TrustedMode = false;
+                s.Ai.PermissionMode = permission;
+                s.Ai.MaxToolRounds = rounds;
+                s.Ai.MaxContextCharacters = contextCharacters;
+                // Memory is an internal invariant, no longer a user-facing toggle.
+                s.Ai.MemoryEnabled = true;
             }, SettingsSection.Ai);
             _secrets.Set("ai.apiKey", _apiKey.Text);
-            _client.Endpoint = resolved; _client.ApiKey = string.IsNullOrWhiteSpace(_apiKey.Text) ? null : _apiKey.Text;
-            _policy.SetTrustedMode(_trusted.IsChecked == true);
-            SavedModel = model; Close(true);
+            _client.Endpoint = resolved;
+            _client.ApiKey = EmptyToNull(_apiKey.Text);
+            _policy.SetMode(permission);
+            SavedModel = model;
+            Close(true);
         }
-        catch (Exception exception) { _error.Text = exception.Message; }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message, false);
+        }
+    }
+
+    private string RequiredModel()
+    {
+        var model = (_model.SelectedItem as string ?? string.Empty).Trim();
+        if (model.Length == 0) throw new ArgumentException("请先测试连接并选择一个可用模型。");
+        return model;
+    }
+
+    private void SetModels(System.Collections.Generic.IEnumerable<string> models, string? preferred)
+    {
+        var values = models.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).ToArray();
+        _model.ItemsSource = values;
+        _model.SelectedItem = values.FirstOrDefault(value => string.Equals(value, preferred, StringComparison.Ordinal))
+                              ?? values.FirstOrDefault();
+    }
+
+    private void SetStatus(string text, bool success)
+    {
+        _status.Text = text;
+        _status.Foreground = success ? Brushes.SeaGreen : Brushes.IndianRed;
+    }
+
+    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record PermissionOption(AiPermissionMode Mode, string Label)
+    {
+        public static readonly PermissionOption[] All =
+        [
+            new(AiPermissionMode.RequestApproval, "请求批准（默认）"),
+            new(AiPermissionMode.HelpApproval, "帮我批准"),
+            new(AiPermissionMode.FullAccess, "完全访问权限")
+        ];
+
+        public override string ToString() => Label;
     }
 }

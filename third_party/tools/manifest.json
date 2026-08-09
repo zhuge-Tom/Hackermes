@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "id": "python-cpython-3.11.14",
+    "path": "_runtime/python/python.exe",
+    "source": "python-build-standalone distribution managed by uv",
+    "licenseFiles": ["_runtime/python/LICENSE.txt"]
+  },
+  "tools": [
+    {
+      "id": "crypto.ctf",
+      "version": "7.3-20260506",
+      "source": "user-supplied local binary",
+      "license": "redistribution-unverified",
+      "entryPoint": "[随波逐流]CTF编码工具 V7.3 20260506.exe"
+    },
+    {
+      "id": "recon.nmap.terminal",
+      "version": "7.99",
+      "source": "https://nmap.org/",
+      "license": "NPSL-0.95",
+      "licenseFiles": ["LICENSE", "3rd-party-licenses.txt"],
+      "entryPoint": "nmap.exe"
+    },
+    {
+      "id": "recon.dirsearch.terminal",
+      "version": "1d00d2f2964e45884e4c7415739bb0a8dcf6cacd",
+      "source": "https://github.com/maurosoria/dirsearch",
+      "license": "GPL-2.0-only",
+      "licenseFiles": ["LICENSE"],
+      "entryPoint": "dirsearch.py"
+    },
+    {
+      "id": "recon.layer",
+      "version": "5.0-local",
+      "source": "user-supplied local binary",
+      "license": "redistribution-unverified",
+      "entryPoint": "Layer.exe"
+    },
+    {
+      "id": "detect.wafw00f.terminal",
+      "version": "2.4.2-local",
+      "source": "https://github.com/EnableSecurity/wafw00f",
+      "license": "BSD-3-Clause",
+      "licenseFiles": ["LICENSE"],
+      "entryPoint": "wafw00f/main.py"
+    },
+    {
+      "id": "exploit.xss-fuzzer.terminal",
+      "version": "820b9d13959998425396bd36e34d4d643bbf54a6",
+      "source": "https://github.com/Asperis-Security/xssFuzz",
+      "license": "GPL-3.0-only",
+      "licenseFiles": ["LICENSE"],
+      "entryPoint": "xssFuzz.py"
+    },
+    {
+      "id": "detect.unauthorized.terminal",
+      "version": "local-source",
+      "source": "user-supplied local source",
+      "license": "redistribution-unverified",
+      "entryPoint": "Unauthorized-Vul.py"
+    },
+    {
+      "id": "exploit.sqlmap.terminal",
+      "version": "1.10.6.64-dev-local",
+      "source": "https://github.com/sqlmapproject/sqlmap",
+      "license": "GPL-2.0-or-later-with-clarifications",
+      "licenseFiles": ["LICENSE"],
+      "entryPoint": "sqlmap.py"
+    },
+    {
+      "id": "exploit.dnslog-sqli.terminal",
+      "version": "1.1-python3-compat",
+      "source": "https://github.com/ADOOO/DnslogSqlinj",
+      "license": "redistribution-unverified",
+      "entryPoint": "dnslogSql.py"
+    }
+  ]
+}

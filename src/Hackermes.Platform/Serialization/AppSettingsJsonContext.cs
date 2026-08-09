@@ -16,6 +16,7 @@ namespace Hackermes.Platform.Serialization;
 [JsonSerializable(typeof(AiSettings))]
 [JsonSerializable(typeof(McpServerSettings))]
 [JsonSerializable(typeof(TrafficSettings))]
+[JsonSerializable(typeof(SecurityToolsSettings))]
 public partial class AppSettingsJsonContext : JsonSerializerContext
 {
 }

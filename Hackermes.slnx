@@ -11,6 +11,8 @@
     <Project Path="src/Hackermes.Terminal/Hackermes.Terminal.csproj" />
     <Project Path="src/Hackermes.AiPanel/Hackermes.AiPanel.csproj" />
     <Project Path="src/Hackermes.Traffic/Hackermes.Traffic.csproj" />
+    <Project Path="src/Hackermes.Assessment/Hackermes.Assessment.csproj" />
+    <Project Path="src/Hackermes.ToolHost/Hackermes.ToolHost.csproj" />
     <Project Path="src/Hackermes.App/Hackermes.App.csproj" />
   </Folder>
   <Folder Name="/tests/">

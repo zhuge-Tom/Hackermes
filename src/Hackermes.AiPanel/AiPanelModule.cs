@@ -1,4 +1,5 @@
 using Hackermes.AiPanel.Mcp;
+using Hackermes.AiPanel.Agent;
 using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Tools;
 using Hackermes.AiPanel.ViewModels;
@@ -27,6 +28,11 @@ public sealed class AiPanelModule : IModule
         services.AddSingleton<IToolConfirmationService, AvaloniaToolConfirmationService>();
         services.AddSingleton<AiToolDispatcher>();
         services.AddSingleton<HttpClient>();
+        services.AddSingleton<IAgentSkillStore, AgentSkillStore>();
+        services.AddSingleton<IAgentMemoryStore, AgentMemoryStore>();
+        services.AddSingleton<AgentContextCompactor>();
+        services.AddSingleton<IAgentArtifactStore, AgentArtifactStore>();
+        services.AddSingleton<AgentWorkflowToolAdapter>();
         services.AddSingleton<OpenAiCompatibleClient>();
         services.AddSingleton<IOpenAiChatClient>(sp => sp.GetRequiredService<OpenAiCompatibleClient>());
         services.AddSingleton<StdioMcpBridge>();
@@ -38,13 +44,23 @@ public sealed class AiPanelModule : IModule
     {
         var aiSettings = serviceProvider.GetRequiredService<ISettingsService>().Load().Ai;
         var client = serviceProvider.GetRequiredService<OpenAiCompatibleClient>();
-        client.Endpoint = AiProviderPresets.ResolveChatEndpoint(aiSettings.Endpoint);
+        client.Endpoint = AiProviderPresets.ResolveChatEndpoint(aiSettings.Endpoint, aiSettings.ChatCompletionsPath);
         client.ApiKey = serviceProvider.GetRequiredService<ISecretStore>().Get("ai.apiKey");
-        serviceProvider.GetRequiredService<DefaultToolPolicyGate>().SetTrustedMode(aiSettings.TrustedMode);
+        serviceProvider.GetRequiredService<DefaultToolPolicyGate>().SetMode(aiSettings.PermissionMode);
+
+        AgentWorkflowCommandRegistrar.Register(
+            serviceProvider.GetRequiredService<Hackermes.Automation.Commands.CommandRegistry>(),
+            serviceProvider.GetRequiredService<ISettingsService>(),
+            serviceProvider.GetRequiredService<DefaultToolPolicyGate>(),
+            serviceProvider.GetRequiredService<IAgentSkillStore>(),
+            serviceProvider.GetRequiredService<IAgentMemoryStore>(),
+            serviceProvider.GetRequiredService<IAgentArtifactStore>());
 
         serviceProvider.GetRequiredService<CommandToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<InspectionToolAdapter>()
+            .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        serviceProvider.GetRequiredService<AgentWorkflowToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         _ = serviceProvider.GetRequiredService<McpToolAdapter>().InitializeAsync(aiSettings);
 
@@ -65,14 +81,19 @@ public sealed class AiPanelModule : IModule
                     serviceProvider.GetRequiredService<ISettingsService>(),
                     serviceProvider.GetRequiredService<ISecretStore>(),
                     client,
-                    serviceProvider.GetRequiredService<DefaultToolPolicyGate>())
+                    serviceProvider.GetRequiredService<DefaultToolPolicyGate>(),
+                    serviceProvider.GetRequiredService<IAgentSkillStore>(),
+                    serviceProvider.GetRequiredService<IAgentMemoryStore>())
                 {
                     DataContext = new AiChatViewModel(
                         serviceProvider.GetRequiredService<IOpenAiChatClient>(),
                         serviceProvider.GetRequiredService<IAiToolRegistry>(),
                         serviceProvider.GetRequiredService<AiToolDispatcher>(),
                         serviceProvider.GetRequiredService<IEventBus>(),
-                        aiSettings.MaxToolRounds)
+                        serviceProvider.GetRequiredService<ISettingsService>(),
+                        serviceProvider.GetRequiredService<IAgentSkillStore>(),
+                        serviceProvider.GetRequiredService<IAgentMemoryStore>(),
+                        serviceProvider.GetRequiredService<AgentContextCompactor>())
                     {
                         Model = aiSettings.Model
                     }

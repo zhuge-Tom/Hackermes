@@ -26,7 +26,7 @@
                  Name="PART_Input"
                  FontFamily="Consolas,monospace"
                  FontSize="12"
-                 PlaceholderText="输入命令,help 查看全部"
+                 PlaceholderText="Hackermes 命令，例如：assessment tools"
                  Text="{Binding Input, Mode=TwoWay}"
                  IsEnabled="{Binding !IsBusy}">
           <TextBox.KeyBindings>
