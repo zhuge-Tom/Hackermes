@@ -46,22 +46,29 @@ def sha256(path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--windows", type=Path, required=True)
-    parser.add_argument("--linux", type=Path, required=True)
+    parser.add_argument("--windows", type=Path)
+    parser.add_argument("--linux", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
-    windows_archive = args.output / f"Hackermes-{args.version}-windows-x64.zip"
-    linux_archive = args.output / f"Hackermes-{args.version}-linux-x64.tar.gz"
-    create_zip(args.windows, windows_archive)
-    create_tar(args.linux, linux_archive)
+    if args.windows is None and args.linux is None:
+        parser.error("at least one of --windows or --linux is required")
+
+    archives: list[Path] = []
+    if args.windows is not None:
+        windows_archive = args.output / f"Hackermes-{args.version}-windows-x64.zip"
+        create_zip(args.windows, windows_archive)
+        archives.append(windows_archive)
+    if args.linux is not None:
+        linux_archive = args.output / f"Hackermes-{args.version}-linux-x64.tar.gz"
+        create_tar(args.linux, linux_archive)
+        archives.append(linux_archive)
 
     checksum_file = args.output / "SHA256SUMS.txt"
     checksum_file.write_text(
-        f"{sha256(windows_archive)}  {windows_archive.name}\n"
-        f"{sha256(linux_archive)}  {linux_archive.name}\n",
+        "".join(f"{sha256(archive)}  {archive.name}\n" for archive in archives),
         encoding="utf-8",
         newline="\n",
     )

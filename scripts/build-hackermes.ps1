@@ -198,8 +198,7 @@ function Build-HackermesProject {
     )
 
     $projectPath = Join-Path $projectRoot "src\$Name\$Name.csproj"
-    $extension = if ($Name -in @('Hackermes.App', 'Hackermes.ToolHost')) { '.dll' } else { '.bin' }
-    $assemblyPath = Join-Path $buildRoot "bin\$Name\Debug\net10.0\$Name$extension"
+    $assemblyPath = Join-Path $buildRoot "bin\$Name\Debug\net10.0\$Name.dll"
     $maximumAttempts = if ($Name -eq 'Hackermes.App') { 20 } else { 8 }
 
     for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
@@ -273,46 +272,8 @@ foreach ($name in $buildOrder) {
     Build-HackermesProject -Name $name
 }
 
-# The compiler-facing project assemblies use .bin so 360rp.exe does not seize
-# them between project builds.  CoreCLR requires managed runtime assets to use
-# .dll/.exe extensions, so stage DLL-named copies only after compilation is
-# complete and update the generated dependency manifest accordingly.
 $runtimeDirectory = Split-Path -Parent $executable
 $runtimeLibraries = $buildOrder | Where-Object { $_ -notin @('Hackermes.App', 'Hackermes.ToolHost') }
-foreach ($name in $runtimeLibraries) {
-    $source = Join-Path $runtimeDirectory "$name.bin"
-    $destination = Join-Path $runtimeDirectory "$name.dll"
-    $copied = $false
-
-    for ($attempt = 1; $attempt -le 20; $attempt++) {
-        try {
-            Copy-Item -LiteralPath $source -Destination $destination -Force
-            $copied = $true
-            break
-        }
-        catch [System.IO.IOException] {
-            if ($attempt -lt 20) { Start-Sleep -Seconds 2 }
-        }
-    }
-
-    if (-not $copied) { throw "Could not stage runtime assembly: $destination" }
-}
-
-$depsPath = Join-Path $runtimeDirectory 'Hackermes.App.deps.json'
-$deps = Get-Content -LiteralPath $depsPath -Raw
-foreach ($name in $runtimeLibraries) {
-    $deps = $deps.Replace("${name}.bin", "${name}.dll")
-}
-[System.IO.File]::WriteAllText($depsPath, $deps, [System.Text.UTF8Encoding]::new($false))
-
-$toolHostDepsPath = Join-Path $runtimeDirectory 'Hackermes.ToolHost.deps.json'
-if (Test-Path -LiteralPath $toolHostDepsPath) {
-    $toolHostDeps = Get-Content -LiteralPath $toolHostDepsPath -Raw
-    foreach ($name in $runtimeLibraries) {
-        $toolHostDeps = $toolHostDeps.Replace("${name}.bin", "${name}.dll")
-    }
-    [System.IO.File]::WriteAllText($toolHostDepsPath, $toolHostDeps, [System.Text.UTF8Encoding]::new($false))
-}
 
 # Stage redistributable third-party tools beside the application. The catalog
 # resolves this application-relative directory before any legacy E:/F: roots.

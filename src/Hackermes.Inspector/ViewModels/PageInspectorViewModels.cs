@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Hackermes.Base.Mvvm;
 using Hackermes.Inspector.Services;
+using Hackermes.Platform.Registries;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -37,7 +38,7 @@ public abstract partial class PageInspectorViewModelBase : ViewModelBase
     protected override void OnDispose() { _operation?.Cancel(); _operation?.Dispose(); }
 }
 
-public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase
+public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase, ITabActivationAware
 {
     private readonly PageInspectionService _inspection;
     private readonly Dictionary<string, DomTreeNodeViewModel> _nodesByKey = new(StringComparer.Ordinal);
@@ -69,6 +70,14 @@ public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase
         _inspection.PickerMessageReceived += OnPickerMessageReceived;
         _inspection.PageNavigated += OnPageNavigated;
     }
+
+    /// <summary>
+    /// A DOM snapshot is deliberately refreshed whenever the tab becomes visible. DOM nodes are
+    /// live page objects, so restoring an old hidden-tab snapshot would be misleading.
+    /// </summary>
+    public void OnTabActivated() => _ = ActivateAsync();
+
+    public Task ActivateAsync() => RefreshCommand.ExecuteAsync(null);
 
     partial void OnSelectedItemChanged(DomTreeNodeViewModel? value)
     {
@@ -251,7 +260,7 @@ public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase
         SelectedComputedStyles.Clear();
         MatchedCssRules.Clear();
         SelectedItem = null;
-        SelectedNodeTitle = "The page changed. Refresh the DOM tree after it finishes loading.";
+        SelectedNodeTitle = "The page changed. Reopen this tab or press Refresh to load the latest tree.";
         SelectedNodePath = string.Empty;
         EditableCss = string.Empty;
         SelectedCssRule = null;

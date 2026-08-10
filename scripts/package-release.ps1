@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.7.0-alpha.1',
-    [string]$OutputRoot
+    [string]$Version = '0.7.0',
+    [string]$OutputRoot,
+    [ValidateSet('all', 'windows', 'linux')]
+    [string]$Platforms = 'all'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,20 +116,44 @@ function Build-Package {
     return $packageRoot
 }
 
+function Write-ReleaseManifest {
+    param([string]$PackageRoot, [string]$Rid)
+    $appRoot = Join-Path $PackageRoot 'app'
+    $files = @(Get-ChildItem -LiteralPath $appRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+        [ordered]@{
+            path = $_.FullName.Substring($appRoot.Length + 1).Replace('\', '/')
+            size = $_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+    $manifest = [ordered]@{ schemaVersion = 1; version = $Version; rid = $Rid; files = $files }
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $PackageRoot 'release-manifest.json') -Encoding UTF8
+}
+
 Write-Host "Publishing Hackermes $Version..."
 $windowsName = "Hackermes-$Version-windows-x64"
 $linuxName = "Hackermes-$Version-linux-x64"
-$windowsRoot = Build-Package 'win-x64' $windowsName 'Hackermes.ToolHost.exe'
-$linuxRoot = Build-Package 'linux-x64' $linuxName 'Hackermes.ToolHost'
-Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\Install-Hackermes.ps1') -Destination $windowsRoot
-Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\Uninstall-Hackermes.ps1') -Destination $windowsRoot
-Copy-Item -LiteralPath (Join-Path $packagingRoot 'linux\install.sh') -Destination $linuxRoot
-Copy-Item -LiteralPath (Join-Path $packagingRoot 'linux\uninstall.sh') -Destination $linuxRoot
+$windowsRoot = $null
+$linuxRoot = $null
+if ($Platforms -in @('all', 'windows')) {
+    $windowsRoot = Build-Package 'win-x64' $windowsName 'Hackermes.ToolHost.exe'
+    Write-ReleaseManifest $windowsRoot 'win-x64'
+    Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\Install-Hackermes.ps1') -Destination $windowsRoot
+    Copy-Item -LiteralPath (Join-Path $packagingRoot 'windows\Uninstall-Hackermes.ps1') -Destination $windowsRoot
+}
+if ($Platforms -in @('all', 'linux')) {
+    $linuxRoot = Build-Package 'linux-x64' $linuxName 'Hackermes.ToolHost'
+    Write-ReleaseManifest $linuxRoot 'linux-x64'
+    Copy-Item -LiteralPath (Join-Path $packagingRoot 'linux\install.sh') -Destination $linuxRoot
+    Copy-Item -LiteralPath (Join-Path $packagingRoot 'linux\uninstall.sh') -Destination $linuxRoot
+}
 
 $python = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $python) { throw 'Python 3 is required to create deterministic release archives.' }
-& $python.Source (Join-Path $projectRoot 'scripts\create-release-archives.py') `
-    --windows $windowsRoot --linux $linuxRoot --output $versionRoot --version $Version
+$archiveArguments = @((Join-Path $projectRoot 'scripts\create-release-archives.py'), '--output', $versionRoot, '--version', $Version)
+if ($null -ne $windowsRoot) { $archiveArguments += @('--windows', $windowsRoot) }
+if ($null -ne $linuxRoot) { $archiveArguments += @('--linux', $linuxRoot) }
+& $python.Source @archiveArguments
 if ($LASTEXITCODE -ne 0) { throw 'Creating release archives failed.' }
 
 Get-ChildItem -LiteralPath $versionRoot -File | Select-Object Name, Length, LastWriteTime

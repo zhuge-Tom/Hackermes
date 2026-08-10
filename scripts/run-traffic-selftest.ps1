@@ -42,8 +42,7 @@ function Wait-SelfTestAssembly {
 function Build-SelfTestProject {
     param([Parameter(Mandatory)] [string]$Name)
     $projectPath = Join-Path $repoRoot "src\$Name\$Name.csproj"
-    $extension = if ($Name -in @('Hackermes.App', 'Hackermes.ToolHost')) { '.dll' } else { '.bin' }
-    $assemblyPath = Join-Path $buildRoot "bin\$Name\TrafficSelfTest\net10.0\$Name$extension"
+    $assemblyPath = Join-Path $buildRoot "bin\$Name\TrafficSelfTest\net10.0\$Name.dll"
     $maximumAttempts = if ($Name -eq 'Hackermes.App') { 20 } else { 8 }
     for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
         $arguments = @(
@@ -76,43 +75,8 @@ if (-not $NoBuild) {
 }
 if (-not (Test-Path -LiteralPath $appExe)) { throw "Self-test executable not found: $appExe" }
 
-# Compiler-facing project outputs use .bin on this Windows workspace to avoid
-# security-scanner DLL locks. Stage CLR-loadable names immediately before the
-# acceptance process starts, matching the normal launcher.
 $runtimeDirectory = Split-Path -Parent $appExe
 $runtimeLibraries = $buildOrder | Where-Object { $_ -notin @('Hackermes.App', 'Hackermes.ToolHost') }
-foreach ($name in $runtimeLibraries) {
-    $source = Join-Path $runtimeDirectory "$name.bin"
-    $destination = Join-Path $runtimeDirectory "$name.dll"
-    $copied = $false
-    for ($attempt = 1; $attempt -le 20; $attempt++) {
-        try {
-            Copy-Item -LiteralPath $source -Destination $destination -Force
-            $copied = $true
-            break
-        }
-        catch [System.IO.IOException] {
-            if ($attempt -lt 20) { Start-Sleep -Seconds 2 }
-        }
-    }
-    if (-not $copied) { throw "Could not stage self-test runtime assembly: $destination" }
-}
-$depsPath = Join-Path $runtimeDirectory 'Hackermes.App.deps.json'
-if (Test-Path -LiteralPath $depsPath) {
-    $deps = [IO.File]::ReadAllText($depsPath)
-    foreach ($name in $runtimeLibraries) {
-        $deps = $deps.Replace("$name.bin", "$name.dll")
-    }
-    [IO.File]::WriteAllText($depsPath, $deps, [Text.UTF8Encoding]::new($false))
-}
-$toolHostDepsPath = Join-Path $runtimeDirectory 'Hackermes.ToolHost.deps.json'
-if (Test-Path -LiteralPath $toolHostDepsPath) {
-    $toolHostDeps = [IO.File]::ReadAllText($toolHostDepsPath)
-    foreach ($name in $runtimeLibraries) {
-        $toolHostDeps = $toolHostDeps.Replace("$name.bin", "$name.dll")
-    }
-    [IO.File]::WriteAllText($toolHostDepsPath, $toolHostDeps, [Text.UTF8Encoding]::new($false))
-}
 Write-Host 'Waiting for security scanning to release self-test runtime files...'
 Start-Sleep -Seconds 45
 foreach ($name in $runtimeLibraries) {

@@ -9,7 +9,9 @@
     <BaseIntermediateOutputPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <MSBuildProjectExtensionsPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\bin\**;$(MSBuildProjectDirectory)\obj\**</DefaultItemExcludes>
-    <TargetExt>.bin</TargetExt>
+    <!-- Outputs already live outside the watched workspace. Keep standard managed
+         extensions so current CoreCLR/testhost can resolve dependency manifests. -->
+    <TargetExt>.dll</TargetExt>
   </PropertyGroup>
 
   <!--

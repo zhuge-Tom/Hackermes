@@ -58,8 +58,8 @@ public sealed class ResourceExplorerView : UserControl
         var highlight = new Button { Content = "Highlight element" };
         highlight.Bind(Button.CommandProperty, new Binding("HighlightSelectedResourceCommand"));
         var toolbar = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Margin = new Thickness(6), Children = { refresh, open, copy, highlight } };
-        var summary = new TextBlock { Margin = new Thickness(6, 0, 6, 6), TextWrapping = Avalonia.Media.TextWrapping.Wrap };
-        summary.Bind(TextBlock.TextProperty, new Binding(nameof(ResourceExplorerViewModel.SelectedSummary)));
+        var summary = new SelectableTextBlock { Margin = new Thickness(6, 0, 6, 6), TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+        summary.Bind(SelectableTextBlock.TextProperty, new Binding(nameof(ResourceExplorerViewModel.SelectedSummary)));
         var grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true, GridLinesVisibility = DataGridGridLinesVisibility.Horizontal };
         grid.Bind(DataGrid.ItemsSourceProperty, new Binding(nameof(ResourceExplorerViewModel.Items)));
         grid.Bind(DataGrid.SelectedItemProperty, new Binding(nameof(ResourceExplorerViewModel.SelectedItem)) { Mode = BindingMode.TwoWay });
@@ -102,8 +102,8 @@ internal static class InspectorViewFactory
     {
         var refresh = new Button { Content = "Refresh", Margin = new Thickness(0, 0, 8, 0) };
         refresh.Bind(Button.CommandProperty, new Binding("RefreshCommand"));
-        var status = new TextBlock { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
-        status.Bind(TextBlock.TextProperty, new Binding("Status"));
+        var status = new SelectableTextBlock { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+        status.Bind(SelectableTextBlock.TextProperty, new Binding("Status"));
         var toolbar = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Margin = new Thickness(6), Children = { refresh, status } };
         var grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true, GridLinesVisibility = DataGridGridLinesVisibility.Horizontal };
         grid.Bind(DataGrid.ItemsSourceProperty, new Binding("Items"));

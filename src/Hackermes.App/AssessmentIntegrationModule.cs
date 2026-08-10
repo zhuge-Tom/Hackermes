@@ -49,6 +49,16 @@ public sealed class AssessmentIntegrationModule : IModule
                 Content = toolsView = new AuthorizedToolsView(settings, launcher)
             }
         });
+        serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
+        {
+            Region = DockPosition.Content, TabId = "authorized-assessment", Title = "授权评估",
+            IconKey = "SemiIconFolder", IsClosable = true, Order = 20,
+            CreateTab = () => new DockTabItemViewModel
+            {
+                Id = "authorized-assessment", Title = "授权评估",
+                Content = new AssessmentWorkspaceView(plane)
+            }
+        });
     }
 
     private static void OpenSecurityToolsSettings(ISettingsService settings, Action refresh)
@@ -68,13 +78,13 @@ public sealed class AssessmentIntegrationModule : IModule
         public event EventHandler? CanExecuteChanged { add { } remove { } }
     }
 
-    private static void RegisterCli(CommandRegistry commands, IAssessmentControlPlane plane)
+    public static void RegisterCli(CommandRegistry commands, IAssessmentControlPlane plane)
     {
         commands.Register(new CommandDefinition
         {
             Name = "assessment",
             Summary = "Manage authorized scopes, plans and isolated ToolHost jobs",
-            Usage = "assessment scope|plan|approve|run|cancel|jobs|evidence|report ...",
+            Usage = "assessment scope|plan|approve|run|cancel|jobs|evidence|finding|audit|report ...",
             IsMutating = true,
             Handler = async (context, token) => await ExecuteCliAsync(context, plane, token).ConfigureAwait(false)
         });
@@ -117,16 +127,37 @@ public sealed class AssessmentIntegrationModule : IModule
                     return CommandResult.Ok(string.Join(Environment.NewLine, plane.Jobs.Select(value => $"{value.Id} {value.Status} scope={value.ScopeId} failure={value.Failure}")));
                 case "evidence":
                     return CommandResult.Ok(string.Join(Environment.NewLine, plane.Evidence(Required(context, 1, "job")).Select(value => $"{value.Id} {value.Source} {value.Sha256} {value.Content}")));
+                case "evidence-verify":
+                    return CommandResult.Ok(JsonSerializer.Serialize(plane.VerifyEvidence(Required(context, 1, "evidence"))));
+                case "finding" when context.Arg(1)?.Equals("create", StringComparison.OrdinalIgnoreCase) == true:
+                    var finding = plane.CreateFinding(Required(context, 2, "job"), Required(context, 3, "evidence"),
+                        Required(context, 4, "title"), Required(context, 7, "description"), Required(context, 5, "severity"),
+                        Required(context, 6, "confidence"), "cli");
+                    return CommandResult.Ok($"finding={finding.Id} status={finding.Status}");
+                case "finding" when context.Arg(1)?.Equals("review", StringComparison.OrdinalIgnoreCase) == true:
+                    if (!Enum.TryParse<AssessmentFindingStatus>(Required(context, 3, "status"), true, out var reviewStatus))
+                        return CommandResult.Fail("Invalid finding review status.");
+                    var reviewed = plane.ReviewFinding(Required(context, 2, "finding"), reviewStatus,
+                        Required(context, 4, "reviewer"), context.Rest(5));
+                    return CommandResult.Ok($"finding={reviewed.Id} status={reviewed.Status} reviewer={reviewed.ReviewedBy}");
+                case "findings":
+                    return CommandResult.Ok(string.Join(Environment.NewLine, plane.Findings(Required(context, 1, "job"))
+                        .Select(value => $"{value.Id} [{value.Severity}] {value.Status} evidence={value.EvidenceId} {value.Title}")));
+                case "audit" when context.Arg(1)?.Equals("verify", StringComparison.OrdinalIgnoreCase) == true:
+                    return CommandResult.Ok(JsonSerializer.Serialize(plane.VerifyAudit()));
+                case "audit":
+                    return CommandResult.Ok(string.Join(Environment.NewLine, plane.AuditForEntity(Required(context, 1, "entity"), Int(context, 2, 100))
+                        .Select(value => $"{value.Timestamp:O} {value.Actor} {value.Action} {value.EntityId} {value.Detail}")));
                 case "report":
-                    return CommandResult.Ok(plane.ExportReport(Required(context, 1, "job")));
+                    return CommandResult.Ok(plane.ExportReport(Required(context, 1, "job"), context.Arg(2) ?? "json"));
                 default:
-                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve <plan> <operator> [minutes] | run <plan> <approval> <operator> | revoke scope|approval <id> <operator> <reason> | jobs|evidence <job>|report <job>");
+                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve/run/revoke/jobs | evidence <job> | evidence-verify <evidence> | findings <job> | finding create|review ... | audit <entity>|verify | report <job> [json|markdown|html]");
             }
         }
         catch (Exception exception) { return CommandResult.Fail(exception.Message); }
     }
 
-    private static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane)
+    public static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane)
     {
         registry.Register(new AiToolDefinition("assessment_scopes", "List authorized assessment scopes.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.Scopes)))));
@@ -140,15 +171,43 @@ public sealed class AssessmentIntegrationModule : IModule
             (call, _) => ValueTask.FromResult(Approve(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_run", "Run an approved local simulation plan and return its job status.", Schema(new { planId = new { type = "string" }, approvalId = new { type = "string" }, operatorId = new { type = "string" } }), AiToolRisk.Dangerous,
             (call, token) => RunAsync(plane, call.Arguments, token)));
-        registry.Register(new AiToolDefinition("assessment_report", "Read the redacted report for an assessment job.", Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+        registry.Register(new AiToolDefinition("assessment_report", "Read the redacted JSON, Markdown or HTML report for an assessment job.", Schema(new
+        {
+            jobId = new { type = "string" }, format = new { type = "string", @enum = new[] { "json", "markdown", "html" } }
+        }), AiToolRisk.ReadOnly,
             (call, _) => ValueTask.FromResult(ReadReport(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_evidence", "List redacted evidence for one assessment job.", Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+            (call, _) => ValueTask.FromResult(Try(() => plane.Evidence(Text(call.Arguments, "jobId"))))));
+        registry.Register(new AiToolDefinition("assessment_verify_evidence", "Verify one evidence item's SHA-256 integrity.", Schema(new { evidenceId = new { type = "string" } }), AiToolRisk.ReadOnly,
+            (call, _) => ValueTask.FromResult(Try(() => plane.VerifyEvidence(Text(call.Arguments, "evidenceId"))))));
+        registry.Register(new AiToolDefinition("assessment_findings", "List findings and human-review state for one assessment job.", Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+            (call, _) => ValueTask.FromResult(Try(() => plane.Findings(Text(call.Arguments, "jobId"))))));
+        registry.Register(new AiToolDefinition("assessment_create_finding", "Create a bounded finding linked to existing evidence; it remains unreviewed.", Schema(new
+        {
+            jobId = new { type = "string" }, evidenceId = new { type = "string" }, title = new { type = "string" },
+            description = new { type = "string" }, severity = new { type = "string", @enum = new[] { "Critical", "High", "Medium", "Low", "Info" } },
+            confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } }
+        }), AiToolRisk.Mutating, (call, _) => ValueTask.FromResult(CreateFinding(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_review_finding", "Record an attributed review decision for a finding.", Schema(new
+        {
+            findingId = new { type = "string" }, status = new { type = "string", @enum = Enum.GetNames<AssessmentFindingStatus>() },
+            reviewer = new { type = "string" }, note = new { type = "string" }
+        }), AiToolRisk.Mutating, (call, _) => ValueTask.FromResult(ReviewFinding(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_verify_audit", "Verify the append-only assessment audit hash chain.", Schema(new { }), AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(Try(plane.VerifyAudit))));
     }
 
     private static ToolResult CreateScope(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateScope(Text(args, "name"), Text(args, "authorization"), Text(args, "operatorId"), Strings(args, "targets"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 60))));
     private static ToolResult CreatePlan(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreatePlan(Text(args, "scopeId"), Text(args, "name"), [new AssessmentStep(Text(args, "adapterId"), Text(args, "input"), Number(args, "timeoutSeconds", 30))], "agent"));
     private static ToolResult Approve(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.Approve(Text(args, "planId"), Text(args, "operatorId"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 30))));
     private static async ValueTask<ToolResult> RunAsync(IAssessmentControlPlane plane, JsonElement args, System.Threading.CancellationToken ct) { try { var job = await plane.StartAsync(Text(args, "planId"), Text(args, "approvalId"), Text(args, "operatorId"), ct).ConfigureAwait(false); return ToolResult.Ok(JsonSerializer.Serialize(job)); } catch (Exception ex) { return ToolResult.Fail(ex.Message); } }
-    private static ToolResult ReadReport(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.ExportReport(Text(args, "jobId")));
+    private static ToolResult ReadReport(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.ExportReport(Text(args, "jobId"), Text(args, "format") is { Length: > 0 } format ? format : "json"));
+    private static ToolResult CreateFinding(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateFinding(
+        Text(args, "jobId"), Text(args, "evidenceId"), Text(args, "title"), Text(args, "description"),
+        Text(args, "severity"), Text(args, "confidence"), "agent"));
+    private static ToolResult ReviewFinding(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.ReviewFinding(
+        Text(args, "findingId"), Enum.Parse<AssessmentFindingStatus>(Text(args, "status"), true),
+        Text(args, "reviewer"), Text(args, "note")));
     private static ToolResult Try<T>(Func<T> value) { try { return ToolResult.Ok(JsonSerializer.Serialize(value())); } catch (Exception ex) { return ToolResult.Fail(ex.Message); } }
     private static JsonElement Schema(object properties) => JsonSerializer.SerializeToElement(new { type = "object", properties, additionalProperties = false });
     private static string Text(JsonElement args, string name) => args.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() ?? string.Empty : string.Empty;

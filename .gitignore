@@ -2,6 +2,7 @@
 bin/
 obj/
 .tmp-*/
+.codex-build-temp/
 [Dd]ebug/
 [Rr]elease/
 *.user

@@ -13,6 +13,12 @@ This archive is self-contained and does not require a separately installed
 The application files are also portable: they can be run directly from the
 `app` directory.
 
+The Windows installer verifies `release-manifest.json`, stages files before the
+atomic switch, and retains one previous version. Run
+`Install-Hackermes.ps1 -RestorePrevious` from the same package to roll back.
+Install, upgrade, rollback, and normal uninstall preserve user data under
+`%LOCALAPPDATA%\Hackermes`.
+
 ## Platform notes
 
 - Windows 10/11 x64 is the fully verified desktop target. The embedded browser

@@ -3,6 +3,7 @@ using Hackermes.Cdp.Session;
 using Hackermes.Inspector.Services;
 using Hackermes.Inspector.ViewModels;
 using Hackermes.Platform.Events;
+using Hackermes.Platform.Registries;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -76,6 +77,23 @@ public sealed class PageInspectionServiceTests
         Assert.Equal("HEAD", html.Children[0].Item.NodeName);
         Assert.Single(html.Children[1].Children);
         Assert.Equal("DIV", html.Children[1].Children[0].Item.NodeName);
+    }
+
+    [Fact]
+    public async Task Dom_tab_activation_loads_the_latest_tree_without_manual_refresh()
+    {
+        var session = new FakeSession("page-selected");
+        var events = new EventBus();
+        using var service = new PageInspectionService(new FakeRegistry(session), events);
+        events.Publish(new ActiveContentTabChangedEvent(session.PageId, "Selected"));
+        var viewModel = new DomInspectorViewModel(service);
+
+        Assert.IsAssignableFrom<ITabActivationAware>(viewModel);
+        await viewModel.ActivateAsync();
+
+        Assert.NotEmpty(viewModel.RootItems);
+        Assert.Contains("elements", viewModel.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(session.Expressions, expression => expression.Contains("document.documentElement", StringComparison.Ordinal));
     }
 
     [Fact]

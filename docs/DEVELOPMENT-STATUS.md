@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Hackermes 开发基线
 
 ## 当前范围
@@ -12,6 +14,8 @@
 
 - 阶段 7 ToolHost 基线：已新增独立 `Hackermes.ToolHost` 进程、DPAPI 保护的 HMAC 任务票据、短时效与一次性 nonce、防重放记录、精确目标范围、不可变计划哈希、一次性批准、批准/范围撤销、进程树取消、硬超时、输出上限、证据和审计。Agent 侧注册 `recon.nmap.quick`、`recon.nmap.service`、`recon.dirsearch.quick` 和 `recon.wafw00f.quick` 四个固定参数 Adapter；未接入口令爆破、漏洞利用、规避或破坏工具。工具与便携 Python 从应用相对 `tools` 目录解析，Nmap、Dirsearch、Wafw00f 均已在 `127.0.0.1` loopback 靶场完成真实 ToolHost 调用；完整测试集 220/220 通过。
 
+- 阶段 7C / 阶段 7 正式基线：审计、证据、Finding 与人工复核闭环已落地。中央“授权评估”工作区现在可由人工完成范围创建、固定计划、一次性审批、执行、取消/撤销、证据验证、Finding 创建/复核、审计链验证和 JSON/Markdown/HTML 报告导出。CLI 与 Agent 已通过各自真实注册入口完成同一全链路验收。Assessment 存储升级到版本 2，采用写穿透临时文件、上一份有效备份、损坏文件留存与自动恢复；重启时 Queued/Running 任务会转为 Failed 并写入 `job.recover`，一次性审批保持已消费。连续 HMAC-SHA256 审计链可检测操作者、动作、实体、详情或顺序被修改。Windows 安装器增加逐文件 SHA-256 校验、暂存安装、原子升级、上一版本保留和回滚，默认保留用户配置。完整测试集 249/249 通过；Windows 安装→升级→回滚→卸载临时目录验收通过。本轮按决定不执行 Linux 验证。
+
 ## 明确延期
 
 已实现有界嵌套 JSON Pointer 的读取与修改：对象/数组定位遵循 RFC 6901 转义规则，默认深度上限为 32、条目上限为 2000，调用方可在更严格的 1–64 层与 1–10000 条范围内收紧限制。现有顶层 JSON、query、form、header 和 cookie 能力保持不变。
@@ -22,4 +26,4 @@
 
 ## 已执行的运行验收
 
-已完成真实 CDP loopback 5 项闭环两次、默认密钥文件跨重启指纹验证，以及 Repeater 超时/取消、Annotation 筛选/删除的工作台命令定向测试（22/22）。复杂能力需单独排期。
+已完成真实 CDP loopback 5 项闭环两次、默认密钥文件跨重启指纹验证，以及 Repeater 超时/取消、Annotation 筛选/删除的工作台命令定向测试（22/22）。Stage 7C 新增证据/审计防篡改、Finding 复核、审计密钥轮换拒绝、多格式报告、损坏备份恢复、中断任务恢复以及 CLI/Agent 实际入口全链路测试（8/8）；DOM 标签自动激活刷新也有回归测试，完整测试集 249/249 通过。Windows 安装器已在隔离临时目录完成首次安装、升级、保留旧版、回滚和卸载验收；Linux 验证按当前决定跳过。
