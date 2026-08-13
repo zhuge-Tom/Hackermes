@@ -27,11 +27,17 @@
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
           <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#F5F6F8" />
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#F3F5F8" />
+          <SolidColorBrush x:Key="ElevatedBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="SubtleAccentBrush" Color="#EAF1FF" />
+          <SolidColorBrush x:Key="SplitterHoverBrush" Color="#7EA7F8" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#1C1C1E" />
-          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#141416" />
+          <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#1B1D21" />
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#121418" />
+          <SolidColorBrush x:Key="ElevatedBackgroundBrush" Color="#22252B" />
+          <SolidColorBrush x:Key="SubtleAccentBrush" Color="#1D2D4A" />
+          <SolidColorBrush x:Key="SplitterHoverBrush" Color="#5B8DEF" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
 

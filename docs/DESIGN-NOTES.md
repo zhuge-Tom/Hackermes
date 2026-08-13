@@ -135,6 +135,10 @@ net/xhr   → {"url":"data.json?via=xhr",    "stack":"at .../app.js:23:5"}
 
 **`UiThreadBridge` 一律用 `Dispatcher.Post` + `TaskCompletionSource`,刻意不用 `InvokeAsync`。** 后者在嵌套调用时会死锁,而本应用有大量"UI 线程等待 CDP、CDP 回调又要回 UI 线程"的路径。
 
+**视图事件使用 `IUiEventDispatcher` 作为显式接缝。** 需要把后台/CDP 结果投递到 Avalonia 控件的服务依赖该接口，生产实现再委托给 `UiThreadBridge`；这样线程边界可见、可替换、可测试，避免业务服务散落静态 Dispatcher 调用。
+
+**浏览器自动打开等待 layout-ready，不使用猜测延时。** 固定延时可能早于 Dock 对 add-tab 事件的订阅，日志会显示标签页已创建，但 UI 中没有浏览器 Tab，随后 CDP/Network/Page Agent 全部缺席。`RunWhenLayoutReady` 使用先订阅再复核并保证一次执行，布局就绪后才在 UI 线程发布标签页。
+
 ### 适配器就绪要事件加轮询双保险
 
 `AdapterCreated` 事件在部分时序下不会触发(例如控件在适配器创建完成之后才挂上处理器)。因此在 150/400/800/1500/3000/6000 ms 这几个点重复探测原生句柄,任一命中即建立会话,内部幂等。宁可多探几次,也不要一个永远白屏的标签页。
@@ -185,13 +189,15 @@ Chromium 的 `file://` 不走网络栈,CDP Network 域不报告,`performance.get
 | CDP 负载不做全量强类型建模 | CDP 的形状随 Chromium 版本演进,维护成本远高于收益。只对实际用到的字段做轻量读取 |
 | 前端产物提交进仓库 | `PageAgentScript.g.cs` 入库后,常规 `dotnet build` 不需要 Node |
 | 模块清单硬编码而非程序集扫描 | 反射发现省下几行代码,换来启动变慢、AOT 不友好、以及"模块为什么没加载"这类难查的问题 |
+| 页面安全快照只返回元数据和布尔/计数 | AI 可据此选择后续授权评估步骤，同时不把 Cookie、令牌、表单值、存储、正文或脚本源码带入模型上下文；精确 `pageId` 与读取前后 URL 复核防止跨页/导航竞态 |
+| Assessment 以 coherent case 作为读取模型 | job/scope/plan/approval/evidence/finding/audit 必须在同一锁内组合，避免 UI、CLI、AI 分别读取集合时观察到不一致授权链 |
 
 ---
 
 ## 八、待偿还的技术债
 
 - **DB 迁移** — 目前尚未落地,规划用 `PRAGMA user_version` + 集中迁移脚本列表,避免迁移逻辑散落到各个 store
-- **Agent 消息分片** — 单条消息超过 64 KB 时直接丢弃字段并标注 `truncated`。大 payload(如完整请求体)需要分片重组协议
-- **隔离世界 Agent** — `agent-iso` 尚未实现,录制与元素拾取依赖它
+- **Page Agent capability 状态** — 已由 browser-owned runtime 按精确 `pageId` 回显 `agent-main` / `agent-iso` 的 ready/degraded/unavailable；导航与 session close 会使旧 context 失效
+- **元素拾取统一** — 录制、selector 与 Inspector picker 已统一使用 `agent-iso`；Inspector 不再自建 binding 或回退主世界 evaluate
 - **AI 工具策略闸门** — 已落地默认保守策略、确认 UI、会话授权与显式信任模式；后续可细化按域名和工作区路径授权
 - **国际化** — 当前中文硬编码。不做假的语言开关,要做就一次做对

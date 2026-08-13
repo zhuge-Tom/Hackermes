@@ -23,6 +23,11 @@ public sealed class BrowserModule : IModule
             new CdpSessionRegistry(sp.GetRequiredService<IAppLogger>()));
 
         services.AddSingleton<PageAgentInjector>();
+        services.AddSingleton<IPageAgentRuntime>(sp =>
+            sp.GetRequiredService<PageAgentInjector>());
+        services.AddSingleton<BrowserPageContextService>();
+        services.AddSingleton<IPageContextQueryService>(sp =>
+            sp.GetRequiredService<BrowserPageContextService>());
         services.AddSingleton<IBrowserTabManager, BrowserTabManager>();
     }
 
@@ -86,6 +91,9 @@ public sealed class BrowserModule : IModule
             return;
 
         // 等布局稳定,否则 WebView2 会因宿主尺寸为 0 而初始化失败。
-        StartupPerformance.RunAfterDelay(() => tabManager.OpenTab(url), 800);
+        // A fixed delay can fire before DockLayoutViewModel subscribes to the
+        // add-tab event. Wait for the explicit layout lifecycle boundary so the
+        // browser tab is never published into an empty event bus.
+        StartupPerformance.RunWhenLayoutReady(() => tabManager.OpenTab(url));
     }
 }

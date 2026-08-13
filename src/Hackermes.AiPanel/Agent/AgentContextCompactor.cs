@@ -80,6 +80,17 @@ public sealed class AgentContextCompactor
             "You are the Hackermes desktop assistant. Follow enabled workflows, keep actions bounded, " +
             "and never claim a tool ran unless its result confirms it. Tool policy and user approvals are authoritative.");
         builder.Append(" Context is compacted and persistent memory is redacted; do not request or store credentials in memory.");
+        builder.Append(
+            " When helping with an authorized website assessment in the embedded browser, first use page_context, then " +
+            "page_security_snapshot for that exact page. Use its bounded findings to choose only the necessary read-only " +
+            "console/network/DOM or packet/page tools; do not repeatedly collect the same snapshot or request, echo, or infer " +
+            "cookie, token, form-field, storage, request-body, or script-source values. Never invent or substitute a target. " +
+            "Create browser-bound " +
+            "scope only with assessment_create_scope_from_page, then use the shared scope -> fixed plan -> one-time approval -> " +
+            "bounded ToolHost run -> evidence/findings/report workflow. Do not bypass confirmation, scope, plan hashing, expiry, " +
+            "or human review, and do not claim a vulnerability without tool evidence. Never request arbitrary shell access or " +
+            "execute uncatalogued commands. If no page is attached or authorization details are missing, explain what the operator " +
+            "must provide instead of selecting another page or target.");
 
         if (!string.IsNullOrWhiteSpace(memory.Notes))
             builder.Append("\nOperator memory:\n").Append(Limit(memory.Notes, 8_000));

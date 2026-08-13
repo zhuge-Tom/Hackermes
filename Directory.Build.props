@@ -4,7 +4,7 @@
        which breaks project-reference builds before downstream projects can
        read them.  Per-project folders also prevent output collisions. -->
   <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
-    <HackermesBuildRoot Condition="'$(HackermesBuildRoot)' == ''">$(LOCALAPPDATA)\Hackermes\Build</HackermesBuildRoot>
+    <HackermesBuildRoot Condition="'$(HackermesBuildRoot)' == ''">$(MSBuildThisFileDirectory)..\HackermesBuild\workspace</HackermesBuildRoot>
     <BaseOutputPath>$(HackermesBuildRoot)\bin\$(MSBuildProjectName)\</BaseOutputPath>
     <BaseIntermediateOutputPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <MSBuildProjectExtensionsPath>$(HackermesBuildRoot)\obj\$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
@@ -21,9 +21,9 @@
   -->
   <PropertyGroup Condition="'$(IsToolGenProject)' != 'true'">
     <TargetFramework>net10.0</TargetFramework>
-    <Version Condition="'$(Version)' == ''">0.7.0-alpha.1</Version>
-    <AssemblyVersion>0.7.0.0</AssemblyVersion>
-    <FileVersion>0.7.0.0</FileVersion>
+    <Version Condition="'$(Version)' == ''">0.8.0</Version>
+    <AssemblyVersion>0.8.0.0</AssemblyVersion>
+    <FileVersion>0.8.0.0</FileVersion>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>

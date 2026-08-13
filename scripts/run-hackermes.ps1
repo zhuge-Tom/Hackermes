@@ -2,7 +2,8 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$buildRoot = Join-Path $env:LOCALAPPDATA 'Hackermes\Build'
+$buildEnvironment = & (Join-Path $PSScriptRoot 'initialize-build-environment.ps1')
+$buildRoot = $buildEnvironment.DefaultBuildRoot
 $executable = Join-Path $buildRoot 'bin\Hackermes.App\Debug\net10.0\Hackermes.App.exe'
 
 $existing = Get-Process -Name 'Hackermes.App' -ErrorAction SilentlyContinue | Select-Object -First 1

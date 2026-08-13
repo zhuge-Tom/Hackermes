@@ -21,9 +21,12 @@ public static class PageAgentScript
 "use strict";
 (() => {
   // src/shared/transport.ts
-  var MAX_MESSAGE_CHARS = 64 * 1024;
+  var CHUNK_DATA_CHARS = 16 * 1024;
+  var MAX_REASSEMBLED_CHARS = 2 * 1024 * 1024;
+  var MAX_CHUNKS = 128;
   function createTransport(bindingName) {
     let seq = 0;
+    let messageId = 0;
     return {
       get available() {
         return typeof globalThis[bindingName] === "function";
@@ -35,17 +38,38 @@ public static class PageAgentScript
         }
         try {
           message.seq = ++seq;
-          let json = JSON.stringify(message);
-          if (json.length > MAX_MESSAGE_CHARS) {
-            json = JSON.stringify({
+          const json = JSON.stringify(message);
+          if (json.length > MAX_REASSEMBLED_CHARS) {
+            const rejected = JSON.stringify({
               t: message.t,
               k: message.k,
               seq: message.seq,
               truncated: true,
-              note: "payload \u8D85\u51FA\u4E0A\u9650\u5DF2\u4E22\u5F03\u5B57\u6BB5"
+              originalChars: json.length,
+              note: "payload \u8D85\u51FA 2 MiB \u91CD\u7EC4\u4E0A\u9650\u5DF2\u4E22\u5F03\u5B57\u6BB5"
             });
+            binding(rejected);
+            return;
           }
-          binding(json);
+          if (json.length <= CHUNK_DATA_CHARS) {
+            binding(json);
+            return;
+          }
+          const total = Math.ceil(json.length / CHUNK_DATA_CHARS);
+          if (total > MAX_CHUNKS) {
+            return;
+          }
+          const id = (++messageId).toString(36) + "-" + Date.now().toString(36);
+          for (let index = 0; index < total; index++) {
+            const data = json.slice(index * CHUNK_DATA_CHARS, (index + 1) * CHUNK_DATA_CHARS);
+            binding(JSON.stringify({
+              __hmChunk: 1,
+              id,
+              index,
+              total,
+              data
+            }));
+          }
         } catch {
         }
       }
@@ -377,7 +401,99 @@ public static class PageAgentScript
     globalThis.addEventListener("hashchange", () => report("hash", location.href), true);
   }
 
-  // src/main/record-hook.ts
+  // src/main/entry-main.ts
+  (function bootstrap() {
+    const bindingName = typeof __HACKERMES_BINDING__ === "string" ? __HACKERMES_BINDING__ : "__hackermes__";
+    const flag = "__hackermes_main_installed__";
+    const global = globalThis;
+    if (global[flag]) {
+      return;
+    }
+    global[flag] = true;
+    const transport = createTransport(bindingName);
+    try {
+      installFetchHook(transport);
+      installXhrHook(transport);
+      installWebSocketHook(transport);
+      installStorageHook(transport);
+      installCookieHook(transport);
+      installRouteHook(transport);
+      transport.send({
+        t: "lifecycle",
+        k: "ready",
+        world: "main",
+        url: location.href,
+        ts: Date.now()
+      });
+    } catch (error) {
+      transport.send({ t: "lifecycle", k: "error", world: "main", error: String(error) });
+    }
+  })();
+})();
+
+""";
+
+    /// <summary>命名隔离世界脚本:DOM 录制与元素选择器生成。</summary>
+    public const string IsolatedWorld = """
+"use strict";
+(() => {
+  // src/shared/transport.ts
+  var CHUNK_DATA_CHARS = 16 * 1024;
+  var MAX_REASSEMBLED_CHARS = 2 * 1024 * 1024;
+  var MAX_CHUNKS = 128;
+  function createTransport(bindingName) {
+    let seq = 0;
+    let messageId = 0;
+    return {
+      get available() {
+        return typeof globalThis[bindingName] === "function";
+      },
+      send(message) {
+        const binding = globalThis[bindingName];
+        if (typeof binding !== "function") {
+          return;
+        }
+        try {
+          message.seq = ++seq;
+          const json = JSON.stringify(message);
+          if (json.length > MAX_REASSEMBLED_CHARS) {
+            const rejected = JSON.stringify({
+              t: message.t,
+              k: message.k,
+              seq: message.seq,
+              truncated: true,
+              originalChars: json.length,
+              note: "payload \u8D85\u51FA 2 MiB \u91CD\u7EC4\u4E0A\u9650\u5DF2\u4E22\u5F03\u5B57\u6BB5"
+            });
+            binding(rejected);
+            return;
+          }
+          if (json.length <= CHUNK_DATA_CHARS) {
+            binding(json);
+            return;
+          }
+          const total = Math.ceil(json.length / CHUNK_DATA_CHARS);
+          if (total > MAX_CHUNKS) {
+            return;
+          }
+          const id = (++messageId).toString(36) + "-" + Date.now().toString(36);
+          for (let index = 0; index < total; index++) {
+            const data = json.slice(index * CHUNK_DATA_CHARS, (index + 1) * CHUNK_DATA_CHARS);
+            binding(JSON.stringify({
+              __hmChunk: 1,
+              id,
+              index,
+              total,
+              data
+            }));
+          }
+        } catch {
+        }
+      }
+    };
+  }
+
+  // src/isolated/record-hook.ts
   function escapeCss(value) {
     return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
@@ -453,10 +569,10 @@ public static class PageAgentScript
     }, true);
   }
 
-  // src/main/entry-main.ts
+  // src/isolated/entry-isolated.ts
   (function bootstrap() {
-    const bindingName = typeof __HACKERMES_BINDING__ === "string" ? __HACKERMES_BINDING__ : "__hackermes__";
-    const flag = "__hackermes_main_installed__";
+    const bindingName = typeof __HACKERMES_BINDING__ === "string" ? __HACKERMES_BINDING__ : "__hackermes_iso__";
+    const flag = "__hackermes_isolated_installed__";
     const global = globalThis;
     if (global[flag]) {
       return;
@@ -464,22 +580,16 @@ public static class PageAgentScript
     global[flag] = true;
     const transport = createTransport(bindingName);
     try {
-      installFetchHook(transport);
-      installXhrHook(transport);
-      installWebSocketHook(transport);
-      installStorageHook(transport);
-      installCookieHook(transport);
-      installRouteHook(transport);
       installRecordingHook(transport);
       transport.send({
         t: "lifecycle",
         k: "ready",
-        world: "main",
+        world: "isolated",
         url: location.href,
         ts: Date.now()
       });
     } catch (error) {
-      transport.send({ t: "lifecycle", k: "error", world: "main", error: String(error) });
+      transport.send({ t: "lifecycle", k: "error", world: "isolated", error: String(error) });
     }
   })();
 })();
@@ -489,4 +599,8 @@ public static class PageAgentScript
     /// <summary>把占位符换成实际绑定名。</summary>
     public static string PrepareMainWorld(string bindingName) =>
         MainWorld.Replace(BindingPlaceholder, "\"" + bindingName + "\"");
+
+    /// <summary>为隔离世界脚本注入仅在该世界可见的绑定名。</summary>
+    public static string PrepareIsolatedWorld(string bindingName) =>
+        IsolatedWorld.Replace(BindingPlaceholder, "\"" + bindingName + "\"");
 }

@@ -13,7 +13,8 @@ public sealed record AiToolDefinition(
     string Description,
     JsonElement InputSchema,
     AiToolRisk Risk,
-    Func<ToolInvocation, CancellationToken, ValueTask<ToolResult>> Handler);
+    Func<ToolInvocation, CancellationToken, ValueTask<ToolResult>> Handler,
+    Func<ToolInvocation, CancellationToken, ValueTask<ToolInvocation>>? Prepare = null);
 
 public sealed record ToolInvocation(
     string ToolName,

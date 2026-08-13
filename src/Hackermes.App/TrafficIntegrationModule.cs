@@ -23,8 +23,8 @@ public sealed class TrafficIntegrationModule : IModule
 
     public void RegisterServices(IServiceCollection services)
     {
-        services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hackermes", "traffic-audit.v1.json")));
+        services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(
+            AppDataPaths.Resolve("traffic-audit.v1.json")));
         services.AddSingleton<IPacketAuditSigningKey, PacketAuditSigningKey>();
         services.AddSingleton<IPacketAuditExportService, PacketAuditExportService>();
         services.AddSingleton<TrafficRuleAuditBridge>();

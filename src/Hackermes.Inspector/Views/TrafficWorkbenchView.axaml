@@ -3,60 +3,67 @@
              xmlns:vm="using:Hackermes.Inspector.ViewModels"
              x:Class="Hackermes.Inspector.Views.TrafficWorkbenchView"
              x:DataType="vm:TrafficWorkbenchViewModel">
-  <Grid RowDefinitions="Auto,Auto,Auto,2*,3*">
+  <Grid RowDefinitions="Auto,2*,3*">
     <Border Grid.Row="0" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
-      <Grid ColumnDefinitions="Auto,180,80,70,90,Auto,*,Auto,Auto,Auto,Auto">
-        <Button Grid.Column="0" Content="Refresh" Command="{Binding ReloadCommand}" />
-        <TextBox Grid.Column="1" Margin="8,0" PlaceholderText="Filter URL / method / status" Text="{Binding FilterText, Mode=TwoWay}" />
-        <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="Method" Text="{Binding MethodFilter}" />
-        <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="Status" Text="{Binding StatusFilter}" />
-        <TextBox Grid.Column="4" Margin="0,0,6,0" PlaceholderText="Type" Text="{Binding ResourceTypeFilter}" />
-        <CheckBox Grid.Column="5" Content="Held" VerticalAlignment="Center" IsChecked="{Binding OnlyIntercepted, Mode=TwoWay}" />
-        <TextBlock Grid.Column="6" Margin="12,0" VerticalAlignment="Center" Opacity="0.65" Text="{Binding Summary}" />
-        <TextBlock Grid.Column="7" VerticalAlignment="Center" Text="Requests" FontWeight="SemiBold" />
-        <ToggleSwitch Grid.Column="8" Margin="8,0,0,0" IsChecked="{Binding IsInterceptEnabled, Mode=TwoWay}" />
-        <TextBlock Grid.Column="9" Margin="12,0,0,0" VerticalAlignment="Center" Text="Responses" FontWeight="SemiBold" />
-        <ToggleSwitch Grid.Column="10" Margin="8,0,0,0" IsChecked="{Binding IsResponseInterceptEnabled, Mode=TwoWay}" />
-      </Grid>
+      <WrapPanel Orientation="Horizontal">
+          <Button Margin="0,0,7,0" Content="Refresh" Command="{Binding ReloadCommand}" />
+          <TextBox Width="250" Margin="0,0,7,0" PlaceholderText="URL, method, or status" Text="{Binding FilterText, Mode=TwoWay}" />
+          <CheckBox Margin="0,0,10,0" Content="Intercepted" VerticalAlignment="Center"
+                    ToolTip.Tip="Show only requests or responses paused by interception"
+                    IsChecked="{Binding OnlyIntercepted, Mode=TwoWay}" />
+          <TextBlock MinWidth="112" Margin="0,0,10,0" VerticalAlignment="Center" Opacity="0.65" Text="{Binding Summary}" />
+          <Button Content="More tools">
+          <Button.Flyout>
+            <Flyout>
+              <Border Width="610" MaxWidth="610" Padding="12">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
+                  <TextBlock Grid.Row="0" Text="Archive and annotation tools" FontSize="14" FontWeight="SemiBold" />
+                  <WrapPanel Grid.Row="1" Orientation="Horizontal">
+                    <TextBox Width="86" Margin="0,0,6,0" PlaceholderText="Method" Text="{Binding MethodFilter}" />
+                    <TextBox Width="76" Margin="0,0,6,0" PlaceholderText="Status" Text="{Binding StatusFilter}" />
+                    <TextBox Width="86" Margin="0,0,12,0" PlaceholderText="Type" Text="{Binding ResourceTypeFilter}" />
+                    <TextBlock Margin="0,0,5,0" VerticalAlignment="Center" Text="Request interception" FontWeight="SemiBold" />
+                    <ToggleSwitch Margin="0,0,12,0" ToolTip.Tip="Intercept matching outgoing requests"
+                                  IsChecked="{Binding IsInterceptEnabled, Mode=TwoWay}" />
+                    <TextBlock Margin="0,0,5,0" VerticalAlignment="Center" Text="Response interception" FontWeight="SemiBold" />
+                    <ToggleSwitch ToolTip.Tip="Intercept matching incoming responses"
+                                  IsChecked="{Binding IsResponseInterceptEnabled, Mode=TwoWay}" />
+                  </WrapPanel>
+                  <Grid Grid.Row="2" ColumnDefinitions="Auto,220,170,Auto,Auto" ColumnSpacing="7">
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Archive" FontWeight="SemiBold" />
+                    <TextBox Grid.Column="1" PlaceholderText=".har or .json path" Text="{Binding ArchivePath}" />
+                    <TextBox Grid.Column="2" PlaceholderText="Optional URL / method" Text="{Binding ArchiveFilter}" />
+                    <Button Grid.Column="3" Content="Export" Command="{Binding ExportArchiveCommand}" />
+                    <Button Grid.Column="4" Content="Import" Command="{Binding ImportArchiveCommand}" />
+                  </Grid>
+                  <Grid Grid.Row="3" ColumnDefinitions="Auto,175,Auto,155,Auto" ColumnSpacing="7">
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Annotations" FontWeight="SemiBold" />
+                    <TextBox Grid.Column="1" PlaceholderText="Exact tag" Text="{Binding AnnotationTagFilter, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="Review status" />
+                    <ComboBox Grid.Column="3" ItemsSource="{Binding AnnotationStatusFilters}"
+                              SelectedItem="{Binding AnnotationStatusFilter, Mode=TwoWay}" />
+                    <Button Grid.Column="4" Content="Clear" Command="{Binding ClearAnnotationFiltersCommand}" />
+                  </Grid>
+                </Grid>
+              </Border>
+            </Flyout>
+          </Button.Flyout>
+          </Button>
+      </WrapPanel>
     </Border>
 
-    <Border Grid.Row="1" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
-      <Grid ColumnDefinitions="Auto,260,180,Auto,Auto,*">
-        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Archive" FontWeight="SemiBold" />
-        <TextBox Grid.Column="1" Margin="8,0" PlaceholderText="Path ending in .har or .json" Text="{Binding ArchivePath}" />
-        <TextBox Grid.Column="2" Margin="0,0,8,0" PlaceholderText="Optional URL/method filter" Text="{Binding ArchiveFilter}" />
-        <Button Grid.Column="3" Content="Export" Command="{Binding ExportArchiveCommand}" />
-        <Button Grid.Column="4" Margin="6,0,0,0" Content="Import" Command="{Binding ImportArchiveCommand}" />
-        <TextBlock Grid.Column="5" Margin="10,0,0,0" VerticalAlignment="Center" Opacity="0.6"
-                   Text="Hackermes JSON / HAR 1.2; binary bodies remain lossless" />
-      </Grid>
-    </Border>
-
-    <Border Grid.Row="2" Padding="8,5" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource SemiColorBorder}">
-      <Grid ColumnDefinitions="Auto,190,Auto,170,Auto,*">
-        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Annotations" FontWeight="SemiBold" />
-        <TextBox Grid.Column="1" Margin="8,0,12,0" PlaceholderText="Exact tag" Text="{Binding AnnotationTagFilter, Mode=TwoWay}" />
-        <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="Review status" />
-        <ComboBox Grid.Column="3" Margin="8,0,12,0" ItemsSource="{Binding AnnotationStatusFilters}"
-                  SelectedItem="{Binding AnnotationStatusFilter, Mode=TwoWay}" />
-        <Button Grid.Column="4" Content="Clear filters" Command="{Binding ClearAnnotationFiltersCommand}" />
-        <TextBlock Grid.Column="5" Margin="10,0,0,0" VerticalAlignment="Center" Opacity="0.6"
-                   Text="Filters match stored packet annotations" />
-      </Grid>
-    </Border>
-
-    <DataGrid Grid.Row="3" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+    <DataGrid Grid.Row="1" MinHeight="76" ItemsSource="{Binding Visible}" SelectedItem="{Binding Selected, Mode=TwoWay}"
               AutoGenerateColumns="False" IsReadOnly="True" GridLinesVisibility="Horizontal" FontSize="11">
       <DataGrid.Columns>
         <DataGridTextColumn Header="Time" Width="92" Binding="{Binding TimeText}" x:DataType="vm:TrafficExchange" />
-        <DataGridTextColumn Header="Method" Width="70" Binding="{Binding Method}" x:DataType="vm:TrafficExchange" />
+        <DataGridTextColumn Header="Method" Width="80" Binding="{Binding Method}" x:DataType="vm:TrafficExchange" />
         <DataGridTextColumn Header="Host" Width="160" Binding="{Binding Host}" x:DataType="vm:TrafficExchange" />
         <DataGridTextColumn Header="Path" Width="*" Binding="{Binding Path}" x:DataType="vm:TrafficExchange" />
         <DataGridTextColumn Header="Status" Width="70" Binding="{Binding StatusText}" x:DataType="vm:TrafficExchange" />
       </DataGrid.Columns>
     </DataGrid>
 
-    <Grid Grid.Row="4" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
+    <Grid Grid.Row="2" RowDefinitions="*,Auto,Auto" ColumnDefinitions="*,*">
       <TabControl Grid.Row="0" Grid.Column="0" Margin="0,4,2,0">
         <TabItem Header="Request editor"><TextBox AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding RequestEditor, Mode=TwoWay}" SelectionStart="{Binding RequestSelectionStart, Mode=TwoWay}" SelectionEnd="{Binding RequestSelectionEnd, Mode=TwoWay}" /></TabItem>
         <TabItem Header="Request pretty"><TextBox IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas,monospace" FontSize="12" Text="{Binding FormattedRequest}" /></TabItem>
@@ -209,18 +216,18 @@
       <Border Grid.Row="1" Grid.ColumnSpan="2" Padding="8,5" Background="{DynamicResource SemiColorFill0}">
         <SelectableTextBlock Text="{Binding Analysis}" TextWrapping="Wrap" />
       </Border>
-      <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8" Margin="8,6">
-        <Button Content="Analyze" Command="{Binding AnalyzeCommand}" />
-        <Button Content="Replay" Command="{Binding ReplayCommand}" />
-        <Button Content="Send to Repeater" Command="{Binding SendToRepeaterCommand}" />
-        <Button Content="Previous" Command="{Binding PreviousPageCommand}" />
-        <Button Content="Next" Command="{Binding NextPageCommand}" />
+      <WrapPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="8,6">
+        <Button Margin="0,0,8,3" Content="Analyze" Command="{Binding AnalyzeCommand}" />
+        <Button Margin="0,0,8,3" Content="Replay" Command="{Binding ReplayCommand}" />
+        <Button Margin="0,0,8,3" Content="Send to Repeater" Command="{Binding SendToRepeaterCommand}" />
+        <Button Margin="0,0,8,3" Content="Previous" Command="{Binding PreviousPageCommand}" />
+        <Button Margin="0,0,8,3" Content="Next" Command="{Binding NextPageCommand}" />
         <Border Width="1" Margin="5,0" Background="{DynamicResource SemiColorBorder}" />
-        <Button Content="Continue" Command="{Binding ContinueCommand}" />
-        <Button Content="Drop" Command="{Binding DropCommand}" />
-        <Button Content="Fulfill edited response" Command="{Binding FulfillCommand}" />
-        <TextBlock VerticalAlignment="Center" Opacity="0.6" Text="Working…" IsVisible="{Binding IsBusy}" />
-      </StackPanel>
+        <Button Margin="8,0,8,3" Content="Continue" Command="{Binding ContinueCommand}" />
+        <Button Margin="0,0,8,3" Content="Drop" Command="{Binding DropCommand}" />
+        <Button Margin="0,0,8,3" Content="Fulfill response" Command="{Binding FulfillCommand}" />
+        <TextBlock Margin="0,0,0,3" VerticalAlignment="Center" Opacity="0.6" Text="Working…" IsVisible="{Binding IsBusy}" />
+      </WrapPanel>
     </Grid>
   </Grid>
 </UserControl>

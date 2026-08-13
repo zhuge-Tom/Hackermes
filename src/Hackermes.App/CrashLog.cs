@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using Hackermes.Base;
 
 namespace Hackermes.App;
 
@@ -16,10 +17,7 @@ internal static class CrashLog
     {
         try
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Hackermes",
-                "logs");
+            var dir = AppDataPaths.Resolve("logs");
             Directory.CreateDirectory(dir);
 
             var text = new StringBuilder()

@@ -93,16 +93,20 @@ public sealed class RepeaterWorkbenchHistoryViewModelTests
             SendTimeout = timeout;
             _sendStarted.TrySetResult(true);
             if (!BlockSend) return drafts[0];
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                throw new InvalidOperationException("Unreachable.");
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            // Complete synchronously from the cancellation callback. This deliberately
+            // exercises the ordering where SendAsync reaches its terminal state before
+            // CancellationTokenSource.Cancel returns to the cancel command.
+            var cancelled = new TaskCompletionSource<RepeaterDraftItem>();
+            using (cancellationToken.Register(() =>
             {
                 SendWasCancelled = true;
-                return drafts[0] with { LatestStatus = "Cancelled", LatestMetrics = "The send was cancelled." };
-            }
+                cancelled.TrySetResult(drafts[0] with
+                {
+                    LatestStatus = "Cancelled",
+                    LatestMetrics = "The send was cancelled."
+                });
+            }))
+                return await cancelled.Task;
         }
         public Task DeleteAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task ClearHistoryAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;

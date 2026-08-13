@@ -1,4 +1,5 @@
 using Hackermes.Base.Diagnostics;
+using Hackermes.Base;
 using Hackermes.Base.Events;
 using Hackermes.Platform.Events;
 using Hackermes.Platform.Models;
@@ -175,6 +176,15 @@ public sealed class SettingsService : ISettingsService
 
     private string ResolvePath()
     {
+        if (AppDataPaths.HasExplicitRoot)
+        {
+            var explicitRoot = AppDataPaths.Root;
+            Directory.CreateDirectory(explicitRoot);
+            if (!VerifyWritable(explicitRoot))
+                throw new IOException($"Configured Hackermes data root is not writable: {explicitRoot}");
+            return AppDataPaths.Resolve(FileName);
+        }
+
         foreach (var folder in new[]
                  {
                      Environment.SpecialFolder.LocalApplicationData,

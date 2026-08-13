@@ -1,4 +1,5 @@
 using Hackermes.Assessment;
+using Hackermes.Base;
 using Hackermes.App.Views;
 using Hackermes.Platform.Models;
 using System;
@@ -198,7 +199,7 @@ public sealed class ToolLaunchService
     {
         var candidate = !string.IsNullOrWhiteSpace(settings.WorkingDirectory) ? settings.WorkingDirectory : invocationDirectory;
         if (!string.IsNullOrWhiteSpace(candidate) && Directory.Exists(candidate)) return candidate;
-        var fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hackermes", "ToolWork");
+        var fallback = AppDataPaths.Resolve("ToolWork");
         Directory.CreateDirectory(fallback); return fallback;
     }
 

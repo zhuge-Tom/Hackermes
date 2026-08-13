@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -35,7 +36,8 @@ public sealed class AssessmentIntegrationModule : IModule
         var settings = serviceProvider.GetRequiredService<ISettingsService>();
         var launcher = serviceProvider.GetRequiredService<ToolLaunchService>();
         RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane);
-        RegisterAgent(serviceProvider.GetRequiredService<IAiToolRegistry>(), plane);
+        RegisterAgent(serviceProvider.GetRequiredService<IAiToolRegistry>(), plane,
+            serviceProvider.GetRequiredService<IPageContextQueryService>());
         AuthorizedToolsView? toolsView = null;
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
@@ -125,6 +127,10 @@ public sealed class AssessmentIntegrationModule : IModule
                     return CommandResult.Ok(plane.RevokeScope(Required(context, 2, "scope"), Required(context, 3, "operator"), context.Rest(4)) ? "revoked" : "not-revoked");
                 case "jobs":
                     return CommandResult.Ok(string.Join(Environment.NewLine, plane.Jobs.Select(value => $"{value.Id} {value.Status} scope={value.ScopeId} failure={value.Failure}")));
+                case "cases":
+                    return CommandResult.Ok(string.Join(Environment.NewLine, plane.ReadCases().Select(value =>
+                        $"{value.Job.Id} {value.Job.Status} scope={value.Scope.Name} plan={value.Plan.Name} " +
+                        $"canCancel={value.AvailableActions.CanCancelJob} canExport={value.AvailableActions.CanExportReport}")));
                 case "evidence":
                     return CommandResult.Ok(string.Join(Environment.NewLine, plane.Evidence(Required(context, 1, "job")).Select(value => $"{value.Id} {value.Source} {value.Sha256} {value.Content}")));
                 case "evidence-verify":
@@ -157,14 +163,29 @@ public sealed class AssessmentIntegrationModule : IModule
         catch (Exception exception) { return CommandResult.Fail(exception.Message); }
     }
 
-    public static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane)
+    public static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane,
+        IPageContextQueryService? pageContexts = null)
     {
         registry.Register(new AiToolDefinition("assessment_scopes", "List authorized assessment scopes.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.Scopes)))));
+        registry.Register(new AiToolDefinition("assessment_cases", "List coherent authorized assessment cases and their currently available actions.", Schema(new { }), AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.ReadCases())))));
         registry.Register(new AiToolDefinition("assessment_tools", "List bounded ToolHost adapters and local availability.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(AuthorizedToolCatalog.Describe())))));
-        registry.Register(new AiToolDefinition("assessment_create_scope", "Create an exact, time-bounded authorized target scope.", Schema(new { name = new { type = "string" }, authorization = new { type = "string" }, operatorId = new { type = "string" }, targets = new { type = "array", items = new { type = "string" } }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
-            (call, _) => ValueTask.FromResult(CreateScope(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_create_scope", "Create an exact, time-bounded authorized target scope when no browser page is attached. Browser-bound sessions must use assessment_create_scope_from_page.", Schema(new { name = new { type = "string" }, authorization = new { type = "string" }, operatorId = new { type = "string" }, targets = new { type = "array", items = new { type = "string" } }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
+            (call, _) => ValueTask.FromResult(call.PageId is null
+                ? CreateScope(plane, call.Arguments)
+                : ToolResult.Fail("A browser page is attached. Use assessment_create_scope_from_page so the model cannot substitute another target."))));
+        if (pageContexts is not null)
+        {
+            registry.Register(new AiToolDefinition("assessment_create_scope_from_page", "Create an exact, time-bounded authorized scope for the attached browser page. The target is derived from the page URL; no target argument is accepted.", Schema(new
+            {
+                name = new { type = "string" }, authorization = new { type = "string" },
+                operatorId = new { type = "string" }, minutes = new { type = "integer" }
+            }), AiToolRisk.Mutating,
+                (call, _) => ValueTask.FromResult(CreateScopeFromPage(plane, pageContexts, call)),
+                (call, _) => ValueTask.FromResult(PrepareScopeFromPage(pageContexts, call))));
+        }
         registry.Register(new AiToolDefinition("assessment_create_plan", "Create a bounded plan using a registered ToolHost adapter.", Schema(new { scopeId = new { type = "string" }, name = new { type = "string" }, adapterId = new { type = "string" }, input = new { type = "string", description = "Structured JSON; arbitrary commands are rejected." }, timeoutSeconds = new { type = "integer" } }), AiToolRisk.Mutating,
             (call, _) => ValueTask.FromResult(CreatePlan(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_approve", "Request an approval grant for an unchanged assessment plan.", Schema(new { planId = new { type = "string" }, operatorId = new { type = "string" }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
@@ -198,6 +219,68 @@ public sealed class AssessmentIntegrationModule : IModule
     }
 
     private static ToolResult CreateScope(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateScope(Text(args, "name"), Text(args, "authorization"), Text(args, "operatorId"), Strings(args, "targets"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 60))));
+    private const string PageBindingArgument = "__hackermesPageBinding";
+
+    private static ToolInvocation PrepareScopeFromPage(IPageContextQueryService pageContexts, ToolInvocation call)
+    {
+        if (string.IsNullOrWhiteSpace(call.PageId)) throw new InvalidOperationException("No active browser page is attached.");
+        var page = pageContexts.Read(call.PageId) ??
+            throw new InvalidOperationException("The attached browser page is unavailable or has been closed.");
+        var binding = ReadPageBinding(page);
+        if (call.Arguments.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Tool arguments must be a JSON object.");
+
+        var arguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in call.Arguments.EnumerateObject())
+            if (!string.Equals(property.Name, PageBindingArgument, StringComparison.Ordinal))
+                arguments[property.Name] = property.Value.Clone();
+        arguments[PageBindingArgument] = JsonSerializer.SerializeToElement(binding);
+        return call with { Arguments = JsonSerializer.SerializeToElement(arguments) };
+    }
+
+    private static ToolResult CreateScopeFromPage(IAssessmentControlPlane plane, IPageContextQueryService pageContexts, ToolInvocation call)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(call.PageId) ||
+                !call.Arguments.TryGetProperty(PageBindingArgument, out var bindingJson))
+                return ToolResult.Fail("The browser target was not frozen before authorization.");
+            var frozen = bindingJson.Deserialize<BrowserScopeBinding>() ??
+                throw new InvalidOperationException("The frozen browser target is invalid.");
+            if (!string.Equals(frozen.PageId, call.PageId, StringComparison.Ordinal))
+                return ToolResult.Fail("The frozen browser target does not match the attached page.");
+            var page = pageContexts.Read(call.PageId);
+            if (page is null) return ToolResult.Fail("The attached browser page is unavailable or has been closed.");
+            var current = ReadPageBinding(page);
+            if (current != frozen)
+                return ToolResult.Fail("The attached page navigated after authorization. Review and approve the new target.");
+
+            var scope = plane.CreateScope(Text(call.Arguments, "name"), Text(call.Arguments, "authorization"),
+                Text(call.Arguments, "operatorId"), [frozen.Target],
+                DateTimeOffset.UtcNow.AddMinutes(Number(call.Arguments, "minutes", 60)));
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                Scope = scope, frozen.PageId, frozen.Origin, frozen.Target,
+                frozen.Scheme, frozen.Port
+            }));
+        }
+        catch (Exception exception) { return ToolResult.Fail(exception.Message); }
+    }
+
+    private static BrowserScopeBinding ReadPageBinding(PageContextObservation page)
+    {
+        if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(uri.IdnHost) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("The attached page must have an absolute HTTP(S) URL without user information.");
+        var target = uri.IdnHost.TrimEnd('.').ToLowerInvariant();
+        if (target.Length == 0) throw new ArgumentException("The attached page host is invalid.");
+        var host = target.Contains(':', StringComparison.Ordinal) ? $"[{target}]" : target;
+        var origin = $"{uri.Scheme}://{host}{(uri.IsDefaultPort ? string.Empty : $":{uri.Port}")}";
+        return new BrowserScopeBinding(page.PageId, origin, target, uri.Scheme, uri.Port);
+    }
+
+    private sealed record BrowserScopeBinding(string PageId, string Origin, string Target, string Scheme, int Port);
     private static ToolResult CreatePlan(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreatePlan(Text(args, "scopeId"), Text(args, "name"), [new AssessmentStep(Text(args, "adapterId"), Text(args, "input"), Number(args, "timeoutSeconds", 30))], "agent"));
     private static ToolResult Approve(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.Approve(Text(args, "planId"), Text(args, "operatorId"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 30))));
     private static async ValueTask<ToolResult> RunAsync(IAssessmentControlPlane plane, JsonElement args, System.Threading.CancellationToken ct) { try { var job = await plane.StartAsync(Text(args, "planId"), Text(args, "approvalId"), Text(args, "operatorId"), ct).ConfigureAwait(false); return ToolResult.Ok(JsonSerializer.Serialize(job)); } catch (Exception ex) { return ToolResult.Fail(ex.Message); } }

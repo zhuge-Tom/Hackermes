@@ -1,10 +1,14 @@
 param(
     [int]$Port = 18765,
-    [int]$TimeoutSeconds = 55,
-    [switch]$NoBuild
+    [int]$TimeoutSeconds = 80,
+    [switch]$NoBuild,
+    [string]$BuildRoot,
+    [string]$EvidenceRoot,
+    [string]$ProfileRoot
 )
 
 $ErrorActionPreference = 'Stop'
+$buildEnvironment = & (Join-Path $PSScriptRoot 'initialize-build-environment.ps1')
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
@@ -14,9 +18,33 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $pagePath = Join-Path $PSScriptRoot 'selftest-page.html'
 $serverPath = Join-Path $PSScriptRoot 'selftest-server.py'
 $appProject = Join-Path $repoRoot 'src\Hackermes.App\Hackermes.App.csproj'
-$buildRoot = Join-Path $env:LOCALAPPDATA 'Hackermes\Build'
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $BuildRoot = $buildEnvironment.DefaultBuildRoot
+}
+$buildRoot = [IO.Path]::GetFullPath($BuildRoot)
 $appExe = Join-Path $buildRoot 'bin\Hackermes.App\TrafficSelfTest\net10.0\Hackermes.App.exe'
-$logPath = Join-Path $env:LOCALAPPDATA 'Hackermes\logs\latest.log'
+if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) {
+    $EvidenceRoot = Join-Path $buildEnvironment.Root 'evidence\traffic-selftest'
+}
+$evidenceRoot = [IO.Path]::GetFullPath($EvidenceRoot)
+if ([IO.Path]::GetPathRoot($buildRoot) -ne 'G:\' -or
+    [IO.Path]::GetPathRoot($evidenceRoot) -ne 'G:\') {
+    throw "BuildRoot and EvidenceRoot must stay on G: $buildRoot ; $evidenceRoot"
+}
+if ([string]::IsNullOrWhiteSpace($ProfileRoot)) {
+    $ProfileRoot = Join-Path $evidenceRoot 'webview2-profile'
+}
+$profileRoot = [IO.Path]::GetFullPath($ProfileRoot)
+if (-not $profileRoot.StartsWith(
+    $evidenceRoot + [IO.Path]::DirectorySeparatorChar,
+    [StringComparison]::OrdinalIgnoreCase)) {
+    throw "ProfileRoot must be contained by EvidenceRoot: $profileRoot"
+}
+if (Get-Process -Name 'Hackermes.App' -ErrorAction SilentlyContinue) {
+    throw 'Hackermes.App is already running. Close it before the desktop self-test.'
+}
+$isolatedDataRoot = Join-Path $evidenceRoot 'app-data'
+$logPath = Join-Path $isolatedDataRoot 'logs\latest.log'
 $prefix = "http://127.0.0.1:$Port/"
 $buildOrder = @(
     'Hackermes.Base', 'Hackermes.PageAgent', 'Hackermes.Platform', 'Hackermes.Dock',
@@ -39,6 +67,16 @@ function Wait-SelfTestAssembly {
     throw "Self-test build output stayed locked: $Path"
 }
 
+function Wait-ProcessGone {
+    param([Parameter(Mandatory)] [int]$Id, [int]$TimeoutSeconds = 30)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not (Get-Process -Id $Id -ErrorAction SilentlyContinue)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return -not (Get-Process -Id $Id -ErrorAction SilentlyContinue)
+}
+
 function Build-SelfTestProject {
     param([Parameter(Mandatory)] [string]$Name)
     $projectPath = Join-Path $repoRoot "src\$Name\$Name.csproj"
@@ -48,7 +86,7 @@ function Build-SelfTestProject {
         $arguments = @(
             'build', $projectPath, '--configuration', 'TrafficSelfTest',
             '--no-restore', '--no-dependencies', '--disable-build-servers',
-            '-m:1', '-p:UseSharedCompilation=false'
+            '-m:1', '-p:UseSharedCompilation=false', "-p:HackermesBuildRoot=$buildRoot"
         )
         if ($Name -eq 'Hackermes.App') { $arguments += '--no-incremental' }
         $output = & dotnet @arguments 2>&1
@@ -69,7 +107,7 @@ function Build-SelfTestProject {
 
 if (-not $NoBuild) {
     dotnet build-server shutdown | Out-Host
-    dotnet restore $appProject --disable-parallel | Out-Host
+    dotnet restore $appProject --disable-parallel "-p:HackermesBuildRoot=$buildRoot" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "App restore failed with exit code $LASTEXITCODE." }
     $buildOrder | ForEach-Object { Build-SelfTestProject -Name $_ }
 }
@@ -78,7 +116,6 @@ if (-not (Test-Path -LiteralPath $appExe)) { throw "Self-test executable not fou
 $runtimeDirectory = Split-Path -Parent $appExe
 $runtimeLibraries = $buildOrder | Where-Object { $_ -notin @('Hackermes.App', 'Hackermes.ToolHost') }
 Write-Host 'Waiting for security scanning to release self-test runtime files...'
-Start-Sleep -Seconds 45
 foreach ($name in $runtimeLibraries) {
     Wait-SelfTestAssembly -Path (Join-Path $runtimeDirectory "$name.dll") -TimeoutSeconds 60
 }
@@ -91,7 +128,10 @@ $server = Start-Process -FilePath $python.Source -ArgumentList @($serverPath, '-
 $oldSelftest = $env:HACKERMES_SELFTEST
 $oldExit = $env:HACKERMES_SELFTEST_EXIT
 $oldUrl = $env:HACKERMES_AUTOOPEN_URL
+$oldProfileRoot = $env:HACKERMES_BROWSER_PROFILE_ROOT
+$oldDataRoot = $env:HACKERMES_DATA_ROOT
 $process = $null
+$selfTestProcesses = @()
 try {
     $serverDeadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $serverDeadline) {
@@ -105,17 +145,21 @@ try {
     $env:HACKERMES_SELFTEST = '1'
     $env:HACKERMES_SELFTEST_EXIT = '1'
     $env:HACKERMES_AUTOOPEN_URL = "${prefix}selftest-page.html"
+    $env:HACKERMES_BROWSER_PROFILE_ROOT = $profileRoot
+    $env:HACKERMES_DATA_ROOT = $isolatedDataRoot
+    New-Item -ItemType Directory -Path $evidenceRoot, $profileRoot, $isolatedDataRoot -Force | Out-Null
+    if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
     $launchedAt = [DateTime]::UtcNow
     $process = Start-Process -FilePath $appExe -WorkingDirectory $runtimeDirectory -PassThru -WindowStyle Hidden
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $resultLine = $null
     while ([DateTime]::UtcNow -lt $deadline) {
+        $selfTestProcesses = @(Get-Process -Name 'Hackermes.App' -ErrorAction SilentlyContinue)
         if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).LastWriteTimeUtc -ge $launchedAt) {
             $resultLine = Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'TRAFFIC_SELFTEST RESULT' } | Select-Object -Last 1
             if ($resultLine) { break }
         }
-        if ($process.HasExited) { break }
         Start-Sleep -Milliseconds 250
     }
 
@@ -126,11 +170,48 @@ try {
     if ($resultLine -notmatch 'RESULT 5/5 PASS') { throw "Traffic acceptance failed: $resultLine" }
     Write-Host $resultLine
     Get-Content -LiteralPath $logPath | Where-Object { $_ -match 'TRAFFIC_SELFTEST (DPAPI_KEY|PASS|RESULT)' }
+    Copy-Item -LiteralPath $logPath -Destination (Join-Path $evidenceRoot 'desktop-loopback.log') -Force
 }
 finally {
-    if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-    if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+    $selfTestProcesses = @($selfTestProcesses + @(Get-Process -Name 'Hackermes.App' -ErrorAction SilentlyContinue) |
+        Sort-Object Id -Unique)
+    foreach ($candidate in $selfTestProcesses) {
+        if (-not $candidate.HasExited) { Stop-Process -Id $candidate.Id -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($candidate in $selfTestProcesses) {
+        Wait-Process -Id $candidate.Id -Timeout 10 -ErrorAction SilentlyContinue
+    }
+    if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force; Wait-Process -Id $server.Id -Timeout 10 -ErrorAction SilentlyContinue }
+    $appGone = $true
+    foreach ($candidate in $selfTestProcesses) {
+        if (-not (Wait-ProcessGone -Id $candidate.Id)) { $appGone = $false }
+    }
+    $serverGone = -not $server -or (Wait-ProcessGone -Id $server.Id)
     $env:HACKERMES_SELFTEST = $oldSelftest
     $env:HACKERMES_SELFTEST_EXIT = $oldExit
     $env:HACKERMES_AUTOOPEN_URL = $oldUrl
+    $env:HACKERMES_BROWSER_PROFILE_ROOT = $oldProfileRoot
+    $env:HACKERMES_DATA_ROOT = $oldDataRoot
+
+    if (-not $appGone) {
+        throw "Hackermes self-test process was not reaped: PID $($process.Id)."
+    }
+    if (-not $serverGone) {
+        throw "Loopback server process was not reaped: PID $($server.Id)."
+    }
+    $profileProcessDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $profileProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.ProcessId -ne $PID -and
+            -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+            $_.CommandLine.IndexOf($profileRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        })
+        if ($profileProcesses.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $profileProcessDeadline)
+    if ($profileProcesses.Count -gt 0) {
+        throw "WebView2 profile process was not reaped: PID $($profileProcesses.ProcessId -join ', ')."
+    }
+    $listener = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($listener) { throw "Loopback listener remained on 127.0.0.1:$Port after self-test cleanup." }
 }

@@ -1,5 +1,4 @@
 using Hackermes.AiPanel.Tools;
-using Hackermes.Automation.Commands;
 using Hackermes.Automation.Packet;
 using System;
 using System.Collections.Generic;
@@ -19,70 +18,72 @@ internal static class TrafficAiToolRegistrar
 
     public static void Register(IAiToolRegistry registry, IPacketCommandService packets)
     {
-        Register(registry, packets, "packet_list", "List captured HTTP packets. Values are not returned.",
-            AiToolRisk.ReadOnly, "filter", false, a => Args("ls", Optional(a, "filter")));
-        if (packets is IPacketQueryService queries) RegisterPacketQueryTool(registry, queries);
-        Register(registry, packets, "packet_show", "Show a captured HTTP request or response. Sensitive header values are redacted.",
-            AiToolRisk.ReadOnly, "id", true, a => Args("show", Required(a, "id"), Optional(a, "side", "request")));
+        RegisterTyped(registry, packets, "packet_list", "List captured HTTP packets. Values are not returned.",
+            AiToolRisk.ReadOnly, "filter", false, a => new PacketListIntent(OptionalValue(a, "filter")));
+        if (packets is IPacketQueryService) RegisterPacketQueryTool(registry, packets);
+        RegisterTyped(registry, packets, "packet_show", "Show a captured HTTP request or response. Sensitive header values are redacted.",
+            AiToolRisk.ReadOnly, "id", true, a => new PacketShowIntent(Required(a, "id"), Optional(a, "side", "request")), redact: true);
         RegisterAnalysisTool(registry, packets);
-        Register(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
-            AiToolRisk.ReadOnly, "leftId", true, a => Args("diff", Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
+        RegisterTyped(registry, packets, "packet_diff", "Compare two captured HTTP packets semantically.",
+            AiToolRisk.ReadOnly, "leftId", true, a => new PacketDiffIntent(Required(a, "leftId"), Required(a, "rightId"), Optional(a, "side", "request")));
         if (packets is IPacketAuditQueryService)
-            Register(registry, packets, "packet_audit", "Query bounded metadata-only traffic operation audit entries.",
-                AiToolRisk.ReadOnly, "packetId", false, a => Args("audit", Optional(a, "packetId", "*"),
-                    a.TryGetProperty("limit", out var limit) ? limit.GetRawText() : "100"));
+            RegisterTyped(registry, packets, "packet_audit", "Query bounded metadata-only traffic operation audit entries.",
+                AiToolRisk.ReadOnly, "packetId", false, a => new PacketAuditIntent(Optional(a, "packetId", "*"),
+                    a.TryGetProperty("limit", out var limit) ? limit.GetInt32() : 100));
         if (packets is IPacketAuditExportService auditExports) RegisterAuditExportTools(registry, auditExports);
-        Register(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
-            AiToolRisk.ReadOnly, "id", true, a => Args("param-list", Required(a, "id"), Optional(a, "side", "request")));
+        RegisterTyped(registry, packets, "packet_parameters", "List structured query, form and top-level JSON parameters. Sensitive values are redacted.",
+            AiToolRisk.ReadOnly, "id", true, a => new PacketParameterListIntent(Required(a, "id"), Optional(a, "side", "request")), redact: true);
         RegisterParameterSetTool(registry, packets);
-        Register(registry, packets, "packet_replay", "Replay a captured HTTP request in its browser session.",
-            AiToolRisk.Mutating, "id", true, a => Args("replay", Required(a, "id")));
-        Register(registry, packets, "packet_intercept", "Enable or disable holding browser requests for inspection.",
-            AiToolRisk.Mutating, "enabled", true, a => Args("intercept", Required(a, "enabled") == "true" ? "on" : "off"));
+        RegisterTyped(registry, packets, "packet_replay", "Replay a captured HTTP request in its browser session.",
+            AiToolRisk.Mutating, "id", true, a => new PacketReplayIntent(Required(a, "id")));
+        RegisterTyped(registry, packets, "packet_intercept", "Enable or disable holding browser requests for inspection.",
+            AiToolRisk.Mutating, "enabled", true, a => new PacketInterceptionIntent(a.GetProperty("enabled").GetBoolean()));
         if (packets is IPacketInterceptionModeService)
-            Register(registry, packets, "packet_intercept_mode", "Set independent request/response interception: request, response, both or off.",
-                AiToolRisk.Mutating, "mode", true, a => Args("intercept-mode", Required(a, "mode")));
-        if (packets is IPacketCommitService commits)
-            RegisterCommitTools(registry, commits);
+            RegisterTyped(registry, packets, "packet_intercept_mode", "Set independent request/response interception: request, response, both or off.",
+                AiToolRisk.Mutating, "mode", true, a => new PacketInterceptionModeIntent(ParseInterceptionMode(Required(a, "mode"))));
+        if (packets is IPacketCommitService)
+            RegisterCommitTools(registry, packets);
         else
         {
-            Register(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
-                AiToolRisk.Mutating, "id", true, a => Args("continue", Required(a, "id")));
-            Register(registry, packets, "packet_drop", "Drop a held HTTP request.",
-                AiToolRisk.Dangerous, "id", true, a => Args("drop", Required(a, "id")));
-            Register(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
-                AiToolRisk.Dangerous, "id", true, a => Args("edit", Required(a, "id"), Required(a, "side"), EscapeRaw(Required(a, "rawHttp"))));
+            RegisterTyped(registry, packets, "packet_continue", "Continue a held HTTP request without edits.",
+                AiToolRisk.Mutating, "id", true, a => new PacketCommitIntent(PacketCommitAction.Continue, Required(a, "id")));
+            RegisterTyped(registry, packets, "packet_drop", "Drop a held HTTP request.",
+                AiToolRisk.Dangerous, "id", true, a => new PacketCommitIntent(PacketCommitAction.Drop, Required(a, "id")));
+            RegisterTyped(registry, packets, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
+                AiToolRisk.Dangerous, "id", true, a => new PacketCommitIntent(PacketCommitAction.Edit, Required(a, "id"),
+                    Required(a, "side"), Required(a, "rawHttp")));
         }
         if (packets is IPacketEditDraftService)
         {
-            Register(registry, packets, "packet_edit_drafts", "List pending binary edits with before/after length, SHA-256, Content-Length and last commit failure.",
-                AiToolRisk.ReadOnly, "id", false, _ => "draft-list");
-            Register(registry, packets, "packet_edit_draft", "Inspect one pending binary edit and its latest commit failure.",
-                AiToolRisk.ReadOnly, "id", true, a => Args("draft-show", Required(a, "id"), Optional(a, "side", "request")));
+            RegisterTyped(registry, packets, "packet_edit_drafts", "List pending binary edits with before/after length, SHA-256, Content-Length and last commit failure.",
+                AiToolRisk.ReadOnly, "id", false, _ => new PacketDraftListIntent());
+            RegisterTyped(registry, packets, "packet_edit_draft", "Inspect one pending binary edit and its latest commit failure.",
+                AiToolRisk.ReadOnly, "id", true, a => new PacketDraftShowIntent(Required(a, "id"), Optional(a, "side", "request")));
             if (packets is not IPacketCommitService)
-                Register(registry, packets, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
-                    AiToolRisk.Mutating, "id", true, a => Args("draft-discard", Required(a, "id"), Optional(a, "side", "request")));
+                RegisterTyped(registry, packets, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
+                    AiToolRisk.Mutating, "id", true, a => new PacketCommitIntent(PacketCommitAction.Discard, Required(a, "id"),
+                        Optional(a, "side", "request")));
         }
         if (packets is IPacketBodyReadService bodies) RegisterBodyTools(registry, bodies);
         if (packets is IPacketBodyEditService editor) RegisterBodyEditTool(registry, editor);
         if (packets is IPacketArchiveService archive) RegisterArchiveTools(registry, archive);
     }
 
-    private static void RegisterCommitTools(IAiToolRegistry registry, IPacketCommitService commits)
+    private static void RegisterCommitTools(IAiToolRegistry registry, IPacketCommandService packets)
     {
         RegisterCommitTool(registry, "packet_continue", "Continue a held HTTP request without edits.",
-            AiToolRisk.Mutating, false, (args, ct) => commits.CommitContinueAsync(Required(args, "id"), ct));
+            AiToolRisk.Mutating, false, packets, args => new PacketCommitIntent(PacketCommitAction.Continue, Required(args, "id")));
         RegisterCommitTool(registry, "packet_drop", "Drop a held HTTP request.",
-            AiToolRisk.Dangerous, false, (args, ct) => commits.CommitDropAsync(Required(args, "id"), ct));
+            AiToolRisk.Dangerous, false, packets, args => new PacketCommitIntent(PacketCommitAction.Drop, Required(args, "id")));
         RegisterCommitTool(registry, "packet_edit", "Replace and continue a held request, or fulfill it with an edited response.",
-            AiToolRisk.Dangerous, true, (args, ct) => commits.CommitEditAsync(Required(args, "id"),
-                Required(args, "side"), Required(args, "rawHttp"), ct));
+            AiToolRisk.Dangerous, true, packets, args => new PacketCommitIntent(PacketCommitAction.Edit, Required(args, "id"),
+                Required(args, "side"), Required(args, "rawHttp")));
         RegisterCommitTool(registry, "packet_edit_discard", "Discard a pending binary edit and restore its original body and headers.",
-            AiToolRisk.Mutating, false, (args, ct) => commits.CommitDiscardAsync(Required(args, "id"),
-                Optional(args, "side", "request"), ct));
+            AiToolRisk.Mutating, false, packets, args => new PacketCommitIntent(PacketCommitAction.Discard, Required(args, "id"),
+                Optional(args, "side", "request")));
     }
 
-    private static void RegisterPacketQueryTool(IAiToolRegistry registry, IPacketQueryService queries)
+    private static void RegisterPacketQueryTool(IAiToolRegistry registry, IPacketCommandService packets)
     {
         var schema = JsonSerializer.SerializeToElement(new
         {
@@ -106,12 +107,17 @@ internal static class TrafficAiToolRegistrar
                 try
                 {
                     var args = invocation.Arguments;
-                    var query = PacketQueryLimits.Validate(new PacketQuery(
+                    var query = new PacketQuery(
                         OptionalValue(args, "text"), OptionalValue(args, "method"), OptionalInt(args, "statusCode"),
                         OptionalValue(args, "resourceType"), OptionalBool(args, "onlyIntercepted"),
-                        OptionalInt(args, "offset") ?? 0, OptionalInt(args, "limit") ?? 100));
-                    var page = await queries.QueryPacketsAsync(query, ct).ConfigureAwait(false);
-                    return ToolResult.Ok(JsonSerializer.Serialize(page, CommitJsonOptions));
+                        OptionalInt(args, "offset") ?? 0, OptionalInt(args, "limit") ?? 100);
+                    var outcome = await PacketOperationExecutor.ExecuteAsync(packets, new PacketQueryIntent(query), ct).ConfigureAwait(false);
+                    return outcome switch
+                    {
+                        PacketQueryOutcome page => ToolResult.Ok(JsonSerializer.Serialize(page.Page, CommitJsonOptions)),
+                        PacketOperationFailure failure => ToolResult.Fail(failure.Error),
+                        _ => ToolResult.Fail("Unsupported packet operation outcome.")
+                    };
                 }
                 catch (ArgumentException exception)
                 {
@@ -180,7 +186,7 @@ internal static class TrafficAiToolRegistrar
     }
 
     private static void RegisterCommitTool(IAiToolRegistry registry, string name, string description,
-        AiToolRisk risk, bool rawHttp, Func<JsonElement, CancellationToken, Task<PacketCommitResult>> commit)
+        AiToolRisk risk, bool rawHttp, IPacketCommandService packets, Func<JsonElement, PacketCommitIntent> intent)
     {
         var schema = rawHttp
             ? JsonSerializer.SerializeToElement(new
@@ -203,9 +209,11 @@ internal static class TrafficAiToolRegistrar
                 });
         registry.Register(new AiToolDefinition(name, description, schema, risk, async (invocation, ct) =>
         {
-            var result = await commit(invocation.Arguments, ct).ConfigureAwait(false);
-            var json = JsonSerializer.Serialize(result, CommitJsonOptions);
-            return result.Success ? ToolResult.Ok(json) : ToolResult.Fail(json);
+            var outcome = await PacketOperationExecutor.ExecuteAsync(packets, intent(invocation.Arguments), ct).ConfigureAwait(false);
+            if (outcome is PacketOperationFailure failure) return ToolResult.Fail(failure.Error);
+            if (outcome is not PacketCommitOutcome commit) return ToolResult.Fail("Unsupported packet operation outcome.");
+            var json = JsonSerializer.Serialize(commit.Result, CommitJsonOptions);
+            return commit.Result.Success ? ToolResult.Ok(json) : ToolResult.Fail(json);
         }));
     }
 
@@ -318,18 +326,13 @@ internal static class TrafficAiToolRegistrar
                 try
                 {
                     var args = invocation.Arguments;
-                    var id = Required(args, "id");
-                    var side = Required(args, "side");
-                    if (side is not ("request" or "response"))
-                        return ToolResult.Fail("Side must be request or response.");
-                    var raw = await packets.GetRawAsync(id, side, ct).ConfigureAwait(false);
-                    if (raw is null) return ToolResult.Fail($"Packet '{id}' has no {side}.");
                     if (!Enum.TryParse<HttpParameterLocation>(Required(args, "location"), true, out var location))
                         return ToolResult.Fail("Parameter location must be query, form, json, header or cookie.");
-                    var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(raw), location,
-                        Required(args, "name"), args.GetProperty("occurrence").GetInt32(), Required(args, "value"));
-                    await packets.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct).ConfigureAwait(false);
-                    return ToolResult.Ok("Parameter updated and packet submitted.");
+                    var outcome = await PacketOperationExecutor.ExecuteAsync(packets, new PacketParameterSetIntent(
+                        Required(args, "id"), Required(args, "side"), location, Required(args, "name"),
+                        args.GetProperty("occurrence").GetInt32(), Required(args, "value")), ct).ConfigureAwait(false);
+                    var result = PacketCommandRegistrar.FormatOutcome(outcome);
+                    return result.Success ? ToolResult.Ok(result.Output) : ToolResult.Fail(result.Output);
                 }
                 catch (Exception exception) when (exception is ArgumentException or InvalidDataException or
                                                   KeyNotFoundException or HttpPacketParseException)
@@ -409,11 +412,22 @@ internal static class TrafficAiToolRegistrar
             }));
     }
 
-    private static void Register(IAiToolRegistry registry, IPacketCommandService packets, string name,
+    private static void RegisterTyped(IAiToolRegistry registry, IPacketCommandService packets, string name,
         string description, AiToolRisk risk, string primary, bool required,
-        Func<JsonElement, string> arguments)
+        Func<JsonElement, PacketOperationIntent> intent, bool redact = false)
     {
-        var schema = JsonSerializer.SerializeToElement(new
+        var schema = CreateSchema(name, primary, required);
+        registry.Register(new AiToolDefinition(name, description, schema, risk, async (invocation, ct) =>
+        {
+            var outcome = await PacketOperationExecutor.ExecuteAsync(packets, intent(invocation.Arguments), ct).ConfigureAwait(false);
+            var result = PacketCommandRegistrar.FormatOutcome(outcome);
+            var output = redact ? Redact(result.Output) : result.Output;
+            return result.Success ? ToolResult.Ok(output) : ToolResult.Fail(output);
+        }));
+    }
+
+    private static JsonElement CreateSchema(string name, string primary, bool required) =>
+        JsonSerializer.SerializeToElement(new
         {
             type = "object",
             properties = new
@@ -429,9 +443,6 @@ internal static class TrafficAiToolRegistrar
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false
         });
-        registry.Register(new AiToolDefinition(name, description, schema, risk,
-            async (invocation, ct) => await ExecuteAsync(packets, arguments(invocation.Arguments), name == "packet_show", ct)));
-    }
 
     private static string[] RequiredFields(string name, string primary) => name switch
     {
@@ -440,22 +451,6 @@ internal static class TrafficAiToolRegistrar
         "packet_parameter_set" => ["id", "side", "location", "name", "occurrence", "value"],
         _ => [primary]
     };
-
-    private static async ValueTask<ToolResult> ExecuteAsync(
-        IPacketCommandService packets, string args, bool redact, CancellationToken ct)
-    {
-        var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var context = new CommandContext
-        {
-            Args = tokens,
-            PageId = null,
-            RawInput = "packet " + args,
-            RawArguments = args
-        };
-        var result = await PacketCommandRegistrar.ExecuteAsync(packets, context, ct).ConfigureAwait(false);
-        var output = redact || args.StartsWith("param-list ", StringComparison.Ordinal) ? Redact(result.Output) : result.Output;
-        return result.Success ? ToolResult.Ok(output) : ToolResult.Fail(output);
-    }
 
     private static string Required(JsonElement value, string name) =>
         value.TryGetProperty(name, out var property) ? property.ValueKind == JsonValueKind.String
@@ -468,8 +463,14 @@ internal static class TrafficAiToolRegistrar
         value.TryGetProperty(name, out var property) ? property.GetInt32() : null;
     private static bool OptionalBool(JsonElement value, string name) =>
         value.TryGetProperty(name, out var property) && property.GetBoolean();
-    private static string Args(params string[] values) => string.Join(' ', values);
-    private static string EscapeRaw(string raw) => raw.Replace("\r\n", "\\r\\n", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal);
+    private static PacketInterceptionMode ParseInterceptionMode(string value) => value.ToLowerInvariant() switch
+    {
+        "request" => PacketInterceptionMode.Request,
+        "response" => PacketInterceptionMode.Response,
+        "both" => PacketInterceptionMode.Both,
+        "off" => PacketInterceptionMode.Off,
+        _ => throw new ArgumentException("Mode must be request, response, both or off.")
+    };
 
     private static string Redact(string raw)
     {

@@ -28,6 +28,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
     private readonly ICdpSessionRegistry _registry;
     private readonly WebViewCreationCoordinator _coordinator;
     private readonly PageAgentInjector _agentInjector;
+    private readonly BrowserPageContextService _pageContexts;
     private readonly ISettingsService _settings;
     private readonly IAppLogger _logger;
     private readonly List<string> _openPageIds = [];
@@ -38,6 +39,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         ICdpSessionRegistry registry,
         WebViewCreationCoordinator coordinator,
         PageAgentInjector agentInjector,
+        BrowserPageContextService pageContexts,
         ISettingsService settings,
         IAppLogger logger)
     {
@@ -45,6 +47,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         _registry = registry;
         _coordinator = coordinator;
         _agentInjector = agentInjector;
+        _pageContexts = pageContexts;
         _settings = settings;
         _logger = logger.ForCategory(nameof(BrowserTabManager));
 
@@ -72,6 +75,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
 
         var viewModel = new BrowserTabViewModel(pageId, target);
         var view = new BrowserTabView(viewModel, _eventBus, _registry, _coordinator, _agentInjector, _settings, _logger);
+        _pageContexts.Track(viewModel);
 
         var tab = new DockTabItemViewModel
         {
@@ -111,5 +115,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         {
             _openPageIds.Remove(e.TabId);
         }
+
+        _pageContexts.Untrack(e.TabId);
     }
 }

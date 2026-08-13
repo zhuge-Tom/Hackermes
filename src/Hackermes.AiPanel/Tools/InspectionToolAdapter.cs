@@ -12,14 +12,28 @@ public sealed class InspectionToolAdapter(IConsoleQueryService console, INetwork
         registry.Register(new AiToolDefinition(
             "console_read", "读取页面控制台、未捕获异常和浏览器日志。",
             QuerySchema("level", "可选日志级别: error/warn/info/debug"), AiToolRisk.ReadOnly,
-            (invocation, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(
-                console.Read(ReadLast(invocation.Arguments), ReadString(invocation.Arguments, "level")))))));
+            (invocation, _) => ValueTask.FromResult(ReadConsole(invocation))));
 
         registry.Register(new AiToolDefinition(
             "network_list", "读取最近网络请求，包含状态、耗时和发起调用栈。",
             QuerySchema("failuresOnly", "是否只返回失败请求"), AiToolRisk.ReadOnly,
-            (invocation, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(
-                network.Read(ReadLast(invocation.Arguments), ReadBool(invocation.Arguments, "failuresOnly")))))));
+            (invocation, _) => ValueTask.FromResult(ReadNetwork(invocation))));
+    }
+
+    private ToolResult ReadConsole(ToolInvocation invocation)
+    {
+        if (string.IsNullOrWhiteSpace(invocation.PageId))
+            return ToolResult.Fail("没有活动的页面");
+        return ToolResult.Ok(JsonSerializer.Serialize(console.Read(
+            ReadLast(invocation.Arguments), ReadString(invocation.Arguments, "level"), invocation.PageId)));
+    }
+
+    private ToolResult ReadNetwork(ToolInvocation invocation)
+    {
+        if (string.IsNullOrWhiteSpace(invocation.PageId))
+            return ToolResult.Fail("没有活动的页面");
+        return ToolResult.Ok(JsonSerializer.Serialize(network.Read(
+            ReadLast(invocation.Arguments), ReadBool(invocation.Arguments, "failuresOnly"), invocation.PageId)));
     }
 
     private static JsonElement QuerySchema(string extraName, string description) => JsonSerializer.SerializeToElement(new

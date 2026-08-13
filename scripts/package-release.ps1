@@ -1,12 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.7.0',
+    [string]$Version = '0.8.0',
     [string]$OutputRoot,
+    [string]$BuildRoot,
     [ValidateSet('all', 'windows', 'linux')]
     [string]$Platforms = 'all'
 )
 
 $ErrorActionPreference = 'Stop'
+$buildEnvironment = & (Join-Path $PSScriptRoot 'initialize-build-environment.ps1')
 $utf8 = [Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
@@ -19,10 +21,18 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $appProject = Join-Path $projectRoot 'src\Hackermes.App\Hackermes.App.csproj'
 $toolHostProject = Join-Path $projectRoot 'src\Hackermes.ToolHost\Hackermes.ToolHost.csproj'
 $packagingRoot = Join-Path $projectRoot 'packaging'
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $BuildRoot = $buildEnvironment.DefaultBuildRoot
+}
+$resolvedBuildRoot = [IO.Path]::GetFullPath($BuildRoot)
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $projectRoot 'artifacts\release'
+    $OutputRoot = Join-Path $buildEnvironment.Root 'artifacts\release'
 }
 $resolvedOutputRoot = [IO.Path]::GetFullPath($OutputRoot)
+if ([IO.Path]::GetPathRoot($resolvedBuildRoot) -ne 'G:\' -or
+    [IO.Path]::GetPathRoot($resolvedOutputRoot) -ne 'G:\') {
+    throw "BuildRoot and OutputRoot must stay on G: $resolvedBuildRoot ; $resolvedOutputRoot"
+}
 $versionRoot = [IO.Path]::GetFullPath((Join-Path $resolvedOutputRoot $Version))
 if (-not $versionRoot.StartsWith($resolvedOutputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Release directory escapes the configured output root: $versionRoot"
@@ -39,7 +49,9 @@ function Invoke-Publish {
         '--self-contained', 'true', '-o', $Destination,
         '-p:TargetExt=.dll', "-p:Version=$Version",
         '-p:DebugType=None', '-p:DebugSymbols=false',
-        '-p:PublishTrimmed=false', '--disable-build-servers', '-m:1'
+        '-p:PublishTrimmed=false', '-p:NuGetAudit=false',
+        '--disable-build-servers', '-m:1'
+        "-p:HackermesBuildRoot=$resolvedBuildRoot"
     )
     if ($SingleFile) {
         $arguments += '-p:PublishSingleFile=true'
@@ -155,6 +167,16 @@ if ($null -ne $windowsRoot) { $archiveArguments += @('--windows', $windowsRoot) 
 if ($null -ne $linuxRoot) { $archiveArguments += @('--linux', $linuxRoot) }
 & $python.Source @archiveArguments
 if ($LASTEXITCODE -ne 0) { throw 'Creating release archives failed.' }
+
+foreach ($stagingDirectory in Get-ChildItem -LiteralPath $versionRoot -Directory -Force -Filter '.toolhost-*') {
+    $resolvedStaging = [IO.Path]::GetFullPath($stagingDirectory.FullName)
+    if (-not $resolvedStaging.StartsWith(
+        $versionRoot + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove an unexpected ToolHost staging directory: $resolvedStaging"
+    }
+    Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
+}
 
 Get-ChildItem -LiteralPath $versionRoot -File | Select-Object Name, Length, LastWriteTime
 Write-Host "Release packages are ready: $versionRoot"

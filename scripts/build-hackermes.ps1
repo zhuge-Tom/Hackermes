@@ -1,7 +1,13 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Debug',
+    [string]$BuildRoot,
+    [switch]$KeepIntermediates
+)
 
 $ErrorActionPreference = 'Stop'
+$buildEnvironment = & (Join-Path $PSScriptRoot 'initialize-build-environment.ps1')
 # dotnet writes localized output as UTF-8. Align the PowerShell host and child
 # process output so compiler diagnostics do not become mojibake on Windows.
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -12,14 +18,19 @@ chcp 65001 | Out-Null
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $projectRoot 'src\Hackermes.App\Hackermes.App.csproj'
-$buildRoot = Join-Path $env:LOCALAPPDATA 'Hackermes\Build'
-$executable = Join-Path $buildRoot 'bin\Hackermes.App\Debug\net10.0\Hackermes.App.exe'
+if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
+    $BuildRoot = $buildEnvironment.DefaultBuildRoot
+}
+$buildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
+if ([IO.Path]::GetPathRoot($buildRoot) -ne 'G:\') {
+    throw "BuildRoot must stay on G: $buildRoot"
+}
+$executable = Join-Path $buildRoot "bin\Hackermes.App\$Configuration\net10.0\Hackermes.App.exe"
 $buildStamp = Join-Path $buildRoot 'source.fingerprint'
 
 $existing = Get-Process -Name 'Hackermes.App' -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "Hackermes is already running (PID $($existing[0].Id)). Close it before rebuilding."
-    exit 0
+    throw "Hackermes is already running (PID $($existing[0].Id)). Close it before rebuilding."
 }
 
 function Wait-HackermesAssembly {
@@ -198,17 +209,19 @@ function Build-HackermesProject {
     )
 
     $projectPath = Join-Path $projectRoot "src\$Name\$Name.csproj"
-    $assemblyPath = Join-Path $buildRoot "bin\$Name\Debug\net10.0\$Name.dll"
+    $assemblyPath = Join-Path $buildRoot "bin\$Name\$Configuration\net10.0\$Name.dll"
     $maximumAttempts = if ($Name -eq 'Hackermes.App') { 20 } else { 8 }
 
     for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
         $buildArguments = @(
             'build', $projectPath,
+            '--configuration', $Configuration,
             '--no-restore',
             '--no-dependencies',
             '--disable-build-servers',
             '-m:1',
-            '-p:UseSharedCompilation=false'
+            '-p:UseSharedCompilation=false',
+            "-p:HackermesBuildRoot=$buildRoot"
         )
         if ($Name -eq 'Hackermes.App') {
             # An interrupted Avalonia compile can leave an invalid incremental
@@ -245,7 +258,8 @@ Write-Host 'Building Hackermes source...'
 
 # Release stale MSBuild/Roslyn workers before Avalonia regenerates compiled resources.
 dotnet build-server shutdown | Out-Host
-dotnet restore $project --disable-parallel | Out-Host
+dotnet restore $project --disable-parallel "-p:HackermesBuildRoot=$buildRoot" | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "App restore failed with exit code $LASTEXITCODE." }
 
 # Build one dependency layer at a time.  A security scanner on this machine
 # briefly opens every new DLL exclusively; waiting at each boundary prevents
@@ -334,5 +348,7 @@ foreach ($name in $runtimeLibraries) {
 Wait-HackermesAssembly -Path (Join-Path $runtimeDirectory 'Hackermes.App.dll') -TimeoutSeconds 60
 Wait-HackermesAssembly -Path $executable -TimeoutSeconds 60
 [System.IO.Directory]::CreateDirectory($buildRoot) | Out-Null
-Clear-HackermesBuildIntermediates
+if (-not $KeepIntermediates) {
+    Clear-HackermesBuildIntermediates
+}
 Write-Host 'Hackermes build completed. Run scripts\run-hackermes.ps1 to start the application.'

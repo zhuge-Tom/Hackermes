@@ -51,10 +51,12 @@ public sealed class PageInspectionService : IDisposable
     public const int MaximumValueCharacters = 16_384;
     private readonly ICdpSessionRegistry _sessions;
     private readonly IEventBus _eventBus;
+    private readonly IPageAgentRuntime _pageAgentRuntime;
+    private readonly IUiEventDispatcher _uiDispatcher;
     private readonly IDisposable _activeSubscription;
     private readonly IDisposable _pickerRequestSubscription;
     private readonly IDisposable _navigationSubscription;
-    private readonly Dictionary<string, IDisposable> _pickerSubscriptions = [];
+    private readonly IDisposable _pickerMessageSubscription;
     private string? _activePageId;
 
     public event Action<DomPickerMessage>? PickerMessageReceived;
@@ -62,9 +64,28 @@ public sealed class PageInspectionService : IDisposable
     public string? ActivePageId => _activePageId;
 
     public PageInspectionService(ICdpSessionRegistry sessions, IEventBus eventBus)
+        : this(sessions, eventBus, UnavailablePageAgentRuntime.Instance, new AvaloniaUiEventDispatcher())
+    {
+    }
+
+    public PageInspectionService(
+        ICdpSessionRegistry sessions,
+        IEventBus eventBus,
+        IPageAgentRuntime pageAgentRuntime)
+        : this(sessions, eventBus, pageAgentRuntime, new AvaloniaUiEventDispatcher())
+    {
+    }
+
+    public PageInspectionService(
+        ICdpSessionRegistry sessions,
+        IEventBus eventBus,
+        IPageAgentRuntime pageAgentRuntime,
+        IUiEventDispatcher uiDispatcher)
     {
         _sessions = sessions;
         _eventBus = eventBus;
+        _pageAgentRuntime = pageAgentRuntime;
+        _uiDispatcher = uiDispatcher;
         _activeSubscription = eventBus.SubscribeDisposable<ActiveContentTabChangedEvent>(value =>
         {
             if (value.TabId?.StartsWith("page-", StringComparison.Ordinal) == true) _activePageId = value.TabId;
@@ -73,9 +94,12 @@ public sealed class PageInspectionService : IDisposable
             _ = SetPickerEnabledAsync(request.PageId, request.Enabled, CancellationToken.None));
         _navigationSubscription = eventBus.SubscribeDisposable<BrowserPageNavigatedEvent>(navigation =>
         {
+            _eventBus.Publish(new ElementPickerStateChangedEvent(navigation.PageId, false));
             if (string.Equals(navigation.PageId, _activePageId, StringComparison.Ordinal))
-                UiThreadBridge.Post(() => PageNavigated?.Invoke(navigation.PageId));
+                _uiDispatcher.Post(() => PageNavigated?.Invoke(navigation.PageId));
         });
+        _pickerMessageSubscription = eventBus.SubscribeDisposable<PageAgentMessageEvent>(OnPickerMessage);
+        _sessions.SessionClosed += OnSessionClosed;
     }
 
     public async Task<IReadOnlyList<DomNodeItem>> ReadDomAsync(CancellationToken cancellationToken)
@@ -147,18 +171,13 @@ public sealed class PageInspectionService : IDisposable
 
     public async Task SetPickerEnabledAsync(string pageId, bool enabled, CancellationToken cancellationToken)
     {
-        var session = _sessions.Get(pageId);
-        if (session is null)
-        {
-            _eventBus.Publish(new ElementPickerStateChangedEvent(pageId, false, "The browser page is no longer available."));
-            return;
-        }
-
         try
         {
-            await EnsurePickerBindingAsync(session, cancellationToken).ConfigureAwait(false);
             var script = BuildPickerScript(enabled);
-            await session.SendAsync("Runtime.evaluate", CdpJson.Params(("expression", script), ("returnByValue", true)), cancellationToken).ConfigureAwait(false);
+            await _pageAgentRuntime.EvaluateInIsolatedWorldAsync(
+                pageId,
+                script,
+                cancellationToken).ConfigureAwait(false);
             _eventBus.Publish(new ElementPickerStateChangedEvent(pageId, enabled));
             if (enabled) _eventBus.Publish(new SwitchDockTabRequestedEvent(Hackermes.Platform.Registries.DockPosition.Bottom, "dom-inspector"));
         }
@@ -168,42 +187,27 @@ public sealed class PageInspectionService : IDisposable
         }
     }
 
-    private async Task EnsurePickerBindingAsync(ICdpSession session, CancellationToken cancellationToken)
+    private void OnPickerMessage(PageAgentMessageEvent message)
     {
-        if (_pickerSubscriptions.ContainsKey(session.PageId)) return;
+        if (!string.Equals(message.Kind, "inspector", StringComparison.Ordinal)) return;
         try
         {
-            await session.SendAsync("Runtime.addBinding", CdpJson.Params(("name", "__hackermes_inspector_pick__")), cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Another activation may already have added the process-local binding.
-        }
-        _pickerSubscriptions[session.PageId] = await session.SubscribeAsync(
-            "Runtime.bindingCalled", args => OnPickerBindingCalled(session.PageId, args), cancellationToken).ConfigureAwait(false);
-    }
-
-    private void OnPickerBindingCalled(string pageId, CdpEventArgs args)
-    {
-        if (!string.Equals(CdpJson.TryGetString(args.ParametersJson, "name"), "__hackermes_inspector_pick__", StringComparison.Ordinal)) return;
-        var rawPayload = CdpJson.TryGetString(args.ParametersJson, "payload");
-        if (string.IsNullOrWhiteSpace(rawPayload)) return;
-        try
-        {
-            using var document = JsonDocument.Parse(rawPayload);
+            using var document = JsonDocument.Parse(message.PayloadJson);
             var root = document.RootElement;
-            if (!string.Equals(root.TryGetProperty("t", out var type) ? type.GetString() : null, "inspector", StringComparison.Ordinal)) return;
             var kind = root.TryGetProperty("k", out var kindValue) ? kindValue.GetString() : null;
-            if (kind is "pick" or "cancel") _eventBus.Publish(new ElementPickerStateChangedEvent(pageId, false));
+            if (kind is "pick" or "cancel") _eventBus.Publish(new ElementPickerStateChangedEvent(message.PageId, false));
             if (kind is not ("pick" or "hover")) return;
             var path = root.TryGetProperty("path", out var pathValue) ? pathValue.GetString() : null;
             if (path is null) return;
             var nodeKey = root.TryGetProperty("nodeKey", out var keyValue) ? keyValue.GetString() : null;
             var selector = root.TryGetProperty("selector", out var selectorValue) ? selectorValue.GetString() ?? "element" : "element";
-            UiThreadBridge.Post(() => PickerMessageReceived?.Invoke(new DomPickerMessage(pageId, kind, path, nodeKey, selector)));
+            _uiDispatcher.Post(() => PickerMessageReceived?.Invoke(new DomPickerMessage(message.PageId, kind, path, nodeKey, selector)));
         }
         catch (JsonException) { }
     }
+
+    private void OnSessionClosed(string pageId) =>
+        _eventBus.Publish(new ElementPickerStateChangedEvent(pageId, false, "The browser page is no longer available."));
 
     private static string ResolveElementExpression(string path, string? nodeKey)
     {
@@ -232,7 +236,7 @@ public sealed class PageInspectionService : IDisposable
             overlay.appendChild(label); document.documentElement.appendChild(overlay); state.overlay = overlay; state.label = label;
           };
           const show = element => { if (!element || element.id === '__hackermes-inspector-overlay__' || element.id === '__hackermes-inspector-preview__') return; ensureOverlay(); const rect = element.getBoundingClientRect(); const overlay = state.overlay; overlay.style.display = 'block'; overlay.style.left = rect.left + 'px'; overlay.style.top = rect.top + 'px'; overlay.style.width = Math.max(1, rect.width) + 'px'; overlay.style.height = Math.max(1, rect.height) + 'px'; state.label.textContent = describe(element) + '  ' + Math.round(rect.width) + ' × ' + Math.round(rect.height); state.target = element; };
-          const send = (kind, element) => { const binding = global.__hackermes_inspector_pick__; if (typeof binding !== 'function') return; try { binding(JSON.stringify({ t: 'inspector', k: kind, path: element ? pathFor(element) : '', nodeKey: element ? keyFor(element) : null, selector: element ? describe(element) : '' })); } catch {} };
+          const send = (kind, element) => { try { __hackermesEmit({ t: 'inspector', k: kind, path: element ? pathFor(element) : '', nodeKey: element ? keyFor(element) : null, selector: element ? describe(element) : '' }); } catch {} };
           if (!state.installed) {
             state.installed = true;
             document.addEventListener('mousemove', event => { if (!state.enabled || !(event.target instanceof Element)) return; const target = event.target; show(target); const key = keyFor(target), now = Date.now(); if (key !== state.lastKey || now - state.lastSent > 160) { state.lastKey = key; state.lastSent = now; send('hover', target); } }, true);
@@ -306,10 +310,26 @@ public sealed class PageInspectionService : IDisposable
 
     public void Dispose()
     {
+        _sessions.SessionClosed -= OnSessionClosed;
         _activeSubscription.Dispose();
         _pickerRequestSubscription.Dispose();
         _navigationSubscription.Dispose();
-        foreach (var subscription in _pickerSubscriptions.Values) subscription.Dispose();
-        _pickerSubscriptions.Clear();
+        _pickerMessageSubscription.Dispose();
+    }
+
+    private sealed class UnavailablePageAgentRuntime : IPageAgentRuntime
+    {
+        public static readonly UnavailablePageAgentRuntime Instance = new();
+
+        public PageAgentRuntimeCapability GetCapability(string pageId) =>
+            new(pageId, PageAgentWorldState.Unavailable, PageAgentWorldState.Unavailable,
+                "The browser-owned Page Agent runtime is unavailable.");
+
+        public Task<string> EvaluateInIsolatedWorldAsync(
+            string pageId,
+            string expression,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<string>(new InvalidOperationException(
+                "The browser-owned Page Agent isolated world is unavailable."));
     }
 }

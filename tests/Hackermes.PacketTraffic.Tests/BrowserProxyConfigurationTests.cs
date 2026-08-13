@@ -1,4 +1,6 @@
 using Hackermes.Browser.Services;
+using System;
+using System.IO;
 using Xunit;
 
 namespace Hackermes.PacketTraffic.Tests;
@@ -34,6 +36,56 @@ public sealed class BrowserProxyConfigurationTests
         Assert.Contains("--disable-background-networking", configuration.AdditionalBrowserArguments);
         Assert.DoesNotContain("0.0.0.0", configuration.AdditionalBrowserArguments);
         Assert.EndsWith("Burp", configuration.UserDataFolder);
+    }
+
+    [Fact]
+    public void ExplicitProfileRoot_IsolatedFromDefaultUserProfile()
+    {
+        var previous = Environment.GetEnvironmentVariable(
+            BrowserProxyConfiguration.ProfileRootEnvironmentVariable);
+        var isolatedRoot = Path.Combine(Path.GetTempPath(), "hackermes-browser-acceptance");
+
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                BrowserProxyConfiguration.ProfileRootEnvironmentVariable,
+                isolatedRoot);
+
+            var direct = BrowserProxyConfiguration.Create(BrowserProxyMode.Direct);
+            var burp = BrowserProxyConfiguration.Create(BrowserProxyMode.Burp);
+
+            Assert.Equal(Path.Combine(Path.GetFullPath(isolatedRoot), "Direct"), direct.UserDataFolder);
+            Assert.Equal(Path.Combine(Path.GetFullPath(isolatedRoot), "Burp"), burp.UserDataFolder);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                BrowserProxyConfiguration.ProfileRootEnvironmentVariable,
+                previous);
+        }
+    }
+
+    [Fact]
+    public void ExplicitProfileRoot_RejectsRelativePath()
+    {
+        var previous = Environment.GetEnvironmentVariable(
+            BrowserProxyConfiguration.ProfileRootEnvironmentVariable);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                BrowserProxyConfiguration.ProfileRootEnvironmentVariable,
+                "relative-profile");
+
+            Assert.Throws<InvalidOperationException>(() =>
+                BrowserProxyConfiguration.Create(BrowserProxyMode.Direct));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                BrowserProxyConfiguration.ProfileRootEnvironmentVariable,
+                previous);
+        }
     }
 
     [Fact]

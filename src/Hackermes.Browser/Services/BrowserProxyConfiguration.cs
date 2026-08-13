@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Hackermes.Base;
 
 namespace Hackermes.Browser.Services;
 
@@ -19,6 +20,7 @@ public sealed record BrowserProxyConfiguration(
     string AdditionalBrowserArguments,
     string UserDataFolder)
 {
+    public const string ProfileRootEnvironmentVariable = "HACKERMES_BROWSER_PROFILE_ROOT";
     public const string BurpHost = "127.0.0.1";
     public const int BurpPort = 8080;
     public const string BurpEndpoint = "127.0.0.1:8080";
@@ -34,12 +36,11 @@ public sealed record BrowserProxyConfiguration(
     public static BrowserProxyConfiguration Create(BrowserProxyMode mode)
     {
         var profileName = mode == BrowserProxyMode.Burp ? "Burp" : "Direct";
-        var profileRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Hackermes",
-            "Browser",
-            "WebView2",
-            profileName);
+        var overrideRoot = Environment.GetEnvironmentVariable(ProfileRootEnvironmentVariable);
+        var baseProfileRoot = string.IsNullOrWhiteSpace(overrideRoot)
+            ? AppDataPaths.Resolve("Browser", "WebView2")
+            : ResolveOverrideRoot(overrideRoot);
+        var profileRoot = Path.Combine(baseProfileRoot, profileName);
 
         return mode == BrowserProxyMode.Burp
             ? new BrowserProxyConfiguration(
@@ -52,6 +53,15 @@ public sealed record BrowserProxyConfiguration(
                 "直连",
                 "--no-proxy-server",
                 profileRoot);
+    }
+
+    private static string ResolveOverrideRoot(string value)
+    {
+        if (!Path.IsPathFullyQualified(value))
+            throw new InvalidOperationException(
+                $"{ProfileRootEnvironmentVariable} must be an absolute path.");
+
+        return Path.GetFullPath(value);
     }
 }
 

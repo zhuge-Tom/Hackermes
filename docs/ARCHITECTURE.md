@@ -1,656 +1,218 @@
-# Hackermes 架构方案
+# Hackermes 架构说明
 
-> 本地桌面端网页调试自动化工具 — 交互式命令终端 + 内置浏览器 + 人工操作 + AI 辅助前端调试
+> 当前源码基线：`main` / `0403672`（Stage 7 正式基线）。本文只描述当前仓库中可验证的结构；尚未落地的设计统一标为“计划中”。实现过程中的取舍见 [`DESIGN-NOTES.md`](DESIGN-NOTES.md)，阶段验收见 [`DEVELOPMENT-STATUS.md`](DEVELOPMENT-STATUS.md)。
 
-本文给出 Hackermes 的分层、模块划分、目录结构与关键机制设计。实现过程中的具体决策与踩坑记录见 [`DESIGN-NOTES.md`](DESIGN-NOTES.md)。
+## 一、产品边界
 
----
+Hackermes 是基于 .NET 10 与 Avalonia 的桌面网页调试、流量分析和**授权安全评估**工作台。它把内置浏览器、CDP、DOM 检查、HTTP 数据包工作台、终端、AI 助手和受控 ToolHost 放在同一应用中。
 
-## 一、定位与范围
+安全边界是架构的一部分：安全评估只面向用户明确授权、精确限定且有时效的目标。AI 不获得任意 Shell；受控外部工具必须经过目标范围、不可变计划、一次性审批票据和独立 ToolHost 校验。
 
-Hackermes 是**前端调试自动化工作台**,核心主张是:调试工具不应该只是旁观者,而应该能**进入页面内部并驱动它**。
+当前平台状态：Windows 10/11 x64 是完整验证平台；Linux x64 为预览平台，发布包可构建，但真实 Linux GUI/WebView 全链路尚未完成验收。
 
-这条主张划出了能力边界:
+## 二、解决方案与真实依赖
 
-| 能力 | 做法 |
-|---|---|
-| 网络观测 | CDP `Network` + `Fetch` 域。零代理配置、零证书安装即可看到完整流量 |
-| 页面读取 | DOM / 可访问性树 / 计算样式 / Storage,可访问性树是给 AI 的首选表示 |
-| 页面写入 | `Input.dispatch*` 真实输入事件,而非 JS 层的 `.click()` |
-| 页面内驻留 | Page Agent 文档级预注入,hook `fetch` / `XHR` / `WebSocket` / storage / 路由 |
-| 页面→宿主通道 | `Runtime.addBinding` 双向通信 |
-| 交互定位 | Overlay 高亮 + 元素拾取 + 选择器策略链 |
-| 自动化 | UI 层录制与回放,而非 HTTP 层重放 |
-| AI 的角色 | 直接驱动页面并观察结果,与人走同一条动作路径 |
+`Hackermes.slnx` 当前包含 **14 个生产项目**和 **1 个测试项目**。下面只列项目文件中的直接 `ProjectReference`，箭头表示“引用”。
 
-### 三条设计主张
-
-**一、观测要能回答"为什么"。** 协议层能告诉你发生了什么请求,告诉不了你哪行代码发起的。所以有了 Page Agent——它存在的唯一理由就是补上协议层给不了的那部分信息。
-
-**二、人和机器走同一条路。** 人工点击、终端命令、AI 工具调用、脚本回放,四条路径如果各写一份实现,行为必然发散,录制也无从下手。统一成 `ActionDescriptor` 后,录制、审计、回放都是架构的自然结果。
-
-**三、默认保守。** AI 能驱动页面意味着它也能破坏东西。策略闸门放在工具执行的唯一收口处,只读操作放行,写操作与 shell 命令需确认,危险模式直接拒绝。用户可以切到信任模式全放行,但那必须是显式选择。
-
-### 工程基线
-
-| 项 | 决定 |
-|---|---|
-| 包版本管理 | `Directory.Packages.props` 中央管理,叶子项目不写版本号 |
-| 敏感信息 | Windows DPAPI(`ProtectedData` + `CurrentUser`),与普通配置分开存放 |
-| 日志 | `IAppLogger` 抽象 + 轻量文件 sink,级别可用环境变量覆盖 |
-| 序列化 | System.Text.Json 源生成上下文,无反射 |
-| AOT 取向 | 视图定位用显式字典、AI 工具用源生成器、COM 互操作用源生成 CCW |
-
----
-
-## 二、总体架构
-
-### 2.1 分层
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Hackermes.App          宿主 / 启动装配 / 主窗口 / ViewLocator  │
-├─────────────────────────────────────────────────────────────┤
-│  功能模块层(互不引用,靠事件与注册表通信)                      │
-│  Browser  Inspector  Automation  Terminal  AiPanel           │
-│  Sidebar  Settings                                           │
-├─────────────────────────────────────────────────────────────┤
-│  能力层                                                       │
-│  Cdp(会话/域封装/事件流)   PageAgent(页面内驻留 JS)          │
-│  Dock(布局/Tab 保活)      Editor      DataTable              │
-├─────────────────────────────────────────────────────────────┤
-│  Hackermes.Platform     应用平台层:配置/事件词典/注册表/存储     │
-├─────────────────────────────────────────────────────────────┤
-│  Hackermes.Base         契约与基础设施:IModule/EventBus/AiTool  │
-├─────────────────────────────────────────────────────────────┤
-│  Hackermes.ToolGen(Roslyn 源生成器)  Hackermes.DomToMarkdown     │
-└─────────────────────────────────────────────────────────────┘
+```text
+Base          → （无）
+Platform      → Base
+Cdp           → Base, Platform
+PageAgent     → （无；TypeScript 构建产物生成 C# 源）
+Dock          → Base, Platform
+Browser       → Base, Platform, Cdp, Dock, PageAgent
+Traffic       → Base, Cdp
+Inspector     → Base, Platform, Cdp, Dock
+Automation    → Base, Platform, Cdp, Traffic
+Terminal      → Base, Platform, Dock, Automation
+AiPanel       → Base, Platform, Automation
+Assessment    → Base, Platform
+ToolHost      → Assessment
+App           → Assessment, Dock, Platform, Browser, Inspector,
+                Automation, Terminal, AiPanel, Traffic
 ```
 
-依赖方向严格自上而下,无环。注意 `Platform` 是"应用平台层"而非 OS 封装层——它承载配置、事件词典、注册表与存储,不含 P/Invoke。真正的原生互操作集中在 `Cdp`。
+`App` 还以 `ReferenceOutputAssembly="false"` 引用 `ToolHost`，用于确保独立可执行文件随构建/发布产生，而不是把它并入宿主进程。
 
-### 2.2 依赖图
+测试项目 `tests/Hackermes.PacketTraffic.Tests` 覆盖 Traffic、Assessment、AI 工具策略和浏览器工具等组合场景。仓库中不存在旧架构稿曾列出的独立 `ToolGen`、`DataTable`、`Editor`、`Sidebar`、`Settings` 或 `DomToMarkdown` 项目；相关能力已由现有项目承载或尚未独立成工程。
 
-```
-Base                 ← (无项目引用)
-ToolGen              ← (无,netstandard2.0 源生成器)
-DomToMarkdown        ← (无,零依赖纯净库)
-Platform             → Base
-Cdp                  → Base, Platform
-PageAgent            → (无,产物是生成的 C# 源文件)
-DataTable            → Base, Platform
-Dock                 → Base, Platform, DataTable
-Editor               → Base, Platform
-Browser              → Base, Platform, Cdp, Dock, DataTable, DomToMarkdown, PageAgent
-Inspector            → Base, Platform, Cdp, Dock, DataTable, Editor
-Automation           → Base, Platform, Cdp, Dock, Editor
-Terminal             → Base, Platform, Dock
-AiPanel              → Base, Platform, Dock
-Sidebar              → Base, Platform, Dock
-Settings             → Base, Platform
-App                  → 全部功能模块
-```
+## 三、运行时分层
 
-`ToolGen` 统一以 `OutputItemType="Analyzer" ReferenceOutputAssembly="false"` 被声明 AI 工具的模块引用,不进运行时依赖。
-
-**关键解耦点**:`Inspector` 与 `Automation` 都需要操作页面,但它们**不引用 `Browser`**。三者通过 `Cdp` 层的 `ICdpSessionRegistry` 相遇——Browser 创建标签页时注册会话,其余模块按 `pageId` 取用。
-
----
-
-## 三、核心设计:统一动作模型
-
-这是 Hackermes 区别于普通"内嵌浏览器 + AI 聊天"的关键,也是整个架构的灵魂。
-
-**问题**:同一个"点击按钮"动作有四个来源——用户手点、终端敲 `click #submit`、AI 调 `page_click` 工具、回放脚本执行。如果四条路径各写一份实现,行为必然发散,录制也无从下手。
-
-**方案**:所有页面动作统一收敛为 `ActionDescriptor`,由单一执行器 `ActionExecutor` 落地。
-
-```
-   人工点击(Page Agent 捕获)  ┐
-   终端 REPL 命令            ├──→ ActionDescriptor ──→ ActionExecutor ──→ CDP
-   AI 工具调用               │         (可序列化)          │
-   脚本回放                  ┘                            ├──→ Timeline(录制/审计)
-                                                          └──→ IToolPolicyGate(策略闸门)
-```
-
-```csharp
-// Hackermes.Automation/Model/ActionDescriptor.cs
-public sealed record ActionDescriptor(
-    ActionKind Kind,              // Navigate/Click/Type/Select/Scroll/Hover/Press/Wait/Eval/Assert
-    TargetSelector? Target,       // 选择器 + 备选策略链
-    IReadOnlyDictionary<string, string?> Args,
-    ActionOptions Options);       // 超时、重试、等待条件、是否滚动到可视区
-```
-
-由此得到三个"免费"的能力:
-
-- **录制即真实动作**:Page Agent 捕获的用户操作直接是 `ActionDescriptor`,无需从 DOM 事件反推。
-- **AI 与人工完全同构**:AI 做的每一步都能回放、能导出成脚本,人做的每一步 AI 都看得懂。
-- **单一审计与策略点**:所有动作经过一个闸门,安全策略只需实现一次。
-
-### 选择器策略链
-
-单一 CSS 选择器在真实页面里非常脆弱。`TargetSelector` 携带一条按稳定性排序的候选链,执行时依次尝试:
-
-```
-1. data-testid / data-test / data-cy      (最稳定,若存在)
-2. #id                                     (排除明显随机的 id)
-3. role + accessible name                  (可访问性树,对 React/Vue 友好)
-4. 文本内容精确匹配                          (按钮/链接)
-5. 结构化 CSS 路径(带 nth-child 锚点)      (兜底)
-```
-
-生成逻辑在 Page Agent 内(能看到运行时 DOM),评分与降级逻辑在 `Hackermes.Automation/Selectors/`。
-
----
-
-## 四、CDP 层设计(`Hackermes.Cdp`)
-
-### 4.1 取得 CDP 通道
-
-Avalonia 的 WebView 控件只暴露裸指针,因此走 COM vtable 直调:
-
-```
-NativeWebView (Avalonia.Controls.WebView)
-  → TryGetPlatformHandle() as IWindowsWebView2PlatformHandle
-  → ICoreWebView2 裸指针
-  → 手写 COM vtable 调用(AOT 友好,不依赖 Microsoft.Web.WebView2.Core 托管封装)
-  → CallDevToolsProtocolMethod / AddDevToolsProtocolEventReceiver
-```
-
-除了 `CallDevToolsProtocolMethod`(请求-响应),还必须接上 **`GetDevToolsProtocolEventReceiver`**(`ICoreWebView2_11` 起的官方 API)——没有事件订阅就没有 `Network.responseReceived`、`Runtime.consoleAPICalled`、`Runtime.bindingCalled`,整个实时能力无从谈起。
-
-事件订阅的机制有一个重要约束:**receiver 是按事件名创建的**,不是一个总线。流程为
-
-```
-1. CallDevToolsProtocolMethod("Network.enable", "{}")     启用域
-2. GetDevToolsProtocolEventReceiver("Network.responseReceived")   取该事件的 receiver
-3. receiver.add_DevToolsProtocolEventReceived(handler)    挂处理器
-   → handler 收到 ParameterObjectAsJson(事件参数 JSON)+ SessionId(事件来源)
-```
-
-因此 `CdpEventPump` 需要维护一张 `事件名 → receiver + handler token` 的注册表,负责去重订阅、引用计数(多个模块订阅同一事件只建一个 receiver)、以及页面关闭时统一解绑。这是 CDP 层最主要的新增工作量,但**属于常规工程量而非技术未知**。
-
-### 4.2 域封装
-
-不做全量 CDP 强类型生成(微软的 `DevToolsProtocolExtension` 已停止维护,且体积巨大)。只对实际用到的域写薄封装,其余留 `RawAsync(method, json)` 出口:
-
-| 域 | 用途 |
-|---|---|
-| `Page` | 导航、生命周期事件、截图、`addScriptToEvaluateOnNewDocument`(Page Agent 注入) |
-| `Runtime` | `evaluate`、`callFunctionOn`、`addBinding`(页面→宿主通道)、`consoleAPICalled` |
-| `DOM` | 节点树、`querySelector`、`getBoxModel`、属性读写 |
-| `CSS` | 计算样式、匹配规则、样式表编辑 |
-| `Network` | 请求/响应事件、`getResponseBody`、请求头改写、Cookie |
-| `Fetch` | **请求拦截与 Mock**——暂停请求、改写、伪造响应 |
-| `Input` | `dispatchMouseEvent` / `dispatchKeyEvent` / `insertText`(真实输入,非 JS 触发) |
-| `Overlay` | `highlightNode`、`setInspectMode`(元素拾取) |
-| `Log` | 浏览器级日志(网络错误、CSP 违规) |
-| `Emulation` | 设备/视口/网络限速/地理位置 |
-| `Accessibility` | 可访问性树 —— 给 AI 的**首选**页面表示 |
-| `Storage` | localStorage / sessionStorage / IndexedDB / Cookie |
-| `Performance` | 指标采样 |
-
-### 4.3 会话与并发
-
-```csharp
-public interface ICdpSessionRegistry          // 单例
-{
-    ICdpSession? Get(string pageId);
-    IReadOnlyList<ICdpSession> All { get; }
-    IDisposable Register(string pageId, ICdpSession session);
-    event Action<string> SessionOpened;
-    event Action<string> SessionClosed;
-}
-```
-
-**两条必须存在的并发闸门**:
-
-- `WebViewCreationCoordinator` — 同一时刻只允许一个 WebView2 初始化,带看门狗超时。多实例并发初始化会卡死。
-- `UiScriptGate` — 浏览器 WebView 与 AI 面板 WebView 共用 UI 线程,脚本调用需全局互斥,否则交叉调用死锁。
-
-CDP 调用还需注意:**WebView2 按调用顺序派发但可能乱序完成**,因此每个请求自带 id 并用 `TaskCompletionSource` 配对,不能假设顺序。
-
----
-
-## 五、Page Agent(`Hackermes.PageAgent`)
-
-页面内驻留的 TypeScript,经 `Page.addScriptToEvaluateOnNewDocument` 在**任何页面脚本之前**执行。这是 Hackermes 区别于纯协议层观测工具的关键部分。
-
-### 职责
-
-| 能力 | 实现 |
-|---|---|
-| 网络 hook | 包装 `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource`,记录调用栈——**CDP Network 域看不到发起代码的位置,这是补充而非重复** |
-| 存储 hook | 包装 `localStorage` / `sessionStorage` / `document.cookie` 的读写 |
-| 路由 hook | `history.pushState` / `replaceState` / `popstate`,识别 SPA 软导航 |
-| 交互录制 | 捕获 `click` / `input` / `change` / `submit` / `keydown`(捕获阶段,不干扰页面) |
-| 选择器生成 | 为目标元素生成候选选择器链并打分 |
-| 元素拾取 | 悬停高亮 + 点击选定,回传选择器与元素信息 |
-| 框架探针 | 识别 React / Vue / Angular 及其组件树与状态(可选,按需注入) |
-| 变更观测 | `MutationObserver` 记录 DOM 变化,支持"动作前后 diff" |
-
-### 回传通道
-
-`Runtime.addBinding(name: "__hackermes__")` 在页面注入一个宿主函数。Page Agent 调用它,宿主收到 `Runtime.bindingCalled` 事件。这是页面→宿主的唯一通道,消息为 JSON 字符串,带序号与分片(单条 binding 调用有长度限制,大 payload 需分片重组)。
-
-### 执行世界的划分(关键约束)
-
-这里有一个无法回避的矛盾:**要 hook `fetch` / `XHR` 必须在主世界**——isolated world 有独立的 JS 全局对象,在其中包装 `fetch` 对页面代码毫无影响。而隔离性又只有 isolated world 能提供。因此 Agent 必须**拆成两部分**:
-
-| 部分 | 世界 | 内容 | 理由 |
-|---|---|---|---|
-| `agent-main` | 主世界 | 网络 hook、storage hook、路由 hook | 必须包装页面实际使用的对象 |
-| `agent-iso` | isolated world | 录制器、选择器生成、元素拾取、MutationObserver | 不需要改写主世界对象,隔离更安全,不受页面篡改 |
-
-注入方式:两者都经 `Page.addScriptToEvaluateOnNewDocument`,`agent-iso` 额外指定 `worldName` 参数落到隔离世界。`Runtime.addBinding` 可绑定到指定的执行上下文,两部分各有自己的回传 binding。
-
-**主世界部分的固有风险**:页面代码可以检测到 `fetch.toString()` 异常、可以保存原始引用绕过 hook、也可以反过来篡改 Agent。这是无法根除的——任何在主世界工作的 hook 都有此问题。应对是把主世界部分**做到最小**(只做 hook 与上报,不含任何逻辑),并接受"网络 hook 可能失效"这一现实:失效时 CDP `Network` 域仍然提供完整流量,只是丢失发起调用栈。
-
-### 安全与透明性
-
-- Hook 必须**完全透明**:保留原函数引用、正确转发 `this` 与参数、异常原样抛出、`toString()` 伪装、保持原型链与属性描述符。hook 引发页面行为改变是不可接受的 bug,不是可接受的副作用。
-- binding 函数名在运行时随机化,不使用固定标识,减少被检测的面。
-- 用户可按站点关闭 Agent(某些站点有反调试检测)。关闭后 CDP 只读能力完整可用——**降级而非失效**。
-
-### 已知平台问题
-
-WebView2 的 `AddScriptToExecuteOnDocumentCreated` 与 `NavigateWithWebResourceRequest` 同时使用时注入不生效(简单 `Navigate` 正常)。Hackermes 走 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 而非 WebView2 托管方法,可规避此问题;但若某条路径退回托管 API,需注意这个坑。
-
-### 构建
-
-TypeScript → esbuild 单文件 IIFE → `build.mjs` 写成 C# raw string literal(`PageAgentScript.g.cs`)→ **产物提交进 Git**。构建机无需 Node 即可 `dotnet build`,只有改动 TS 源码时才需要跑构建脚本。
-
----
-
-## 六、模块划分
-
-### Hackermes.Base
-契约与基础设施,保持轻量(目标 < 40 个文件),不含任何业务模型。
-
-`IModule`(两段式)、`IEventBus` / `EventBus`、`ViewModelBase`(带自动退订的 `SubscribeEvent`)、`[AiTool]` / `[ToolParam]` 特性、`AiToolRegistry`、`IToolPolicyGate`、`IAppLogger`、`IDataProvider`。
-
-### Hackermes.ToolGen
-Roslyn 增量源生成器(netstandard2.0)。扫描 `[AiTool]` 方法,生成 `AiToolRegistration_{ClassName}.Register(registry, serviceProvider)`,内含 JSON Schema 与参数绑定执行器闭包。
-
-要点:支持嵌套对象参数(不能遇到非基元类型就 fallback 成 string)、支持 `[ToolParam(Enum = ...)]` 显式枚举值、生成时校验工具名唯一性并在重复时报编译错误。
-
-### Hackermes.Platform
-应用平台层。`AppSettings`(源生成 `JsonSerializerContext`)、`PlatformEvents`(共享事件词典)、四个注册表(`IDockLayoutRegistry` / `IMenuRegistry` / `ISettingsRegistry` / `IContentFactoryRegistry`)、`UiThreadBridge`、`WorkspaceService`、`SqliteService`、`SecretStore`(DPAPI)、`OutboundHttpClientFactory`。
-
-### Hackermes.Cdp
-见第四节。COM 互操作、会话注册表、域封装、事件泵。
-
-### Hackermes.PageAgent
-见第五节。TypeScript 源码 + 构建脚本 + 生成的 C# 常量。
-
-### Hackermes.Browser
-浏览器视图与标签管理。地址栏、导航、多标签、favicon、缩放、DevTools 唤起、Page Agent 注入编排、元素拾取器 UI、设备模拟工具条。
-
-### Hackermes.Inspector
-类 DevTools 的检查面板,是"人工操作"的主阵地:
-
-- **DOM 树** — 可展开、可编辑属性、悬停联动页面高亮
-- **样式** — 计算样式、匹配规则、盒模型
-- **网络** — 请求列表(CDP Network 域)、详情、时序、响应体预览、Mock 规则编辑
-- **控制台** — 页面 console 输出 + 表达式求值 REPL
-- **存储** — localStorage / sessionStorage / Cookie / IndexedDB 读写
-- **时间线** — 统一动作流水(人工 + AI + 脚本),可回溯、可导出为脚本
-
-### Hackermes.Automation
-`ActionDescriptor` 模型、`ActionExecutor`、选择器引擎、录制器、脚本存储与回放、断言库、终端 REPL 的命令定义(与 AI 工具共用同一份定义)。
-
-### Hackermes.Terminal
-双会话类型:
-
-- **System Shell** — PTY(`Iciclecreek.Avalonia.Terminal`,底层 XTerm.NET + Porta.Pty),跑 cmd / pwsh / bash
-- **Hackermes Console** — 领域命令 REPL,直接操作页面
-
-领域命令与 AI 工具**共用 `Hackermes.Automation` 中的同一份命令定义**,REPL 与 AI 只是同一组能力的两个前端。示例:
-
-```
-open https://example.com          导航
-click #submit                     点击
-type input[name=q] "hello"        输入
-eval document.title               求值
-dom .item                         查询元素
-net ls --status=4xx               列出请求
-net mock /api/user --file=./u.json 拦截并伪造响应
-console tail 50                   最近日志
-rec start / rec stop              录制
-run ./scripts/login.hkm           回放脚本
-snap --full                       截图
-```
-
-在 Hackermes Console 里以 `!` 前缀可直接执行系统命令,无需切换会话。
-
-### Hackermes.AiPanel
-AI 对话面板。Vue 3 + Vite singlefile 前端烧进 C#,WebView 承载。OpenAI 兼容 API 客户端(手写 `HttpClient` + SSE 解析,兼容各类网关差异)、工具调用编排、上下文压缩、MCP 桥接、子 Agent。
-
-### Hackermes.Dock / DataTable / Editor / Sidebar / Settings / DomToMarkdown
-UI 基础设施。`Dock` 中的 `PersistTabControl`(Tab 保活)是 WebView2 与 PTY 能正常工作的前提,是这一层里最先要落地的东西。
-
-`DomToMarkdown` 保持零依赖,并且**直接消费 CDP 节点树而不解析 HTML 字符串**。这不只是省一步:走 HTML 解析器会反转义实体,页面若把内容藏在 `<textarea>` 文本节点里(常见于反爬手段),解析器会把它当成真标签,凭空造出结构。跳过解析阶段从根上规避,还顺带拿到 AOT 友好与 iframe 穿透。
-
----
-
-## 七、AI 工具集
-
-工具按能力域分组,由各自模块声明(`[AiTool]`),编译期生成注册代码。
-
-### 页面读取
-| 工具 | 说明 |
-|---|---|
-| `page_snapshot` | 页面结构快照。默认返回**可访问性树**(比 DOM 更接近人的认知、token 更省),可选 markdown / 原始 DOM |
-| `page_query` | 按选择器查元素,返回文本、属性、盒模型、可见性、是否可交互 |
-| `page_eval` | 在页面执行 JS 表达式并返回序列化结果 |
-| `page_screenshot` | 截图,支持全页 / 指定元素 |
-| `page_styles` | 元素的计算样式与匹配规则 |
-
-### 页面交互
-| 工具 | 说明 |
-|---|---|
-| `page_navigate` | 导航,可等待 load / networkidle |
-| `page_click` | 真实鼠标事件点击(经 `Input` 域,非 JS `.click()`) |
-| `page_type` | 真实键盘输入,支持清空后输入 |
-| `page_select` / `page_hover` / `page_scroll` / `page_press` | 其余交互 |
-| `page_wait` | 等待选择器出现/消失、网络空闲、自定义表达式为真 |
-
-### 调试观测
-| 工具 | 说明 |
-|---|---|
-| `console_read` | 读取 console 输出,可按级别/时间过滤 |
-| `network_list` / `network_detail` | 请求列表与详情(含 Page Agent 记录的发起调用栈) |
-| `network_mock` | 拦截并伪造响应,用于验证前端异常分支 |
-| `storage_read` / `storage_write` | 存储读写 |
-| `dom_diff` | 某个动作前后的 DOM 变化,用于确认交互是否生效 |
-| `perf_metrics` | 性能指标 |
-
-### 自动化
-| 工具 | 说明 |
-|---|---|
-| `script_record` | 开始/停止录制,返回生成的脚本 |
-| `script_run` | 回放脚本 |
-| `assert` | 断言(元素存在、文本匹配、请求发生、无 console 错误) |
-
-### 通用
-`shell_send` / `shell_read` / `shell_interrupt`(交互式终端,回合制而非一次性执行)、`look` / `write` / `replace`(文件)、`sql`(项目库)、`todo`、`ask`、`spawn_agent`。
-
-### 安全闸门
-
-AI 能驱动页面就意味着它也能破坏东西。策略在 `AiToolDispatcher` 这个唯一收口处强制执行:
-
-```csharp
-public interface IToolPolicyGate
-{
-    ValueTask<ToolPolicyDecision> EvaluateAsync(ToolInvocation invocation, CancellationToken ct);
-}
-// Allow / RequireConfirmation(reason) / Deny(reason)
-```
-
-默认策略:
-
-- **自动放行** — 所有只读工具(page_snapshot / console_read / network_list / look / sql SELECT …)
-- **需确认** — `shell_send`、`write` / `replace`、`network_mock`、`storage_write`、目标为非白名单域名的 `page_navigate`
-- **拒绝** — 命中危险模式的 shell 命令(格式化、大范围删除、权限变更、凭据外发)
-
-确认走一次 UI 弹窗,支持"本会话记住此类操作"。策略可在设置中调整,包括切到"信任模式"全放行——但那是用户的显式选择,而非默认。
-
----
-
-## 八、数据存储
-
-工作区 = 一个目录;数据库 = 该目录下的 `.hackermes.db`。`ProjectOpenedEvent` 是整个数据层的枢纽:各 store 订阅它拿到库路径,惰性建表,库文件由第一个写入者隐式创建(SQLite 打开即创建)。
-
-裸 `Microsoft.Data.Sqlite` + 手写 SQL,不引 ORM——查询形态简单,抽象成本高于收益。**但 schema 演进要有版本号**:用 `PRAGMA user_version` + 集中的迁移脚本列表,而不是让每个 store 各自用 `CREATE TABLE IF NOT EXISTS` 加 `PRAGMA table_info` 补列。后者写起来省事,但迁移逻辑一旦散落到十几个 store 里就再也理不清了。
-
-主要表:
-
-| 表 | 内容 |
-|---|---|
-| `pages` | 页面会话(标签、URL、开始/结束时间) |
-| `navigations` | 导航记录(含 SPA 软导航) |
-| `network_events` | 请求/响应元数据 + 发起调用栈,body 分离存储 |
-| `network_bodies` | 请求/响应体(按需,带大小上限) |
-| `console_logs` | console 输出与页面异常 |
-| `actions` | 统一动作时间线(来源:human / ai / script / repl) |
-| `dom_snapshots` | DOM 快照(用于 diff) |
-| `scripts` / `script_runs` / `script_steps` | 自动化脚本与执行记录 |
-| `ai_chat_sessions` / `ai_chat_messages` | AI 会话 |
-| `terminal_sessions` / `terminal_lines` | 终端记录 |
-
----
-
-## 九、界面布局
-
-五区域固定 Grid + 动态 Tab。区域在编译期固定,不做可拖拽 Dock 树——那套复杂度与收益不成正比:
-
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
-│ TopBar: 地址栏 · 导航 · 设备模拟 · 拾取器 · 录制 · 主题        │
-├────────┬─────────────────────────────────────┬───────────────┤
-│        │                                     │               │
-│ Left   │  Content                            │  Right        │
-│        │  ┌─────────────────────────────┐    │               │
-│ 项目树 │  │  浏览器视图(多标签)         │    │  AI 面板      │
-│ 元素树 │  │                             │    │               │
-│ 脚本库 │  └─────────────────────────────┘    │  对话         │
-│        ├─────────────────────────────────────┤  工具调用     │
-│        │  Bottom                             │  待办         │
-│        │  网络 │ 控制台 │ 元素 │ 存储 │       │               │
-│        │  时间线 │ 终端                       │               │
-└────────┴─────────────────────────────────────┴───────────────┘
-                          StatusBar
+│ Hackermes.App                                                │
+│ 桌面宿主、模块装配、主窗口、Traffic/Assessment 集成          │
+├──────────────────────────────────────────────────────────────┤
+│ Browser  Inspector  Traffic  Automation  Terminal  AiPanel   │
+│ Assessment                                                   │
+├──────────────────────────────────────────────────────────────┤
+│ Cdp  PageAgent  Dock  Platform                               │
+├──────────────────────────────────────────────────────────────┤
+│ Base：模块、事件、日志等共享契约                              │
+├──────────────────────────────────────────────────────────────┤
+│ ToolHost：独立、短生命周期、票据校验后的受控执行进程          │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-三条 UI 约定:
+宿主使用硬编码模块清单进行两阶段装配：先注册服务，再初始化 Tab、菜单和命令。当前实际装配顺序为 `Core`、`Dock`、`Browser`、`Traffic`、`Inspector`、`Automation`、`Terminal`、`TrafficIntegration`、`AssessmentIntegration`、`AiPanel`。不做程序集扫描，以保持启动路径清晰并避免 AOT/裁剪下的反射发现问题。
 
-- Tab **壳/内容两阶段懒物化** — 启动只建标题壳,选中时才构造 View。
-- 浏览器与终端 Tab 标记 `NonReloadable`,由 `PersistTabControl` 叠层保活。
-- 底部区折叠时**只改行高,不改 `IsVisible`** — PTY 与 WebView2 需要保持在可视树上。
+## 四、14 个生产项目的职责
 
----
+| 项目 | 当前职责 |
+| --- | --- |
+| `Hackermes.Base` | `IModule`、事件总线、日志和 ViewModel 等共享契约。 |
+| `Hackermes.Platform` | 配置、密钥、工作区、注册表、UI 线程桥，以及 Console/Network 页面查询契约。 |
+| `Hackermes.Cdp` | WebView2 COM/CDP 会话、事件接收、域调用与会话注册。 |
+| `Hackermes.PageAgent` | 页面内 Hook 与动作采集脚本，以及提交到仓库的生成产物。 |
+| `Hackermes.Dock` | 固定区域布局、Tab 注册和需要保活的 Tab 控件。 |
+| `Hackermes.Browser` | 内置多标签浏览器、地址导航、代理/设备视图、CDP 与 Page Agent 接入。 |
+| `Hackermes.Traffic` | HTTP 捕获、拦截、规则、历史、重放、Comparer 与审计等底层服务。 |
+| `Hackermes.Inspector` | DOM/样式、Network、Console、Storage、Timeline，以及 Traffic/Repeater/Comparer 工作台 UI。 |
+| `Hackermes.Automation` | 统一动作模型与执行器、命令注册表、录制/回放，以及结构化数据包操作。 |
+| `Hackermes.Terminal` | 系统 PTY 与领域命令 REPL；领域命令复用 `CommandRegistry`。 |
+| `Hackermes.AiPanel` | OpenAI 兼容客户端、工具调度/策略、会话记忆、Skill 与 MCP 桥。 |
+| `Hackermes.Assessment` | 授权范围、计划、审批、任务、证据、Finding、报告和 HMAC 审计链。 |
+| `Hackermes.ToolHost` | 独立进程内验证票据、目标、计划哈希、nonce、时限和输出上限后执行固定 Adapter。 |
+| `Hackermes.App` | 桌面入口、依赖注入、模块组合、主窗口与跨模块集成。 |
 
-## 十、文件目录结构
+## 五、内置浏览器与 CDP
 
-```
-G:\Hackermes\
-├─ Hackermes.slnx
-├─ Directory.Build.props              公共属性(TFM/Nullable/Avalonia 编译绑定)
-├─ Directory.Packages.props           中央包版本管理
-├─ .gitignore
-├─ README.md
-│
-├─ docs\
-│  ├─ ARCHITECTURE.md                 本文
-│  ├─ DESIGN-NOTES.md                 设计决策、平台陷阱、取舍与技术债
-│  ├─ CDP-LAYER.md                    CDP 域封装与事件流详解
-│  ├─ PAGE-AGENT.md                   Page Agent 协议与 hook 清单
-│  ├─ AI-TOOLS.md                     工具清单、schema、策略矩阵
-│  └─ ROADMAP.md                      分阶段实施计划
-│
-├─ assets\
-│  └─ fonts\                          HarmonyOS Sans SC
-│
-├─ scripts\                           构建/发布辅助脚本
-│
-└─ src\
-   ├─ Hackermes.Base\
-   │  ├─ IModule.cs
-   │  ├─ Events\           IEventBus, EventBus, EventSubscription
-   │  ├─ Mvvm\             ViewModelBase
-   │  ├─ AiTools\          AiToolAttribute, AiToolRegistry, ToolDefinition,
-   │  │                    IToolPolicyGate, AiToolExecutionQueue
-   │  ├─ Data\             IDataProvider
-   │  ├─ Diagnostics\      IAppLogger, AppDiagnostics, UiScriptGate
-   │  └─ Converters\
-   │
-   ├─ Hackermes.ToolGen\                netstandard2.0 · IsRoslynComponent
-   │  ├─ AiToolSourceGenerator.cs
-   │  ├─ JsonSchemaMapper.cs
-   │  └─ ExecutorEmitter.cs
-   │
-   ├─ Hackermes.Platform\
-   │  ├─ Models\           AppSettings, Workspace, DeviceProfile
-   │  ├─ Events\           PlatformEvents(共享事件词典)
-   │  ├─ Registries\       IDockLayoutRegistry, IMenuRegistry,
-   │  │                    ISettingsRegistry, IContentFactoryRegistry
-   │  ├─ Services\         UiThreadBridge, WorkspaceService, SqliteService,
-   │  │                    SettingsService, SecretStore(DPAPI),
-   │  │                    OutboundHttpClientFactory, StartupPerformance,
-   │  │                    WebViewCreationCoordinator, UiContextService
-   │  ├─ Storage\          Migrations, DbGateway
-   │  └─ Serialization\    AppSettingsJsonContext
-   │
-   ├─ Hackermes.Cdp\
-   │  ├─ ComInterop\       WebView2ComVTable, WebView2NativeWrapper,
-   │  │                    DevToolsEventReceiver
-   │  ├─ Session\          ICdpSession, CdpSession, ICdpSessionRegistry,
-   │  │                    CdpRequestPump, CdpEventPump
-   │  ├─ Domains\          PageDomain, RuntimeDomain, DomDomain, CssDomain,
-   │  │                    NetworkDomain, FetchDomain, InputDomain,
-   │  │                    OverlayDomain, LogDomain, EmulationDomain,
-   │  │                    AccessibilityDomain, StorageDomain
-   │  ├─ Events\           CdpEvents(强类型事件 record)
-   │  └─ Binding\          HostBinding(Runtime.addBinding 分片重组)
-   │
-   ├─ Hackermes.PageAgent\
-   │  ├─ src\
-   │  │  ├─ main\          主世界:net-hook.ts, storage-hook.ts,
-   │  │  │                 route-hook.ts, entry-main.ts
-   │  │  ├─ iso\           隔离世界:recorder.ts, selector.ts, picker.ts,
-   │  │  │                 mutation-watch.ts, framework-probe.ts,
-   │  │  │                 entry-iso.ts
-   │  │  └─ shared\        transport.ts(binding 分片协议), types.ts
-   │  ├─ package.json      esbuild + generate.mjs
-   │  ├─ generate.mjs      两个产物 → C# raw string literal
-   │  └─ Generated\        PageAgentScript.g.cs(含 MainWorld / IsolatedWorld
-   │                       两个常量,提交进 Git)
-   │
-   ├─ Hackermes.Browser\
-   │  ├─ Views\            BrowserTabView, BrowserToolbarView, PickerOverlay
-   │  ├─ ViewModels\       BrowserTabViewModel, BrowserHostViewModel
-   │  ├─ Services\         BrowserTabManager, PageAgentInjector,
-   │  │                    ElementPickerService, DeviceEmulationService
-   │  ├─ Tools\            PageReadAiTools, PageInteractAiTools
-   │  └─ BrowserModule.cs
-   │
-   ├─ Hackermes.Inspector\
-   │  ├─ Views\            DomTreeView, StylesView, NetworkView,
-   │  │                    ConsoleView, StorageView, TimelineView
-   │  ├─ ViewModels\
-   │  ├─ Services\         NetworkStore, ConsoleStore, DomTreeService,
-   │  │                    MockRuleEngine, TimelineStore
-   │  ├─ Tools\            NetworkAiTools, ConsoleAiTools, StorageAiTools
-   │  └─ InspectorModule.cs
-   │
-   ├─ Hackermes.Automation\
-   │  ├─ Model\            ActionDescriptor, TargetSelector, ActionResult
-   │  ├─ Execution\        ActionExecutor, WaitStrategies, RetryPolicy
-   │  ├─ Selectors\        SelectorScorer, SelectorResolver
-   │  ├─ Recording\        Recorder, ActionNormalizer
-   │  ├─ Scripting\        ScriptModel, ScriptRunner, ScriptStore, Assertions
-   │  ├─ Commands\         命令定义(REPL 与 AI 工具共用)
-   │  ├─ Tools\            ScriptAiTools, AssertAiTools
-   │  └─ AutomationModule.cs
-   │
-   ├─ Hackermes.Terminal\
-   │  ├─ Views\            TerminalView, TerminalHostView
-   │  ├─ ViewModels\
-   │  ├─ Services\         ShellSessionService, HackermesConsoleService,
-   │  │                    CommandParser, TranscriptService
-   │  ├─ Tools\            ShellAiTools
-   │  └─ TerminalModule.cs
-   │
-   ├─ Hackermes.AiPanel\
-   │  ├─ chat-web\         Vue 3 + Vite singlefile(同 PageAgent 的产物策略)
-   │  ├─ Views\            AiChatWebView, AiChatHtml.g.cs
-   │  ├─ ViewModels\       AiPanelViewModel
-   │  ├─ Services\         ChatClient(SSE), ToolDispatcher, ContextCompressor,
-   │  │                    SessionStore, McpBridge, SubAgentRunner,
-   │  │                    MarkdigBlockStreamer, SystemPrompt
-   │  ├─ Tools\            FileAiTools, SqlAiTools, TodoAiTools, AskAiTools
-   │  └─ AiPanelModule.cs
-   │
-   ├─ Hackermes.Dock\
-   │  ├─ Controls\         PersistTabControl, TabContent, DockTabControl
-   │  ├─ ViewModels\       DockLayoutViewModel, DockPanelViewModel
-   │  ├─ Services\         UiLayoutService, AppDialogService, ContentCreation
-   │  └─ DockModule.cs
-   │
-   ├─ Hackermes.DataTable\
-   ├─ Hackermes.Editor\      AvaloniaEdit 封装、语法高亮(JS/JSON/HTML/CSS)
-   ├─ Hackermes.Sidebar\
-   ├─ Hackermes.Settings\
-   ├─ Hackermes.DomToMarkdown\          零依赖,直接消费 CDP 节点树
-   │
-   └─ Hackermes.App\
-      ├─ Program.cs                   异常钩子 + AppBuilder
-      ├─ App.axaml(.cs)               主题装配 + 分阶段异步初始化
-      ├─ AppModuleBootstrap.cs        硬编码模块清单,两趟循环
-      ├─ ViewLocator.cs               手写字典(AOT 友好)
-      ├─ CoreModule.cs
-      ├─ Views\                       MainWindow, MainContentView,
-      │                               TopBarView, StatusBarView
-      ├─ ViewModels\                  MainWindowViewModel
-      ├─ Styles\                      对 Semi 的微调
-      └─ Assets\
+### 已实现
+
+- Avalonia WebView 承载多标签页面；标签页切换时保留 WebView 生命周期。
+- Windows 上通过 WebView2 原生句柄与 COM vtable 调用 CDP，不依赖 WPF WebView2 包。
+- `ICdpSessionRegistry` 按 `pageId` 注册页面会话；Browser 创建会话，Inspector、Automation 和 AI 侧按页面标识消费。
+- Page、Runtime、Network、Fetch、DOM、CSS、Input、Overlay、Storage 等实际需要的 CDP 能力由薄封装或原始调用提供。
+- `WebViewCreationCoordinator` 串行化 WebView 创建；UI/CDP 调用使用现有线程桥与闸门，避免多个 WebView 争用 UI 线程。
+- 自动打开浏览器页通过 `StartupPerformance.RunWhenLayoutReady` 等待主布局显式稳定，再在 UI 线程仅执行一次；这关闭了固定延时早于 Dock 订阅而丢失标签页事件的竞态。
+- `IUiEventDispatcher` 是视图事件投递的显式 Platform 接缝；例如 Inspector 页面拾取结果经它回到 Avalonia UI 线程，业务服务不直接依赖静态 Dispatcher。
+- 内部代理支持直连和 Burp `127.0.0.1:8080`，只影响 Hackermes 内置浏览器，不修改系统代理。
+- 自动化验收可通过绝对路径环境变量 `HACKERMES_BROWSER_PROFILE_ROOT` 使用独立 WebView2 profile；显式隔离路径配置失败时 fail closed，禁止回退到用户默认 profile。配置、密钥、日志、Traffic、Assessment 与 ToolHost 状态可通过 `HACKERMES_DATA_ROOT` 一并定向到隔离目录，越界、相对路径和盘根路径都会被拒绝。
+
+### Page Agent 当前事实
+
+当前 Page Agent 的网络/存储/路由观测在页面主世界预注入，录制、selector 与 Inspector picker 位于随机命名隔离世界；两个 world 的 binding 均按页面随机化。主世界 Hook 可被页面检测、绕过或篡改，因此 CDP Network 仍是流量事实来源，Page Agent 只补充调用栈和页面内上下文。
+
+录制、选择器和元素拾取已迁移到命名 `agent-iso` 隔离世界；主世界只保留网络、存储与路由 hook。Page Agent payload 使用 16 KiB 分片，宿主在 2 MiB/128 片/16 并发/10 秒的边界内严格按序重组，拒绝乱序、重复、过期与超限输入。更完整的按站点关闭/降级和兼容性策略仍是计划中能力。
+
+## 六、统一页面动作与 AI 浏览器工具
+
+页面写操作汇入 `Hackermes.Automation` 的 `CommandRegistry` 与 `ActionExecutor`。领域 REPL 和 AI 的 `CommandToolAdapter` 共享命令实现，避免为模型另写一套浏览器控制路径。每次 AI 调用都带当前活动 `pageId`；没有活动页面时页面相关调用失败。
+
+### 已注册的浏览器 AI 工具
+
+下表来自 `CommandToolAdapter`、`CommandRegistry` 与 `InspectionToolAdapter` 的当前注册代码，而不是规划清单。
+
+| AI 工具 | 底层命令/服务 | 风险级别 | 当前行为 |
+| --- | --- | --- | --- |
+| `page_navigate` | `open` | Mutating | 导航活动标签页。 |
+| `page_click` | `click` | Mutating | 按选择器定位并发送真实页面点击动作。 |
+| `page_type` | `type` | Mutating | 清空后向目标输入文本。 |
+| `page_hover` | `hover` | Mutating | 将指针悬停到目标。 |
+| `page_press` | `press` | Mutating | 向页面发送按键。 |
+| `page_eval` | `eval` | Mutating | 在活动页面执行 JavaScript；按写操作处理。 |
+| `page_wait` | `wait` | ReadOnly | 等待选择器出现。 |
+| `page_query` | `dom` | ReadOnly | 查询最多 10 个匹配元素的可见性、可交互性、尺寸与文本。 |
+| `page_screenshot` | `snap` | ReadOnly | 截取活动页面。 |
+| `page_assert` | `assert` | ReadOnly | 校验 exists/gone/text/expression 条件。 |
+| `page_context` | `IPageContextQueryService` | ReadOnly | 读取活动标签页的精确 `pageId`、URL、标题及 CDP/Page Agent 就绪状态。 |
+| `page_security_snapshot` | `IPageSecuritySnapshotService` | ReadOnly | 对精确当前页读取有界且不含值的表单/脚本、安全头/CSP 与 Cookie 属性聚合快照；页面变化或隔离世界不可用时失败。 |
+| `script_record` | `rec` | Mutating | 开始、停止、查看或清理动作录制。 |
+| `script_run` | `replay` | Mutating | 回放当前录制动作。 |
+| `console_read` | `IConsoleQueryService` | ReadOnly | 读取活动页面的 Console、异常和浏览器日志。 |
+| `network_list` | `INetworkQueryService` | ReadOnly | 读取活动页面最近网络请求，可只看失败项。 |
+
+`console_read` 与 `network_list` 已强制要求活动 `pageId`，底层 Store 也按页面精确过滤，避免跨标签页混读。工具参数均有界：这两个读取工具的 `last` 为 1–1000。
+
+### 工具策略
+
+AI 设置提供“请求批准（默认）/帮我批准/完全访问权限”三档。所有工具调用进入 `AiToolDispatcher` 和 `IToolPolicyGate`；只读工具可按策略直接执行，Mutating/Dangerous 工具进入确认或拒绝路径。会话内的“记住批准”已绑定 `SessionId + ToolName + pageId + 参数指纹`：参数先做稳定 JSON 规范化，再只保存 SHA-256 摘要，不保存敏感参数明文。切换页面或更改参数必须重新批准；grant 还带 15 分钟绝对失效时间，过期后自动重新审批。
+
+本地集成测试已覆盖完整模型工具循环：受控 `IOpenAiChatClient` 首轮产生 `page_click`，经 `AiChatViewModel → AiToolDispatcher → 人工批准 → CommandRegistry → ActionExecutor` 作用到精确 `pageId` 的 CDP 会话；工具结果进入第二轮模型上下文并生成最终总结。该测试不依赖外部 provider 或 API Key。
+
+## 七、Traffic 与授权评估
+
+### Traffic 已实现
+
+Traffic 捕获基于 CDP Network/Fetch，支持请求/响应拦截、原始和结构化参数编辑、二进制 body 分块读取与改写、继续/丢弃/Fulfill、持久规则、历史保留策略、Repeater、Comparer、批量标注、审计和归档。人工工作台、CLI 与 AI 注册入口复用同一组服务。
+
+Traffic AI 工具按功能族注册，包括 `packet_*`、`traffic_rule_*`、`repeater_*`、`comparison_session_*` 和 `traffic_history_*`。它们并非“浏览器页面动作工具”，但可处理由内置浏览器捕获的流量，并同样受统一 AI 工具策略约束。`packet_*` 的 AI JSON 与 CLI 参数解析现在都转换为共享 typed intent/outcome，AI 不再拼接或重新拆分命令字符串。
+
+Traffic 工作台在最小窗口下把高频筛选、Request/Response 保留在首层，将 Archive/Annotation 收入默认关闭的 `More tools` flyout，并让底部操作区换行；这是 presentation 优化，不改变 typed intent/outcome、审计或拦截状态语义。
+
+### Stage 7 授权评估已实现
+
+Stage 7/7C 当前已形成完整控制面：
+
+```text
+精确、限时的授权范围
+  → 固定 Adapter 与结构化输入形成不可变计划
+  → 一次性审批 grant
+  → DPAPI 保护的 HMAC 任务票据
+  → 独立 ToolHost 再校验范围、计划哈希、nonce 和时限
+  → 有界执行（取消、进程树终止、硬超时、输出上限）
+  → 证据、Finding、人工复核、连续 HMAC 审计链与报告
 ```
 
----
+当前 ToolHost 只暴露四个固定 Adapter：
 
-## 十一、实施路线
+- `recon.nmap.quick`
+- `recon.nmap.service`
+- `recon.dirsearch.quick`
+- `recon.wafw00f.quick`
 
-分五个阶段,每阶段都以"可运行、可验证"为终点。
+没有任意命令 Adapter，也未接入口令爆破、漏洞利用、规避或破坏工具。Nmap、Dirsearch 和 Wafw00f 已在 `127.0.0.1` loopback 靶场完成真实 ToolHost 调用验证。
 
-**阶段 0 — 骨架(基础设施)**
-`Base` / `Platform` / `Dock` / `App` 四件套跑通。目标:能启动一个带五区域布局、可切 Tab、能存取设置的空壳。这里把 `PersistTabControl` 移植到位——它是后续一切的地基。
+授权评估 AI 工具当前包括：`assessment_scopes`、`assessment_tools`、`assessment_create_scope`、`assessment_create_scope_from_page`、`assessment_create_plan`、`assessment_approve`、`assessment_run`、`assessment_report`、`assessment_evidence`、`assessment_verify_evidence`、`assessment_findings`、`assessment_create_finding`、`assessment_review_finding`、`assessment_verify_audit`。其中浏览器绑定会话必须使用 `assessment_create_scope_from_page`：它不接收目标参数，而是通过精确 `pageId` 读取当前 HTTP(S) 页，拒绝用户信息 URL、未知页与已关闭页，并从 URL 派生 scope host 及回显 scheme/port/origin。派生页面绑定会在策略判断和人工确认前冻结并进入授权指纹，执行前再次核对；确认后导航或 remembered grant 后切换 origin 都不能静默复用旧授权。旧的自由目标入口只保留给没有浏览器上下文的 CLI/兼容调用。
 
-**阶段 1 — 浏览器与 CDP 通道**
-`Cdp` COM 互操作 + 事件接收器,`Browser` 多标签浏览。目标:能打开网页、能调 `Runtime.evaluate` 拿返回值、能收到 `Network.responseReceived` 事件。**事件接收器是本阶段的主要风险点** —— vtable 槽位需自行从 SDK 头文件核对。
+Assessment 的 `ReadCases` / `ReadCase` 在同一控制面锁内形成 coherent case：原子组合 job、scope、plan、approval、evidence、finding、audit、审计验证与当前可用动作；缺失引用或不一致授权链 fail closed。人工工作区、CLI `assessment cases` 与 AI `assessment_cases` 复用这一读取边界，避免各入口各自拼接出不同时刻的状态。
 
-**阶段 2 — Page Agent 与检查面板**
-Page Agent 注入 + binding 回传,`Inspector` 的网络/控制台/DOM/存储面板。目标:纯人工使用已经是一个可用的调试工具。
+## 八、数据与持久化
 
-**阶段 3 — 统一动作模型与自动化**
-`Automation` 的 `ActionDescriptor` / 执行器 / 选择器引擎 / 录制回放,`Terminal` 的双会话与 REPL。目标:能录一段登录流程并回放成功。
+- 普通配置由 `ISettingsService` 管理；AI API Key 不写入普通设置文件。
+- Windows 密钥使用当前用户 DPAPI；Linux 预览路径使用用户级 AES-256 密钥库。
+- Traffic 历史、规则、Repeater、Comparer 和标注由各自服务持久化并带有容量/保留约束。
+- Assessment 存储当前版本为 v2，使用临时文件写穿透、上一份有效备份、损坏文件保留与自动恢复。
+- Assessment 审计使用连续 HMAC-SHA256 链，可检测参与者、动作、实体、详情或顺序被篡改；密钥轮换不允许静默破坏旧链。
+- 启动时遗留的 Queued/Running 评估任务转为 Failed 并写入恢复审计，一次性审批保持已消费状态。
 
-**阶段 4 — AI 集成**
-`AiPanel` + 各模块 AI 工具 + 策略闸门 + MCP。目标:能对 AI 说"帮我看看这个表单为什么提交没反应",它能自主截图、点击、读 console、查网络请求并给出结论。
+## 九、界面结构
 
-**阶段 5 — 人机共用数据包工作台**
-`Traffic` 以 CDP `Fetch.requestPaused` 为唯一流量修改核心，人工工作台、`packet` CLI 与 Agent 数据包工具只作为三个适配层。默认捕获后立即放行；显式开启 Intercept 后才允许编辑、丢弃和响应替换。Agent 工具按操作粒度进入策略闸门，读取原始包默认脱敏。
+主窗口采用固定区域布局：顶部导航和全局操作区、左侧工具/入口、中间工作区、右侧 AI 助手、底部终端/日志与状态。固定布局刻意不实现可拖拽 Dock 树；WebView 与 PTY 所在 Tab 通过保活控件避免切换时被销毁。
 
-**阶段 6 — 专业化流量工程与可验证性（基础稳定化进行中）**
-在阶段 5 的单次内存工作流上增加持久规则、请求/响应独立拦截、人工与 CLI 共用 codec 的 HAR/Hackermes JSON 历史交换、人工规则 JSON replace/merge import 与 export、范围分块 body 读取与 Hex/Base64 局部编辑、query/form/顶层 JSON 结构化参数编辑、跨三端的持久 analyst annotation、独立 Repeater、结构化 Comparer、历史复合查询/分页和跨重启持久化，以及 Packet/Traffic/loopback HTTP 和真实桌面 WebView2/CDP 自动化验收。参数和标注均已有人工、CLI、Agent 入口；当前源码等待统一构建验收后再把本阶段标记完成。
+当前主窗口、顶栏、状态栏、加载态和 AI 对话面板已统一明暗主题表面层级、间距、按钮热区、空状态、错误状态和忙碌反馈。AI 面板会明确显示当前绑定的内置浏览器标题与 `pageId`，无活动页面时显示隔离提示。授权评估与 Traffic 工作区均已在隔离的 `127.0.0.1` 页面上建立真实宿主 DPI 的浅/深主题窗口截图门禁；Traffic 截图必须先完成真实捕获 5/5 并显示隔离 history。自动化还记录宿主实际 DPI/scale，并以 wide/medium/minimum 三档窗口验证响应式布局；窗口尺寸模拟不会被误称为操作系统 DPI 切换。
 
-三种操作入口的当前对等程度、剩余缺口和逐项验收门槛见 [`STAGE6-GAP-MATRIX.md`](STAGE6-GAP-MATRIX.md)。二进制修改已由 `IPacketEditDraftService` 固化为可查询、可放弃、失败可重试的草稿契约，并由人工、CLI、Agent 共享；可选 `IPacketCommitService` 在不破坏旧捕获后端的前提下，为 Continue、Drop、Edit/Fulfill 与 Discard 返回最终状态、前后版本、audit id 和安全错误码，三端只负责各自格式化。统一持久审计只记录修改前后规范元数据、入口和结果，不落原始包内容；`IPacketAuditExportService` 以 ECDSA P-256 对规范化载荷签名，文档内嵌 SPKI 公钥和 SHA-256 指纹以支持离线验证，可选 expected key id 提供信任固定。私钥适配器把 PKCS#8 存入 `ISecretStore`，人工、CLI 和 Agent 共用服务，Agent 只收发有界内容、不接收文件路径。Traffic 层以 `ITrafficRuleExecutionSource` 发布脱敏规则执行事件，Automation 层桥接现有审计，避免 Traffic 反向依赖上层。Comparer 的 Traffic/Repeater 来源选择和持久 Session CRUD 已进入人工工作台。Agent 归档边界不暴露文件系统路径，只允许显式格式的有限 JSON/HAR 内容（500 条、2 MiB），并按批量敏感导出 Dangerous、历史导入 Mutating 分级。Inspector 的文件对话以委托边界由 View 注入，ViewModel 不引用 Avalonia Storage API；最近 Archive/Rules 路径通过 `IRecentTrafficPathService` 适配平台设置，只在操作成功后持久化。Repeater 的每轮历史以 DraftId/SendResultId 稳定寻址；Inspector 通过 `IRepeaterWorkbenchService` 获取轮次 DTO，并调用既有 `ITrafficComparisonService` 比较来源，不在 UI 层复制 diff。Traffic Store 的版本化策略统一约束全局及站点条数/容量、保留期和自动清理，并向人工、CLI 与 Agent 暴露管理入口。
+可控构建输出、依赖缓存、临时目录、证据与发布产物统一位于 `G:\HackermesBuild`。证据保留采用“关键 TRX/运行日志/视觉元数据与截图长期保留，重复或失败构建、可再生 profile 和临时目录及时清理”的策略，降低 G 盘占用；系统安装的 .NET SDK 不属于项目构建输出。
 
-捕获列表的机器入口不再依赖自由文本命令拼接：`IPacketQueryService` 接受有界 `PacketQuery`，统一文本、方法、状态码、资源类型、暂停状态和 offset/limit。Traffic 适配器直接映射到 `TrafficQuery`；CLI 只格式化稳定分页头及行，Agent 返回 camelCase `PacketQueryPage` 且不包含 Header/Body 值。人工工作台使用同一组 Traffic Store 查询字段，因此三端筛选语义保持一致。
+## 十、阶段状态
 
-结构化参数层 `HttpPacketParameters` 现把 Query、Form、顶层 JSON、Header 和 Cookie 统一为 location/name/occurrence/value。Header 名称按大小写不敏感匹配并保留原始顺序与名称，Cookie 名称按大小写敏感匹配；请求 `Cookie` 修改只替换目标 pair，响应 `Set-Cookie` 修改保留 Path、Secure、HttpOnly 等属性。共享写入边界限制名称和值长度，拒绝 Header 换行、控制字符及 Cookie 分隔符注入。人工在编辑器内应用结果，CLI/Agent 对暂停包提交同一格式化数据；Agent 的只读输出额外遮蔽所有 Cookie 和认证 Header 值。
+| 阶段 | 状态 | 可验证结果 |
+| --- | --- | --- |
+| 0–1 | 已实现 | 应用骨架、Dock、Browser 与 CDP 通道。 |
+| 2 | 已实现 | Page Agent、Network、Console、DOM 树、页面拾取与样式检查。 |
+| 3 | 已实现 | 统一动作、录制/回放、领域 REPL 与 PTY。 |
+| 4–5 | 已实现 | AI 工具策略、MCP、数据包工作台及 CLI/Agent 共享服务。 |
+| 6 | 已实现 | Traffic 捕获、拦截、编辑、规则、历史、Repeater、Comparer 与真实 WebView2 loopback 验收。 |
+| 7/7C | 已实现 | 授权评估控制面、独立 ToolHost、证据/审计/Finding/复核/报告和发布安装回滚基线。 |
+| 9（增量） | 进行中 | layout-ready 自动打开、UI dispatcher 接缝、只读安全快照、coherent assessment cases 与 Traffic 最小窗口优化；294/294 测试和定向桌面证据已保留，完整发布门禁未跑完。 |
+| 后续增强 | 计划中 | Page Agent runtime 更深的 typed event/capability 消费、Traffic 工作台状态拆分、真实多显示器 DPI 切换与 Linux GUI 全链路。 |
 
----
+当前 Stage 9 源码的完整测试 TRX 为 294/294（2026-08-13，0 failed），并保留 layout-ready 真实桌面 loopback 5/5 与 Traffic minimum 视觉证据。Stage 8 曾完整覆盖 Release 构建、真实桌面 loopback 5/5、授权评估与 Traffic 浅/深主题截图、Windows 包、逐文件 manifest、归档 SHA-256 和汇总 JSON；Stage 9 整套发布门禁按当前要求未跑完，后续发布前仍须重新运行，不能以定向证据替代。
 
-## 十二、关键风险
+## 十一、架构约束与下一步
 
-| 风险 | 说明 | 应对 |
-|---|---|---|
-| ~~**CDP 事件接收器需接入**~~ | **已解除(阶段 1 验证通过)。** 槽位与 IID 全部从 SDK 头文件提取:`GetDevToolsProtocolEventReceiver` = 42,`add_DevToolsProtocolEventReceived` = 3,IID `e2fda4be-5456-406c-a261-3d452138362c`。回调用 .NET 源生成 COM 互操作实现,无需手写 CCW | — |
-| **Page Agent 与页面冲突** | 主世界 hook 无法完全隐藏,页面可检测、可绕过、可篡改;hook 不透明还会改变页面行为 | 主世界部分做到最小(只 hook 与上报);录制/拾取等逻辑放隔离世界;严格的透明性要求(原型链、属性描述符、`toString()`);按站点可关闭并降级到纯 CDP 只读 |
-| **选择器脆弱** | 单一 CSS 选择器在真实站点极易失效 | 候选链 + 运行时评分 + 回放失败时自动尝试次优选择器并提示 |
-| **WebView2 多实例死锁** | 浏览器与 AI 面板共用 UI 线程,一方等待时另一方发起调用会互相阻塞 | 创建互斥 + 脚本闸门,见 `DESIGN-NOTES.md` 第五节 |
-| **AI 破坏性操作** | AI 能驱动页面就能破坏东西 | 策略闸门默认保守,危险动作需确认 |
-| **.NET 10 预览包** | 依赖多个 preview 版本包 | 中央包管理便于统一升级;`Fluxzy` 等 AOT 不友好的依赖已不在依赖树中 |
+后续开发应保持以下不变量：
 
----
+1. 页面动作继续复用 `CommandRegistry` / `ActionExecutor`，不为 AI 建立旁路实现。
+2. Console、Network、DOM 与动作执行均绑定当前活动 `pageId`，不得回退到跨标签页全局读取。
+3. 安全评估必须先有明确范围、固定计划与审批；ToolHost 不接受任意 Shell 字符串。
+4. Traffic 的人工、CLI 与 Agent 入口继续共用底层服务和审计语义。
+5. 新增危险能力必须同时给出目标约束、参数上限、取消/超时、证据与审计路径。
 
-## 十三、环境前置
+优先优化项：
 
-| 项 | 要求 | 本机现状 |
-|---|---|---|
-| 操作系统 | Windows 10/11 x64 | Windows 11 ✓ |
-| .NET SDK | **10.0** | ✓ 10.0.302 |
-| WebView2 Runtime | 任意近期版本 | 150.0.4078.99 ✓ |
-| Node.js | 18+(仅修改 PageAgent / chat-web 时需要) | v24.14.0 ✓ |
-| Git | — | 2.42.0 ✓ |
+- 在现有响应式窗口矩阵之外，使用具备多显示器/系统缩放切换条件的 Windows 主机补充真实 100%/150%/200% DPI 验收；
+- 保持测试、真实桌面 loopback、两类工作区截图和安装包校验为可追溯发布产物；
+- 继续深化 Page Agent runtime seam，让更多消费者只接收完整 typed event/capability；
+- 继续拆分 Traffic 工作台 presentation state，并逐步移除仅作为 capability tag 的运行时 casts；
+- 完成真实 Linux GUI/WebView 全链路验收后，再调整 Linux 平台级别。

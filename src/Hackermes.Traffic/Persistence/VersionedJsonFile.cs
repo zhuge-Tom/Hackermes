@@ -1,4 +1,5 @@
 using System;
+using Hackermes.Base;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -68,10 +69,7 @@ internal static class VersionedJsonFile
 
     public static string DefaultPath(string fileName)
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(root))
-            root = Path.GetTempPath();
-        return Path.Combine(root, "Hackermes", fileName);
+        return AppDataPaths.Resolve(fileName);
     }
 
     private static T? TryRead<T>(string path)

@@ -4,6 +4,34 @@
 
 ## 当前范围
 
+构建环境已统一到 `G:\HackermesBuild`：默认 bin/obj、NuGet 包与 HTTP/plugin 缓存、.NET CLI home、TEMP/TMP、Python/XDG 缓存、运行证据和发布包均有独立子目录。npm prefix 位于 G 盘，npm cache 使用 npm 默认路径且不再被项目强制，避免跨项目共享锁冲突。仓库级 `NuGet.Config` 与所有正式 PowerShell 脚本共同执行其余 G 盘约束；系统安装的 .NET SDK 本体不迁移。
+
+### 2026-08-13 Stage 9 增量推进
+
+- 浏览器自动打开不再依赖固定延时：`StartupPerformance.RunWhenLayoutReady` 等待主布局显式就绪后，在 UI 线程且仅执行一次地创建标签页，避免 Dock 尚未订阅时丢失 add-tab 事件。保留证据 `stage9-layout-ready-runtime-r3` 证明当前源码下 Page Agent 主/隔离世界均 Ready，真实 Traffic loopback 为 5/5。
+- Platform 新增 `IUiEventDispatcher` 作为视图事件回到 Avalonia UI 线程的显式接缝；`PageInspectionService` 通过该契约投递 UI 事件，测试可用同步实现替换，不再把静态线程桥藏在业务服务中。
+- AI 新增只读 `page_security_snapshot`：严格绑定精确 `pageId`，在读取前后复核页面与 URL；仅返回有界 URL/origin/title、表单/外链脚本元数据、安全响应头/CSP 标志及 Cookie 属性聚合，不返回 Cookie、令牌、表单值、存储值、正文或内联脚本内容。未知、关闭、导航中的页面和不可用隔离世界均 fail closed。
+- Assessment 控制面新增原子 `ReadCases` / `ReadCase`，在同一锁内组合 job、scope、plan、approval、evidence、finding、audit 与可用动作；引用缺失或授权链不一致时 fail closed。工作区、CLI `assessment cases` 与 AI `assessment_cases` 已消费该一致快照。
+- Traffic 最小窗口界面完成压缩：常用筛选与 Request/Response 保持首层可见，低频 Archive/Annotation 收入默认关闭的 `More tools`，底部操作区可换行。保留的 880×560 请求尺寸、125% 真实宿主 DPI 浅/深截图和 5/5 loopback 元数据位于 `stage9-traffic-minimum-final`；该证据验证响应式窗口，不声称切换了系统 DPI。
+- 当前源码完整测试 TRX 为 **294/294**（0 failed），权威文件为 `G:\HackermesBuild\evidence\stage9-full-tests-final\stage9-full-tests.trx`。为控制 G 盘占用，仅保留完整 TRX、layout-ready runtime、Traffic minimum 和响应式矩阵等关键证据，重复/失败构建及临时 profile 已清理。
+- **Stage 9 完整发布门禁未运行完**：按当前要求未重新执行包含 Release 构建、全部桌面视觉、Windows 打包/manifest/归档哈希的整套验收，因此不能把 294/294 或定向运行证据表述为 Stage 9 发布通过。Stage 8 的完整发布门禁事实仍有效，但不替代对当前 Stage 9 源码重新门禁。
+
+### 2026-08-12 增量推进
+
+- AI 浏览器工具链继续沿用“当前选中页面快照 → 统一工具策略 → CommandRegistry / 检查查询服务”的单一执行路径。导航、点击和输入仍按写操作进入确认策略；DOM、Console 和 Network 读取保持只读。
+- 修复 Console / Network 的跨标签页数据混读：AI 查询现在必须携带活动 `pageId`，底层 Store 按页面精确过滤；没有活动页面时明确拒绝，不再把其他标签页的观测结果带入当前对话。
+- “本会话记住批准”不再只按工具名缓存，现绑定会话、工具、活动 `pageId` 与规范化参数 SHA-256 指纹；切换页面或修改参数会重新进入策略检查，缓存不保存参数明文。
+- 主窗口、顶栏、状态栏、加载态和 AI 聊天面板完成一轮视觉整理，统一明暗主题表面层级、间距、按钮热区、空状态、错误状态和忙碌反馈，保留原有命令与绑定。
+- 新增浏览器 AI、细粒度授权、WebView2 profile/data 隔离、`page_context`、浏览器派生 Assessment scope、模型工具循环、10k 网络记录容量、Page Agent runtime/transport 与 Traffic typed-operation 回归；当前完整测试集已推进为 294/294，并输出 TRX。验证使用独立 `HackermesBuildRoot`，避免并行开发争用默认中间输出目录。
+- Windows 真实桌面验收改用独立 `HACKERMES_BROWSER_PROFILE_ROOT` 与纯 `127.0.0.1` 页面；显式隔离路径无效时 fail closed，不再回退用户默认 WebView2 profile。真实 App/CDP loopback 的捕获、重放、拦截、请求改写和响应 Fulfill 5/5 通过。
+- 已使用 `PrintWindow` 只捕获隔离 profile/data root 下的 Hackermes 窗口，生成授权评估与 Traffic 工作区 125% DPI 浅/深主题证据；Traffic 必须先完成真实 loopback 5/5 并显示 8 条请求。截图与 SHA-256 元数据均纳入正式发布门禁。
+- AI 新增只读 `page_context`，精确返回活动标签页 URL、标题与 CDP/Page Agent 状态；未知、相似或已关闭 `pageId` 不会回退到其他标签页。AI 面板同时显示当前绑定目标或明确的未绑定状态。
+- 授权评估新增 `assessment_create_scope_from_page`：浏览器绑定会话不能再由模型替换 `targets`，范围 host 只能从当前页 HTTP(S) URL 派生，scheme/port/origin 会随结果回显；带用户信息的 URL、未知页和关闭页均失败。页面绑定在策略与人工确认前冻结并进入授权指纹，执行前复核，可阻断确认后导航竞态，并使 remembered grant 在 origin 变化后重新确认。该链与浏览器隔离、工具确认、细粒度授权缓存及模型工具循环的定向回归为 23/23 通过。
+- 授权评估工作区完成视觉与可用性整理：范围、计划、审批形成三阶段卡片；任务、证据、发现和审计都有明确空态；撤销/取消集中到风险操作区，术语与详情排版统一。现有控制面调用和事件行为未改变。
+- 本地假模型已完成真实工具循环：首轮生成 `page_click`，经过策略批准和统一动作执行器命中指定 CDP 页面，工具结果回到第二轮并得到最终总结。会话 grant 具有 15 分钟绝对有效期。
+
+当前 P0 已继续推进：Page Agent 主世界缩减到网络/存储/路由 hook，录制与 selector 迁入命名隔离世界；16 KiB 分片及宿主有界重组已覆盖乱序、重复、超时、并发与容量保护。Browser-owned runtime 现按精确 `pageId` 管理主/隔离世界 capability 与 context 生命周期，Inspector picker 不再自行注入主世界。Traffic 的 AI 与 CLI 入口也已统一到 typed intent/outcome，不再做字符串命令往返。发布门禁现同时捕获授权评估和 Traffic 浅/深主题；视觉基线继续扩展为真实宿主 DPI 记录加 wide/medium/minimum 响应式窗口矩阵。
+
 - 阶段 0–1：应用骨架、Dock、浏览器和 CDP 通道已落地。
 - 阶段 2：Page Agent、Network、Console 已接通；DOM 已改为树形结构并补齐页面拾取器、页面/树双向悬停与点击定位、父级展开、树项滚动、计算样式/匹配规则编辑和导航后陈旧节点清理。页面资源不再占用左侧栏，相关 src/href 在 DOM 详情中查看。
 - 阶段 3：动作描述、执行器、选择器、录制、保存、加载、回放、领域 REPL 和 PTY 已接通。此次复核确认模块已注册，不是空壳。
@@ -26,4 +54,4 @@
 
 ## 已执行的运行验收
 
-已完成真实 CDP loopback 5 项闭环两次、默认密钥文件跨重启指纹验证，以及 Repeater 超时/取消、Annotation 筛选/删除的工作台命令定向测试（22/22）。Stage 7C 新增证据/审计防篡改、Finding 复核、审计密钥轮换拒绝、多格式报告、损坏备份恢复、中断任务恢复以及 CLI/Agent 实际入口全链路测试（8/8）；DOM 标签自动激活刷新也有回归测试，完整测试集 249/249 通过。Windows 安装器已在隔离临时目录完成首次安装、升级、保留旧版、回滚和卸载验收；Linux 验证按当前决定跳过。
+当前 Stage 9 完整测试集为 294/294，另有 layout-ready 真实桌面 loopback 5/5、Traffic 最小窗口浅/深主题和既有响应式矩阵证据。Stage 8 曾完整通过 Release 构建、真实 CDP loopback、授权评估与 Traffic 视觉、Windows 包 manifest/归档 SHA-256 及清理检查；但 Stage 9 整套发布门禁按当前要求未跑完，不能沿用 Stage 8 结果宣称当前源码已发布验收。Linux 验证仍按当前决定跳过。

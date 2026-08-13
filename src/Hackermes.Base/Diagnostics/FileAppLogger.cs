@@ -22,10 +22,7 @@ public sealed class FileAppLogger : IAppLogger
 
         try
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Hackermes",
-                "logs");
+            var dir = AppDataPaths.Resolve("logs");
             Directory.CreateDirectory(dir);
             _logPath = Path.Combine(dir, "latest.log");
 

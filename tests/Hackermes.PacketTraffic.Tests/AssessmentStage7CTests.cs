@@ -17,6 +17,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -50,6 +51,34 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.Contains("<!doctype html>", plane.ExportReport(job.Id, "html"));
         Assert.Equal(2, plane.Findings(job.Id).Count);
         Assert.Equal(AssessmentFindingStatus.Unreviewed.ToString(), generated.Status);
+    }
+
+    [Fact]
+    public async Task Case_snapshot_exposes_one_coherent_lifecycle_and_only_currently_available_actions()
+    {
+        var plane = CreatePlane();
+        var job = await RunEchoAsync(plane, "case evidence");
+        var evidence = Assert.Single(plane.Evidence(job.Id));
+        var generated = plane.CreateFinding(job.Id, evidence.Id, "Case finding", "coherent case",
+            "Info", "High", "analyst");
+
+        var snapshot = plane.ReadCase(job.Id);
+
+        Assert.Equal(job.Id, snapshot.Job.Id);
+        Assert.Equal(snapshot.Job.ScopeId, snapshot.Scope.Id);
+        Assert.Equal(snapshot.Job.PlanId, snapshot.Plan.Id);
+        Assert.Equal(snapshot.Job.ApprovalId, snapshot.Approval.Id);
+        Assert.All(snapshot.Evidence, value => Assert.Equal(job.Id, value.JobId));
+        Assert.All(snapshot.Findings, value => Assert.Equal(job.Id, value.JobId));
+        Assert.Contains(snapshot.Audit, value => value.EntityId == job.Id || value.EntityId == generated.Id);
+        Assert.True(snapshot.AuditVerification.Valid);
+        Assert.False(snapshot.AvailableActions.CanCancelJob);
+        Assert.True(snapshot.AvailableActions.CanRevokeScope);
+        Assert.False(snapshot.AvailableActions.CanRevokeApproval);
+        Assert.True(snapshot.AvailableActions.CanVerifyEvidence);
+        Assert.True(snapshot.AvailableActions.CanCreateFinding);
+        Assert.True(snapshot.AvailableActions.CanReviewFinding);
+        Assert.True(snapshot.AvailableActions.CanExportReport);
     }
 
     [Fact]
@@ -158,6 +187,10 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.True((await registry.ExecuteAsync($"assessment run {plan.Id} {approval.Id} runner", null)).Success);
         var job = Assert.Single(plane.Jobs);
         var evidence = Assert.Single(plane.Evidence(job.Id));
+        var cases = await registry.ExecuteAsync("assessment cases", null);
+        Assert.True(cases.Success);
+        Assert.Contains(job.Id, cases.Output);
+        Assert.Contains("canCancel=False", cases.Output);
         Assert.True((await registry.ExecuteAsync($"assessment evidence-verify {evidence.Id}", null)).Success);
         Assert.True((await registry.ExecuteAsync($"assessment finding create {job.Id} {evidence.Id} cli-finding High High description", null)).Success);
         var finding = Assert.Single(plane.Findings(job.Id));
@@ -192,6 +225,10 @@ public sealed class AssessmentStage7CTests : IDisposable
         var approval = Assert.Single(plane.Approvals);
         Assert.True((await InvokeAgent(registry, "assessment_run", new { planId = plan.Id, approvalId = approval.Id, operatorId = "agent-runner" })).Success);
         var job = Assert.Single(plane.Jobs);
+        var cases = await InvokeAgent(registry, "assessment_cases", new { });
+        Assert.True(cases.Success);
+        Assert.Contains(job.Id, cases.Content);
+        Assert.Contains("AvailableActions", cases.Content);
         var evidence = Assert.Single(plane.Evidence(job.Id));
         Assert.True((await InvokeAgent(registry, "assessment_verify_evidence", new { evidenceId = evidence.Id })).Success);
         Assert.True((await InvokeAgent(registry, "assessment_create_finding", new
@@ -211,11 +248,115 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.True((await InvokeAgent(registry, "assessment_verify_audit", new { })).Success);
     }
 
-    private static async ValueTask<ToolResult> InvokeAgent(AiToolRegistry registry, string name, object arguments)
+    [Fact]
+    public async Task Browser_bound_scope_derives_exact_target_from_attached_page()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        var pages = new MutablePageContexts(new PageContextObservation(
+            "page-selected", "https://Example.COM:8443/path?q=1", "Selected", true, true));
+        AssessmentIntegrationModule.RegisterAgent(registry, plane, pages);
+        var confirmation = new RecordingConfirmation();
+
+        var result = await InvokeAgentThroughDispatcher(registry, confirmation, "assessment_create_scope_from_page", new
+        {
+            name = "selected-page", authorization = "ticket-42", operatorId = "operator", minutes = 5,
+            targets = new[] { "substituted.invalid" }
+        }, "page-selected");
+
+        Assert.True(result.Success, result.Content);
+        var scope = Assert.Single(plane.Scopes);
+        Assert.Equal(["example.com"], scope.Targets);
+        using var json = JsonDocument.Parse(result.Content);
+        Assert.Equal("https://example.com:8443", json.RootElement.GetProperty("Origin").GetString());
+        Assert.Equal(8443, json.RootElement.GetProperty("Port").GetInt32());
+        Assert.DoesNotContain("substituted.invalid", result.Content, StringComparison.Ordinal);
+        var definition = registry.All.Single(value => value.Name == "assessment_create_scope_from_page");
+        Assert.Equal(AiToolRisk.Mutating, definition.Risk);
+        Assert.False(definition.InputSchema.GetProperty("properties").TryGetProperty("targets", out _));
+        Assert.False(definition.InputSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal("example.com", confirmation.Invocation!.Arguments
+            .GetProperty("__hackermesPageBinding").GetProperty("Target").GetString());
+    }
+
+    [Fact]
+    public async Task Browser_bound_scope_rejects_generic_target_substitution_and_invalid_page_urls()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        var pages = new MutablePageContexts(new PageContextObservation(
+            "page-selected", "https://user:secret@example.com/", "Selected", true, true));
+        AssessmentIntegrationModule.RegisterAgent(registry, plane, pages);
+        var confirmation = new RecordingConfirmation();
+
+        var generic = await InvokeAgentThroughDispatcher(registry, confirmation, "assessment_create_scope", new
+        {
+            name = "wrong", authorization = "ticket", operatorId = "operator",
+            targets = new[] { "other.invalid" }, minutes = 5
+        }, "page-selected");
+        var invalidPage = await InvokeAgentThroughDispatcher(registry, confirmation, "assessment_create_scope_from_page", new
+        {
+            name = "wrong", authorization = "ticket", operatorId = "operator", minutes = 5
+        }, "page-selected");
+        var missingPage = await InvokeAgentThroughDispatcher(registry, confirmation, "assessment_create_scope_from_page", new
+        {
+            name = "wrong", authorization = "ticket", operatorId = "operator", minutes = 5
+        }, "page-closed");
+
+        Assert.False(generic.Success);
+        Assert.Contains("cannot substitute", generic.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.False(invalidPage.Success);
+        Assert.False(missingPage.Success);
+        Assert.Empty(plane.Scopes);
+    }
+
+    [Fact]
+    public async Task Browser_bound_scope_rejects_navigation_after_confirmation_and_rekeys_remembered_grants()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        var pages = new MutablePageContexts(new PageContextObservation(
+            "page-selected", "https://first.example/path", "First", true, true));
+        AssessmentIntegrationModule.RegisterAgent(registry, plane, pages);
+        var confirmation = new RecordingConfirmation
+        {
+            OnConfirm = () => pages.Page = pages.Page with { Url = "https://second.example/" }
+        };
+        var dispatcher = new AiToolDispatcher(registry, new DefaultToolPolicyGate(), confirmation);
+        var arguments = new { name = "frozen", authorization = "ticket", operatorId = "operator", minutes = 5 };
+
+        var navigated = await dispatcher.InvokeAsync(new ToolInvocation("assessment_create_scope_from_page",
+            JsonSerializer.SerializeToElement(arguments), "page-selected", "session"));
+
+        Assert.False(navigated.Success);
+        Assert.Contains("navigated after authorization", navigated.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(plane.Scopes);
+
+        confirmation.OnConfirm = null;
+        confirmation.RememberForSession = true;
+        var second = await dispatcher.InvokeAsync(new ToolInvocation("assessment_create_scope_from_page",
+            JsonSerializer.SerializeToElement(arguments), "page-selected", "session"));
+        pages.Page = pages.Page with { Url = "https://third.example/" };
+        var third = await dispatcher.InvokeAsync(new ToolInvocation("assessment_create_scope_from_page",
+            JsonSerializer.SerializeToElement(arguments), "page-selected", "session"));
+
+        Assert.True(second.Success, second.Content);
+        Assert.True(third.Success, third.Content);
+        Assert.Equal(3, confirmation.Count);
+        Assert.Equal(new[] { "second.example", "third.example" }, plane.Scopes.SelectMany(value => value.Targets));
+    }
+
+    private static async ValueTask<ToolResult> InvokeAgent(AiToolRegistry registry, string name, object arguments,
+        string? pageId = null)
     {
         Assert.True(registry.TryGet(name, out var definition));
-        return await definition!.Handler(new ToolInvocation(name, JsonSerializer.SerializeToElement(arguments)), default);
+        return await definition!.Handler(new ToolInvocation(name, JsonSerializer.SerializeToElement(arguments), pageId), default);
     }
+
+    private static ValueTask<ToolResult> InvokeAgentThroughDispatcher(AiToolRegistry registry,
+        RecordingConfirmation confirmation, string name, object arguments, string? pageId = null) =>
+        new AiToolDispatcher(registry, new DefaultToolPolicyGate(), confirmation).InvokeAsync(
+            new ToolInvocation(name, JsonSerializer.SerializeToElement(arguments), pageId, "assessment-test"));
 
     private AssessmentControlPlane CreatePlane() => new(new SimulatedAssessmentExecutionHost(),
         new TestSettings(Path.Combine(_root, "settings.json")), new NullLogger(), _secrets);
@@ -253,5 +394,28 @@ public sealed class AssessmentStage7CTests : IDisposable
         public void Set(string key, string? value) { if (value is null) _values.Remove(key); else _values[key] = value; }
         public bool Contains(string key) => _values.ContainsKey(key);
         public void Remove(string key) => _values.Remove(key);
+    }
+
+    private sealed class MutablePageContexts(PageContextObservation page) : IPageContextQueryService
+    {
+        public PageContextObservation Page { get; set; } = page;
+        public PageContextObservation? Read(string pageId) =>
+            string.Equals(Page.PageId, pageId, StringComparison.Ordinal) ? Page : null;
+    }
+
+    private sealed class RecordingConfirmation : IToolConfirmationService
+    {
+        public int Count { get; private set; }
+        public ToolInvocation? Invocation { get; private set; }
+        public bool RememberForSession { get; set; }
+        public Action? OnConfirm { get; set; }
+
+        public ValueTask<ToolConfirmation> ConfirmAsync(ToolInvocation invocation, string reason, CancellationToken ct)
+        {
+            Count++;
+            Invocation = invocation;
+            OnConfirm?.Invoke();
+            return ValueTask.FromResult(new ToolConfirmation(true, RememberForSession));
+        }
     }
 }

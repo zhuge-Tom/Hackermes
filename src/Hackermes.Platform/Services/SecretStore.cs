@@ -1,4 +1,5 @@
 using Hackermes.Base.Diagnostics;
+using Hackermes.Base;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -49,10 +50,7 @@ public sealed class DpapiSecretStore : ISecretStore
     public DpapiSecretStore(IAppLogger logger, string? filePath = null)
     {
         _logger = logger.ForCategory(nameof(DpapiSecretStore));
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Hackermes",
-            "secrets.dat");
+        _filePath = filePath ?? AppDataPaths.Resolve("secrets.dat");
     }
 
     public string? Get(string key)
@@ -159,10 +157,7 @@ public sealed class FileProtectedSecretStore : ISecretStore
     public FileProtectedSecretStore(IAppLogger logger, string? filePath = null)
     {
         _logger = logger.ForCategory(nameof(FileProtectedSecretStore));
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Hackermes",
-            "secrets.dat");
+        _filePath = filePath ?? AppDataPaths.Resolve("secrets.dat");
         _keyPath = _filePath + ".key";
     }
 

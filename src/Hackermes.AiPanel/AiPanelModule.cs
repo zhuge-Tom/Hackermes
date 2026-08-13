@@ -23,6 +23,8 @@ public sealed class AiPanelModule : IModule
         services.AddSingleton<IAiToolRegistry, AiToolRegistry>();
         services.AddSingleton<CommandToolAdapter>();
         services.AddSingleton<InspectionToolAdapter>();
+        services.AddSingleton<PageContextToolAdapter>();
+        services.AddSingleton<PageSecuritySnapshotToolAdapter>();
         services.AddSingleton<DefaultToolPolicyGate>();
         services.AddSingleton<IToolPolicyGate>(sp => sp.GetRequiredService<DefaultToolPolicyGate>());
         services.AddSingleton<IToolConfirmationService, AvaloniaToolConfirmationService>();
@@ -59,6 +61,10 @@ public sealed class AiPanelModule : IModule
         serviceProvider.GetRequiredService<CommandToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<InspectionToolAdapter>()
+            .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        serviceProvider.GetRequiredService<PageContextToolAdapter>()
+            .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        serviceProvider.GetRequiredService<PageSecuritySnapshotToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<AgentWorkflowToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());

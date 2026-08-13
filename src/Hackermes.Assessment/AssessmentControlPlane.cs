@@ -52,6 +52,23 @@ public sealed record AssessmentReport(AssessmentJob Job, AssessmentScope? Scope,
     IReadOnlyList<AssessmentEvidence> Evidence, IReadOnlyList<AssessmentFinding> Findings,
     IReadOnlyList<AssessmentAuditEntry> Audit, AssessmentAuditVerification AuditVerification);
 
+/// <summary>
+/// Actions that are valid for the exact lifecycle state captured with an assessment case.
+/// Consumers should refresh the case immediately before invoking a mutation; the control plane
+/// remains authoritative and revalidates every operation.
+/// </summary>
+public sealed record AssessmentCaseAvailableActions(bool CanCancelJob, bool CanRevokeScope,
+    bool CanRevokeApproval, bool CanVerifyEvidence, bool CanCreateFinding,
+    bool CanReviewFinding, bool CanExportReport);
+
+public sealed record AssessmentCaseSummary(AssessmentJob Job, AssessmentScope Scope,
+    AssessmentPlan Plan, AssessmentApproval Approval, AssessmentCaseAvailableActions AvailableActions);
+
+public sealed record AssessmentCaseSnapshot(AssessmentJob Job, AssessmentScope Scope,
+    AssessmentPlan Plan, AssessmentApproval Approval, IReadOnlyList<AssessmentEvidence> Evidence,
+    IReadOnlyList<AssessmentFinding> Findings, IReadOnlyList<AssessmentAuditEntry> Audit,
+    AssessmentAuditVerification AuditVerification, AssessmentCaseAvailableActions AvailableActions);
+
 public sealed record AssessmentExecutionResult(bool Success, string Output, string? Error = null);
 
 public interface IAssessmentControlPlane
@@ -60,6 +77,8 @@ public interface IAssessmentControlPlane
     IReadOnlyList<AssessmentPlan> Plans { get; }
     IReadOnlyList<AssessmentApproval> Approvals { get; }
     IReadOnlyList<AssessmentJob> Jobs { get; }
+    IReadOnlyList<AssessmentCaseSummary> ReadCases(int limit = 500);
+    AssessmentCaseSnapshot ReadCase(string jobId);
     AssessmentScope CreateScope(string name, string authorizationReference, string operatorId, IReadOnlyList<string> targets, DateTimeOffset expiresAt);
     AssessmentPlan CreatePlan(string scopeId, string name, IReadOnlyList<AssessmentStep> steps, string actor);
     AssessmentApproval Approve(string planId, string operatorId, DateTimeOffset expiresAt);
@@ -135,6 +154,35 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
     public IReadOnlyList<AssessmentPlan> Plans { get { lock (_gate) return [.. _document.Plans]; } }
     public IReadOnlyList<AssessmentApproval> Approvals { get { lock (_gate) return [.. _document.Approvals]; } }
     public IReadOnlyList<AssessmentJob> Jobs { get { lock (_gate) return [.. _document.Jobs]; } }
+
+    public IReadOnlyList<AssessmentCaseSummary> ReadCases(int limit = 500)
+    {
+        lock (_gate)
+        {
+            var evidenceJobs = _document.Evidence.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
+            var findingJobs = _document.Findings.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
+            return _document.Jobs.OrderByDescending(value => value.CreatedAt)
+                .Take(Math.Clamp(limit, 1, 500))
+                .Select(job => BuildCaseSummaryUnsafe(job, evidenceJobs.Contains(job.Id), findingJobs.Contains(job.Id)))
+                .ToArray();
+        }
+    }
+
+    public AssessmentCaseSnapshot ReadCase(string jobId)
+    {
+        lock (_gate)
+        {
+            var job = _document.Jobs.SingleOrDefault(value => value.Id == jobId)
+                ?? throw new InvalidOperationException("Assessment job not found.");
+            var evidence = _document.Evidence.Where(value => value.JobId == job.Id)
+                .OrderByDescending(value => value.Timestamp).ToArray();
+            var findings = _document.Findings.Where(value => value.JobId == job.Id)
+                .OrderByDescending(value => value.CreatedAt).ToArray();
+            var summary = BuildCaseSummaryUnsafe(job, evidence.Length > 0, findings.Length > 0);
+            return new AssessmentCaseSnapshot(summary.Job, summary.Scope, summary.Plan, summary.Approval,
+                evidence, findings, AuditForEntityUnsafe(job.Id, 500), VerifyAuditUnsafe(), summary.AvailableActions);
+        }
+    }
 
     public AssessmentScope CreateScope(string name, string authorizationReference, string operatorId, IReadOnlyList<string> targets, DateTimeOffset expiresAt)
     {
@@ -282,35 +330,39 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
     public IReadOnlyList<AssessmentAuditEntry> Audit(int limit = 100) { lock (_gate) return _document.Audit.OrderByDescending(value => value.Timestamp).Take(Math.Clamp(limit, 1, 500)).ToArray(); }
     public IReadOnlyList<AssessmentAuditEntry> AuditForEntity(string entityId, int limit = 100)
     {
-        lock (_gate)
-        {
-            var relatedFindingIds = _document.Findings.Where(value => value.JobId == entityId).Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
-            var relatedEvidenceIds = _document.Evidence.Where(value => value.JobId == entityId).Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
-            return _document.Audit.Where(value => value.EntityId == entityId || relatedFindingIds.Contains(value.EntityId) ||
-                    relatedEvidenceIds.Contains(value.EntityId) || value.Detail.Contains(entityId, StringComparison.Ordinal))
-                .OrderByDescending(value => value.Timestamp).Take(Math.Clamp(limit, 1, 500)).ToArray();
-        }
+        lock (_gate) return AuditForEntityUnsafe(entityId, limit);
     }
 
     public AssessmentAuditVerification VerifyAudit()
     {
-        lock (_gate)
+        lock (_gate) return VerifyAuditUnsafe();
+    }
+
+    private IReadOnlyList<AssessmentAuditEntry> AuditForEntityUnsafe(string entityId, int limit)
+    {
+        var relatedFindingIds = _document.Findings.Where(value => value.JobId == entityId).Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
+        var relatedEvidenceIds = _document.Evidence.Where(value => value.JobId == entityId).Select(value => value.Id).ToHashSet(StringComparer.Ordinal);
+        return _document.Audit.Where(value => value.EntityId == entityId || relatedFindingIds.Contains(value.EntityId) ||
+                relatedEvidenceIds.Contains(value.EntityId) || value.Detail.Contains(entityId, StringComparison.Ordinal))
+            .OrderByDescending(value => value.Timestamp).Take(Math.Clamp(limit, 1, 500)).ToArray();
+    }
+
+    private AssessmentAuditVerification VerifyAuditUnsafe()
+    {
+        var previous = string.Empty;
+        for (var index = 0; index < _document.Audit.Count; index++)
         {
-            var previous = string.Empty;
-            for (var index = 0; index < _document.Audit.Count; index++)
-            {
-                var entry = _document.Audit[index];
-                if (string.IsNullOrEmpty(entry.IntegrityHash))
-                    return new AssessmentAuditVerification(false, index, "legacy_or_unsigned_entry", entry.Id);
-                if (!string.Equals(entry.PreviousHash, previous, StringComparison.Ordinal))
-                    return new AssessmentAuditVerification(false, index, "previous_hash_mismatch", entry.Id);
-                var actual = AuditHash(entry with { IntegrityHash = string.Empty });
-                if (!string.Equals(actual, entry.IntegrityHash, StringComparison.OrdinalIgnoreCase))
-                    return new AssessmentAuditVerification(false, index, "entry_hash_mismatch", entry.Id);
-                previous = entry.IntegrityHash;
-            }
-            return new AssessmentAuditVerification(true, _document.Audit.Count);
+            var entry = _document.Audit[index];
+            if (string.IsNullOrEmpty(entry.IntegrityHash))
+                return new AssessmentAuditVerification(false, index, "legacy_or_unsigned_entry", entry.Id);
+            if (!string.Equals(entry.PreviousHash, previous, StringComparison.Ordinal))
+                return new AssessmentAuditVerification(false, index, "previous_hash_mismatch", entry.Id);
+            var actual = AuditHash(entry with { IntegrityHash = string.Empty });
+            if (!string.Equals(actual, entry.IntegrityHash, StringComparison.OrdinalIgnoreCase))
+                return new AssessmentAuditVerification(false, index, "entry_hash_mismatch", entry.Id);
+            previous = entry.IntegrityHash;
         }
+        return new AssessmentAuditVerification(true, _document.Audit.Count);
     }
 
     public string ExportReport(string jobId, string format = "json")
@@ -382,6 +434,27 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
 
     private AssessmentScope? Scope(string id) => _document.Scopes.SingleOrDefault(value => value.Id == id);
     private AssessmentPlan? Plan(string id) => _document.Plans.SingleOrDefault(value => value.Id == id);
+    private AssessmentCaseSummary BuildCaseSummaryUnsafe(AssessmentJob job, bool hasEvidence, bool hasFindings)
+    {
+        var scope = _document.Scopes.SingleOrDefault(value => value.Id == job.ScopeId)
+            ?? throw new InvalidDataException($"Assessment job {job.Id} references a missing scope.");
+        var plan = _document.Plans.SingleOrDefault(value => value.Id == job.PlanId)
+            ?? throw new InvalidDataException($"Assessment job {job.Id} references a missing plan.");
+        var approval = _document.Approvals.SingleOrDefault(value => value.Id == job.ApprovalId)
+            ?? throw new InvalidDataException($"Assessment job {job.Id} references a missing approval.");
+        if (!string.Equals(plan.ScopeId, scope.Id, StringComparison.Ordinal) ||
+            !string.Equals(approval.PlanId, plan.Id, StringComparison.Ordinal))
+            throw new InvalidDataException($"Assessment job {job.Id} has an inconsistent authorization chain.");
+        var actions = new AssessmentCaseAvailableActions(
+            job.Status is not (AssessmentJobStatus.Completed or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled),
+            !scope.Revoked,
+            !approval.Revoked && approval.ConsumedAt is null,
+            hasEvidence,
+            hasEvidence,
+            hasFindings,
+            true);
+        return new AssessmentCaseSummary(job, scope, plan, approval, actions);
+    }
     private static void EnsureScopeUsable(AssessmentScope? scope)
     {
         if (scope is null || scope.Revoked || scope.ExpiresAt <= DateTimeOffset.UtcNow) throw new InvalidOperationException("Scope is missing, revoked or expired.");

@@ -3,37 +3,110 @@
              xmlns:vm="using:Hackermes.AiPanel.ViewModels"
              x:Class="Hackermes.AiPanel.Views.AiChatView"
              x:DataType="vm:AiChatViewModel">
-  <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="8">
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
-      <TextBlock VerticalAlignment="Center" Text="模型" Margin="0,0,6,0" />
-      <Border Grid.Column="1" Padding="10,7" Background="{DynamicResource SemiColorFill0}" CornerRadius="4">
-        <TextBlock Text="{Binding Model}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+  <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="12">
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
+      <TextBlock VerticalAlignment="Center" Text="模型" FontSize="12" Opacity="0.65" Margin="0,0,8,0" />
+      <Border Grid.Column="1" Padding="11,7"
+              Background="{DynamicResource SemiColorFill0}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1" CornerRadius="6">
+        <TextBlock Text="{Binding Model}" FontSize="12" FontWeight="Medium"
+                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
       </Border>
-      <Button Grid.Column="2" Margin="6,0,0,0" Content="设置" Click="OpenSettings" />
+      <Button Grid.Column="2" Margin="8,0,0,0" Padding="12,6" Content="设置" Click="OpenSettings" />
     </Grid>
-    <ScrollViewer Grid.Row="1">
-      <ItemsControl ItemsSource="{Binding Messages}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate x:DataType="vm:AiChatLine">
-            <Border Padding="8" Margin="0,3" Background="{DynamicResource SemiColorFill0}">
-              <StackPanel>
-                <TextBlock FontWeight="SemiBold" Text="{Binding Role}" />
-                <SelectableTextBlock Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding Content}" />
-              </StackPanel>
-            </Border>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </ScrollViewer>
-    <TextBlock Grid.Row="2" Foreground="{DynamicResource SemiColorDanger}" TextWrapping="Wrap"
-               Text="{Binding Error}" IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-    <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-      <TextBox AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap"
+    <Grid Grid.Row="1" Margin="0,0,0,10">
+      <Border Padding="11,9"
+              Background="{DynamicResource SemiColorFill0}"
+              BorderBrush="{DynamicResource SemiColorPrimary}"
+              BorderThickness="1" CornerRadius="7"
+              IsVisible="{Binding HasActivePage}">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <TextBlock Text="●" FontSize="9" Margin="0,1,9,0"
+                     Foreground="{DynamicResource SemiColorPrimary}"
+                     VerticalAlignment="Center" />
+          <StackPanel Grid.Column="1" Spacing="2">
+            <TextBlock Text="已绑定内置浏览器页面" FontSize="11" Opacity="0.62" />
+            <TextBlock Text="{Binding ActivePageLabel}" FontSize="12" FontWeight="SemiBold"
+                       TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+          <Border Grid.Column="2" Margin="10,0,0,0" Padding="8,4"
+                  Background="{DynamicResource SemiColorFill0}"
+                  BorderBrush="{DynamicResource SemiColorBorder}"
+                  BorderThickness="1" CornerRadius="4" VerticalAlignment="Center">
+            <TextBlock Text="{Binding ActivePageId}" FontSize="10" Opacity="0.58"
+                       MaxWidth="150" TextTrimming="CharacterEllipsis" />
+          </Border>
+        </Grid>
+      </Border>
+      <Border Padding="11,9"
+              Background="{DynamicResource SemiColorFill0}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1" CornerRadius="7"
+              IsVisible="{Binding !HasActivePage}">
+        <Grid ColumnDefinitions="Auto,*">
+          <TextBlock Text="○" FontSize="13" Margin="0,0,9,0" Opacity="0.48"
+                     VerticalAlignment="Center" />
+          <StackPanel Grid.Column="1" Spacing="2">
+            <TextBlock Text="未绑定浏览器页面" FontSize="12" FontWeight="SemiBold" />
+            <TextBlock Text="请先切换到一个内置浏览器标签页，AI 操作将只作用于当前页面。"
+                       FontSize="11" Opacity="0.58" TextWrapping="Wrap" />
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+    <Grid Grid.Row="2">
+      <Border Padding="24"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Center"
+              Background="{DynamicResource SemiColorFill0}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1"
+              CornerRadius="10"
+              IsVisible="{Binding !Messages.Count}">
+        <StackPanel Spacing="7" HorizontalAlignment="Center">
+          <TextBlock Text="AI 助手" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock Text="描述页面问题，我会结合当前上下文帮你分析。"
+                     FontSize="12" Opacity="0.62" TextWrapping="Wrap"
+                     TextAlignment="Center" MaxWidth="300" />
+        </StackPanel>
+      </Border>
+      <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding Messages}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:AiChatLine">
+              <Border Padding="12,10" Margin="0,0,0,8"
+                      Background="{DynamicResource SemiColorFill0}"
+                      BorderBrush="{DynamicResource SemiColorBorder}"
+                      BorderThickness="1" CornerRadius="8">
+                <StackPanel Spacing="6">
+                  <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.62" Text="{Binding Role}" />
+                  <SelectableTextBlock FontSize="13" LineHeight="20"
+                                       TextWrapping="Wrap" Text="{Binding Content}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Grid>
+    <Border Grid.Row="3" Margin="0,8,0,0" Padding="10,8"
+            Background="{DynamicResource SemiColorFill0}" CornerRadius="6"
+            IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Foreground="{DynamicResource SemiColorDanger}" TextWrapping="Wrap" Text="{Binding Error}" />
+    </Border>
+    <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+      <TextBox AcceptsReturn="True" MinHeight="76" MaxHeight="180" Padding="12,10" TextWrapping="Wrap"
                Text="{Binding Input, Mode=TwoWay}" PlaceholderText="描述你想检查的页面问题…" />
-      <StackPanel Grid.Column="1" Margin="6,0,0,0">
-        <Button Content="发送" Command="{Binding SendCommand}" IsEnabled="{Binding !IsBusy}" />
-        <Button Content="停止" Margin="0,4,0,0" Command="{Binding StopCommand}" IsVisible="{Binding IsBusy}" />
+      <StackPanel Grid.Column="1" Width="72" Margin="8,0,0,0" Spacing="6">
+        <Button Content="发送" Padding="14,8" HorizontalContentAlignment="Center"
+                Command="{Binding SendCommand}" IsEnabled="{Binding !IsBusy}" />
+        <Button Content="停止" Padding="14,8" HorizontalContentAlignment="Center"
+                Command="{Binding StopCommand}" IsVisible="{Binding IsBusy}" />
       </StackPanel>
     </Grid>
+    <ProgressBar Grid.Row="4" IsIndeterminate="True" Height="2"
+                 VerticalAlignment="Bottom" Margin="12,0,92,1"
+                 IsVisible="{Binding IsBusy}" />
   </Grid>
 </UserControl>

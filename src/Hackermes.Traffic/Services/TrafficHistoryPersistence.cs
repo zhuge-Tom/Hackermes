@@ -1,4 +1,5 @@
 using Hackermes.Traffic.Models;
+using Hackermes.Base;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -141,9 +142,7 @@ public sealed class TrafficHistoryPersistence : ITrafficHistoryPersistence
 
     private static string ResolveDefaultPath()
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(root)) root = Path.GetTempPath();
-        return Path.Combine(root, "Hackermes", "traffic-history.v1.json.gz");
+        return AppDataPaths.Resolve("traffic-history.v1.json.gz");
     }
 
     public void Dispose()

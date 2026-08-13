@@ -4,6 +4,7 @@ using Hackermes.Inspector.Services;
 using Hackermes.Inspector.ViewModels;
 using Hackermes.Platform.Events;
 using Hackermes.Platform.Registries;
+using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -97,16 +98,62 @@ public sealed class PageInspectionServiceTests
     }
 
     [Fact]
-    public async Task Picker_installation_uses_a_cdp_binding_and_a_hover_click_overlay()
+    public async Task Picker_uses_browser_owned_isolated_runtime_and_a_hover_click_overlay()
     {
         var session = new FakeSession("page-selected");
-        using var service = new PageInspectionService(new FakeRegistry(session), new EventBus());
+        var runtime = new FakePageAgentRuntime();
+        using var service = new PageInspectionService(new FakeRegistry(session), new EventBus(), runtime);
 
         await service.SetPickerEnabledAsync(session.PageId, true, CancellationToken.None);
 
-        Assert.Contains(session.Methods, method => method == "Runtime.addBinding");
-        Assert.Contains(session.Expressions, expression => expression.Contains("mousemove", StringComparison.Ordinal));
-        Assert.Contains(session.Expressions, expression => expression.Contains("stopImmediatePropagation", StringComparison.Ordinal));
+        var call = Assert.Single(runtime.Calls);
+        Assert.Equal(session.PageId, call.PageId);
+        Assert.Contains("mousemove", call.Expression, StringComparison.Ordinal);
+        Assert.Contains("stopImmediatePropagation", call.Expression, StringComparison.Ordinal);
+        Assert.Contains("__hackermesEmit", call.Expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("__hackermes_inspector_pick__", call.Expression, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Methods, method => method is "Runtime.addBinding" or "Runtime.evaluate");
+    }
+
+    [Fact]
+    public async Task Picker_fails_closed_when_the_isolated_runtime_is_degraded()
+    {
+        var session = new FakeSession("page-selected");
+        var events = new EventBus();
+        var states = new List<ElementPickerStateChangedEvent>();
+        events.Subscribe<ElementPickerStateChangedEvent>(states.Add);
+        var runtime = new FakePageAgentRuntime { Error = "named world unavailable" };
+        using var service = new PageInspectionService(new FakeRegistry(session), events, runtime);
+
+        await service.SetPickerEnabledAsync(session.PageId, true, CancellationToken.None);
+
+        var state = Assert.Single(states);
+        Assert.False(state.Enabled);
+        Assert.Contains("named world unavailable", state.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.Methods, method => method is "Runtime.addBinding" or "Runtime.evaluate");
+    }
+
+    [Fact]
+    public async Task Picker_messages_arrive_through_the_page_agent_event_seam()
+    {
+        var session = new FakeSession("page-selected");
+        var events = new EventBus();
+        using var service = new PageInspectionService(
+            new FakeRegistry(session), events, new FakePageAgentRuntime(), new ImmediateUiEventDispatcher());
+        DomPickerMessage? observed = null;
+        service.PickerMessageReceived += message => observed = message;
+
+        events.Publish(new PageAgentMessageEvent(
+            session.PageId,
+            "inspector",
+            "pick",
+            "{\"t\":\"inspector\",\"k\":\"pick\",\"path\":\"1/0\",\"nodeKey\":\"n4\",\"selector\":\"div#root\"}"));
+
+        await WaitUntilAsync(() => observed is not null);
+        Assert.NotNull(observed);
+        Assert.Equal(session.PageId, observed!.PageId);
+        Assert.Equal("1/0", observed.Path);
+        Assert.Equal("n4", observed.NodeKey);
     }
 
     [Fact]
@@ -114,15 +161,24 @@ public sealed class PageInspectionServiceTests
     {
         var session = new FakeSession("page-selected");
         var events = new EventBus();
-        using var service = new PageInspectionService(new FakeRegistry(session), events);
+        using var service = new PageInspectionService(
+            new FakeRegistry(session), events, new FakePageAgentRuntime(), new ImmediateUiEventDispatcher());
         var viewModel = new DomInspectorViewModel(service);
         events.Publish(new ActiveContentTabChangedEvent(session.PageId, "Selected"));
         await viewModel.RefreshCommand.ExecuteAsync(null);
 
         events.Publish(new BrowserPageNavigatedEvent(session.PageId, "https://example.test/next"));
 
+        await WaitUntilAsync(() => viewModel.RootItems.Count == 0);
         Assert.Empty(viewModel.RootItems);
         Assert.Contains("stale DOM nodes were discarded", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+            await Task.Delay(10, timeout.Token);
     }
 
     [Fact]
@@ -148,6 +204,34 @@ public sealed class PageInspectionServiceTests
         public event Action<string>? SessionClosed;
         public ICdpSession? Get(string pageId) => Array.Find(sessions, item => item.PageId == pageId);
         public IDisposable Register(ICdpSession session) => throw new NotSupportedException();
+    }
+
+    private sealed class FakePageAgentRuntime : IPageAgentRuntime
+    {
+        public List<(string PageId, string Expression)> Calls { get; } = [];
+        public string? Error { get; init; }
+
+        public PageAgentRuntimeCapability GetCapability(string pageId) => new(
+            pageId,
+            PageAgentWorldState.Ready,
+            Error is null ? PageAgentWorldState.Ready : PageAgentWorldState.Degraded,
+            Error);
+
+        public Task<string> EvaluateInIsolatedWorldAsync(
+            string pageId,
+            string expression,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add((pageId, expression));
+            return Error is null
+                ? Task.FromResult("{\"result\":{\"value\":{\"enabled\":true}}}")
+                : Task.FromException<string>(new InvalidOperationException(Error));
+        }
+    }
+
+    private sealed class ImmediateUiEventDispatcher : IUiEventDispatcher
+    {
+        public void Post(Action action) => action();
     }
 
     private sealed class FakeSession(string pageId) : ICdpSession

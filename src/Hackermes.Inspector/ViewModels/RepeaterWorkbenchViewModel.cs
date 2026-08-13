@@ -133,8 +133,11 @@ public partial class RepeaterWorkbenchViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanCancelSend))]
     private void CancelSend()
     {
-        _sendCancellation?.Cancel();
         Status = "Cancelling send...";
+        // Cancellation callbacks may resume SendAsync on another thread before
+        // Cancel returns. Publish the transient state first so the terminal
+        // Cancelled/result state written by SendAsync can never be overwritten.
+        _sendCancellation?.Cancel();
     }
 
     [RelayCommand(CanExecute = nameof(CanOperate))]

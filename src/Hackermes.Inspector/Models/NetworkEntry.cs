@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Hackermes.Platform.Services;
 using System;
 
 namespace Hackermes.Inspector.Models;
@@ -66,6 +67,12 @@ public partial class NetworkEntry : ObservableObject
 
     [ObservableProperty]
     private bool _isFailed;
+
+    /// <summary>
+    /// Value-free security facts derived from the response headers. Raw header and
+    /// Set-Cookie values are never exposed through this model.
+    /// </summary>
+    public NetworkSecurityMetadata SecurityMetadata { get; internal set; } = NetworkSecurityMetadata.Empty;
 
     public string SizeText => EncodedBytes <= 0
         ? "—"

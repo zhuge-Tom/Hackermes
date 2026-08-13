@@ -390,8 +390,18 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
             win.UserDataFolder = proxy.UserDataFolder;
             win.AdditionalBrowserArguments = proxy.AdditionalBrowserArguments;
         }
-        catch
+        catch (Exception ex)
         {
+            // An explicit profile override is an isolation boundary for automated
+            // acceptance. Never fall back to WebView2's default user profile when
+            // that boundary is invalid or unavailable.
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
+                    BrowserProxyConfiguration.ProfileRootEnvironmentVariable)))
+            {
+                _logger.Error("The isolated WebView2 profile could not be configured.", ex);
+                throw;
+            }
+
             // 拿不到自定义目录就让 WebView2 用默认值,不阻断创建。
         }
     }

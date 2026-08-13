@@ -5,8 +5,8 @@
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding Title, FallbackValue=Hackermes}"
         Icon="/Assets/hackermes-icon.png"
-        Width="1120" Height="720"
-        MinWidth="800" MinHeight="520"
+        Width="1180" Height="760"
+        MinWidth="880" MinHeight="560"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ShellBackgroundBrush}">
 
@@ -15,27 +15,41 @@
     <Panel Name="PART_ContentHost" />
 
     <!-- 加载遮罩。装配在后台进行,这里给出可见反馈 -->
-    <Border Name="PART_LoadingOverlay"
-            Background="{DynamicResource ShellBackgroundBrush}">
-      <StackPanel VerticalAlignment="Center"
+    <Border Name="PART_LoadingOverlay" Background="{DynamicResource ShellBackgroundBrush}">
+      <Border Width="360"
+              Padding="36,32"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Background="{DynamicResource ElevatedBackgroundBrush}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1"
+              CornerRadius="12">
+        <StackPanel Spacing="14">
+          <Border Width="52" Height="52"
                   HorizontalAlignment="Center"
-                  Spacing="16">
-        <TextBlock Text="Hackermes"
-                   FontSize="28"
-                   FontWeight="SemiBold"
-                   HorizontalAlignment="Center" />
-        <ProgressBar IsIndeterminate="True"
-                     Width="200"
-                     Height="3" />
-        <TextBlock Name="PART_LoadingText"
-                   Text="正在启动…"
-                   FontSize="12"
-                   Opacity="0.6"
-                   TextWrapping="Wrap"
-                   MaxWidth="520"
-                   TextAlignment="Center"
-                   HorizontalAlignment="Center" />
-      </StackPanel>
+                  Background="{DynamicResource SubtleAccentBrush}"
+                  CornerRadius="12">
+            <Image Source="/Assets/hackermes-icon.png" Width="32" Height="32" />
+          </Border>
+          <TextBlock Text="Hackermes"
+                     FontSize="24"
+                     FontWeight="SemiBold"
+                     HorizontalAlignment="Center" />
+          <TextBlock Text="正在准备你的工作区"
+                     FontSize="13"
+                     Opacity="0.65"
+                     HorizontalAlignment="Center" />
+          <ProgressBar IsIndeterminate="True" Height="3" Margin="0,4,0,0" />
+          <TextBlock Name="PART_LoadingText"
+                     Text="正在启动…"
+                     FontSize="12"
+                     Opacity="0.65"
+                     TextWrapping="Wrap"
+                     MaxWidth="300"
+                     TextAlignment="Center"
+                     HorizontalAlignment="Center" />
+        </StackPanel>
+      </Border>
     </Border>
   </Panel>
 

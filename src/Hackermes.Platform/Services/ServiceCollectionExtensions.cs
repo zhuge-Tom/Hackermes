@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
             return new FileAppLogger(level);
         });
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<IAppLogger>()));
+        services.AddSingleton<IUiEventDispatcher, AvaloniaUiEventDispatcher>();
 
         services.AddSingleton<IDockLayoutRegistry, DockLayoutRegistry>();
         services.AddSingleton<IMenuRegistry, MenuRegistry>();

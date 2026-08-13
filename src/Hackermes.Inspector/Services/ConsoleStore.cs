@@ -44,7 +44,8 @@ public sealed class ConsoleStore : IConsoleQueryService
 
     public event Action? Changed;
 
-    public IReadOnlyList<ConsoleObservation> Read(int last = 100, string? level = null) => Entries
+    public IReadOnlyList<ConsoleObservation> Read(int last = 100, string? level = null, string? pageId = null) => Entries
+        .Where(entry => string.IsNullOrWhiteSpace(pageId) || string.Equals(entry.PageId, pageId, StringComparison.Ordinal))
         .Where(entry => string.IsNullOrWhiteSpace(level) || string.Equals(entry.Level, level, StringComparison.OrdinalIgnoreCase))
         .Take(Math.Clamp(last, 1, MaxEntries))
         .Select(entry => new ConsoleObservation(entry.At.ToString("O"), entry.Level, entry.Text, entry.Source))

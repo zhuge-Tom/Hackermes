@@ -6,7 +6,7 @@ Hackermes 是面向人工操作与 Agent 协作的桌面网页调试、流量分
 项目基于 .NET 10 与 Avalonia，将内置浏览器、CDP、DOM 检查、HTTP 数据包处理、终端、
 AI 助手和受控 ToolHost 集成在同一应用中。
 
-> 当前版本：`0.7.0`。Windows 10/11 x64 是完整验证平台；Linux x64 为预览平台。
+> 当前版本：`0.8.0`。Windows 10/11 x64 是主要验证平台；Linux x64 为预览平台。
 
 ## 主要能力
 
@@ -17,15 +17,27 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - HTTP 请求/响应捕获、拦截、原始编辑、重放、Comparer、规则与历史记录。
 - Query、Form、Header、Cookie 和有界 JSON Pointer 参数读取与修改。
 - OpenAI 兼容 API、模型自动发现、三档 Agent 权限、上下文压缩、持久记忆与 Skill 工作流。
+- AI 可对精确绑定的内置浏览器页面读取不含敏感值的 `page_security_snapshot`，再按证据选择必要的只读检查或受控授权评估工具。
 - 精确授权范围、固定计划、一次性审批票据和独立 ToolHost 执行链路。
 - 授权评估工作区支持任务执行、取消/撤销、证据验证、Finding 创建与复核、HMAC 审计链验证，
   以及 JSON、Markdown、HTML 报告导出。
 - 人工、CLI 与 Agent 共用同一个授权控制面；Agent 不获得任意 Shell。
+- Assessment 任务以 coherent case 原子呈现；Traffic 工作台在最小窗口下保留常用操作，并把低频工具折叠到 `More tools`。
+
+> 当前开发快照：Stage 9 保留的完整测试为 294/294，并保留 layout-ready 真实桌面 loopback 与 Traffic 最小窗口证据。随后的 `page_assessment` 旁路修复已完成定向 1/1 回归。Stage 8 曾完成整套发布门禁；Stage 9 整套 Release/视觉/打包门禁未重跑，因此不将上述定向证据表述为当前源码的整套 Stage 9 发布验收。
 
 ## 下载与安装
 
-发布包位于 [GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases)，附件同时提供
-`SHA256SUMS.txt`。
+最新版位于 [Hackermes v0.8.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.8.0)，也可查看
+[GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases) 中的历史版本。附件同时提供
+`SHA256SUMS.txt` 用于校验下载完整性。
+
+- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.8.0/Hackermes-0.8.0-windows-x64.zip)
+- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.8.0/SHA256SUMS.txt)
+
+v0.8.0 当前发布 Windows x64 已验证本地构建。Linux x64 交叉发布因本次构建机无法从 NuGet
+下载 Linux 自包含运行时而暂未附加；需要 Linux 预览包时可使用
+[v0.7.0 历史发布](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.7.0)，或在能访问 NuGet 的 Linux/交叉构建环境中从源码发布。
 
 ### Windows 10/11 x64
 
@@ -95,19 +107,52 @@ WebView2 专属 CDP 能力目前仅在 Windows 提供。Linux 包已完成交叉
 开发运行目录：
 
 ```text
-%LOCALAPPDATA%\Hackermes\Build\bin\Hackermes.App\Debug\net10.0
+G:\HackermesBuild\workspace\bin\Hackermes.App\Debug\net10.0
 ```
+
+项目脚本会把所有可控的构建写入统一放到 G 盘：
+
+```text
+G:\HackermesBuild\
+├─ workspace\                 # bin / obj / 默认开发构建
+├─ shared\nuget-packages\    # NuGet 全局包缓存
+├─ shared\dotnet-cli-home\   # .NET CLI 首次运行与工具状态
+├─ shared\temp\              # 构建子进程 TEMP / TMP
+├─ shared\python-cache\      # Python 字节码缓存
+├─ evidence\                 # 自测与运行证据
+└─ artifacts\release\        # 默认发布包
+```
+
+`scripts/initialize-build-environment.ps1` 默认只修改当前脚本进程及其子进程的环境。若希望以后新开的终端也复用 G 盘的 Hackermes/.NET 构建缓存，可执行：
+
+```powershell
+.\scripts\initialize-build-environment.ps1 -PersistUserEnvironment
+```
+
+该命令会创建 `G:\HackermesBuild\shared` 下的对应目录，并持久化 Hackermes/.NET 构建相关环境变量。`TEMP/TMP`、Python 字节码缓存和 XDG cache 只在项目脚本及其子进程内指向 G 盘，不再全局影响其他 Windows 程序。npm 缓存也不会被项目强制改写，避免多个项目共用一个缓存时的锁冲突。系统安装的 `.NET SDK` 仍从 `C:\Program Files\dotnet` 执行；这是程序安装位置，不是项目构建输出。
+
+为控制空间占用，建议长期只保留关键 TRX、运行日志、视觉截图/元数据和发布产物；重复或失败构建、可再生 WebView2 profile 与临时目录可在进程退出后清理。当前保留的 Stage 9 证据集中在 `G:\HackermesBuild\evidence`。
 
 ### 本地创建 Windows/Linux 发布包
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.7.0 -Platforms all
+.\scripts\package-release.ps1 -Version 0.8.0 -Platforms all
 ```
+
+Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授权评估浅/深截图、打包与哈希校验）：
+
+```powershell
+.\scripts\invoke-release-acceptance.ps1 `
+  -HackermesBuildRoot G:\HackermesBuild\release-acceptance `
+  -RunResponsiveVisualMatrix
+```
+
+自动化运行可设置绝对路径 `HACKERMES_DATA_ROOT` 与 `HACKERMES_BROWSER_PROFILE_ROOT`，将产品数据和 WebView2 profile 隔离到验收目录；相对路径或盘根路径会被拒绝。
 
 只生成单个平台时可将 `all` 改为 `windows` 或 `linux`。产物位于：
 
 ```text
-artifacts/release/0.7.0/
+G:\HackermesBuild\artifacts\release\0.8.0\
 ```
 
 发布脚本生成：

@@ -49,28 +49,39 @@ public static class PacketCommandRegistrar
         {
             return action switch
             {
-                "ls" => await ListAsync(service, context.Arg(1), ct),
-                "query" => await QueryAsync(service, context, ct),
-                "show" => await ShowAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", true, ct),
+                "ls" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketListIntent(context.Arg(1)), ct)),
+                "query" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service, ParseQuery(context), ct)),
+                "show" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketShowIntent(Require(context, 1, "id"), context.Arg(2) ?? "request"), ct)),
                 "analyze" => await AnalyzeAsync(service, Require(context, 1, "id"), context.Arg(2) ?? "request", ct),
-                "diff" => await DiffAsync(service, Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request", ct),
-                "audit" => Audit(service, context),
+                "diff" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketDiffIntent(Require(context, 1, "left id"), Require(context, 2, "right id"), context.Arg(3) ?? "request"), ct)),
+                "audit" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service, ParseAudit(context), ct)),
                 "audit-export" => await AuditExportAsync(service, context, ct),
                 "audit-verify" => await AuditVerifyAsync(service, context, ct),
-                "param-list" => await ParameterListAsync(service, context, ct),
-                "param-set" => await ParameterSetAsync(service, context, ct),
+                "param-list" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketParameterListIntent(Require(context, 1, "id"), context.Arg(2) ?? "request"), ct)),
+                "param-set" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service, ParseParameterSet(context), ct)),
                 "body-info" => await BodyInfoAsync(service, context, ct),
                 "body-read" => await BodyReadAsync(service, context, ct),
                 "body-edit" => await BodyEditAsync(service, context, ct),
-                "draft-list" => await DraftListAsync(service, ct),
-                "draft-show" => await DraftShowAsync(service, context, ct),
-                "draft-discard" => await DraftDiscardAsync(service, context, ct),
-                "replay" => await Mutate(() => service.ReplayAsync(Require(context, 1, "id"), ct), "Packet replayed."),
-                "intercept" => await InterceptAsync(service, Require(context, 1, "on|off"), ct),
-                "intercept-mode" => await InterceptionModeAsync(service, Require(context, 1, "request|response|both|off"), ct),
-                "continue" => await ContinueAsync(service, Require(context, 1, "id"), ct),
-                "drop" => await DropAsync(service, Require(context, 1, "id"), ct),
-                "edit" => await EditAsync(service, context, ct),
+                "draft-list" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service, new PacketDraftListIntent(), ct)),
+                "draft-show" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketDraftShowIntent(Require(context, 1, "id"), context.Arg(2) ?? "request"), ct)),
+                "draft-discard" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketCommitIntent(PacketCommitAction.Discard, Require(context, 1, "id"), context.Arg(2) ?? "request"), ct)),
+                "replay" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketReplayIntent(Require(context, 1, "id")), ct)),
+                "intercept" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    ParseInterception(Require(context, 1, "on|off")), ct)),
+                "intercept-mode" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketInterceptionModeIntent(ParseInterceptionMode(Require(context, 1, "request|response|both|off"))), ct)),
+                "continue" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketCommitIntent(PacketCommitAction.Continue, Require(context, 1, "id")), ct)),
+                "drop" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service,
+                    new PacketCommitIntent(PacketCommitAction.Drop, Require(context, 1, "id")), ct)),
+                "edit" => FormatOutcome(await PacketOperationExecutor.ExecuteAsync(service, ParseEdit(context), ct)),
                 "export" => await ExportAsync(service, context, ct),
                 "import" => await ImportAsync(service, context, ct),
                 _ => CommandResult.Fail("Usage: packet <ls|query|show|analyze|diff|audit|audit-export|audit-verify|param-list|param-set|body-info|body-read|body-edit|draft-list|draft-show|draft-discard|replay|intercept|intercept-mode|continue|drop|edit|export|import> ...")
@@ -83,29 +94,10 @@ public static class PacketCommandRegistrar
         catch (IOException exception) { return CommandResult.Fail($"Archive I/O failed: {exception.Message}"); }
     }
 
-    private static async Task<CommandResult> ListAsync(IPacketCommandService service, string? filter, CancellationToken ct)
-    {
-        var rows = await service.ListAsync(filter, ct);
-        return CommandResult.Ok(rows.Count == 0 ? "No packets." : string.Join(Environment.NewLine,
-            rows.Select(x => $"{x.Id}\t{x.Method}\t{x.StatusCode?.ToString() ?? "-"}\t{(x.Intercepted ? "held" : "pass")}\t{x.Url}")));
-    }
-
-    private static async Task<CommandResult> QueryAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
-    {
-        if (service is not IPacketQueryService queries)
-            return CommandResult.Fail("This packet backend does not support structured packet queries.");
-        var query = new PacketQuery(
-            Wildcard(context.Arg(1)), Wildcard(context.Arg(2)), ParseOptionalInt(context.Arg(3), "status"),
-            Wildcard(context.Arg(4)), ParseHeld(context.Arg(5)), ParseInt(context.Arg(6), "offset", 0),
-            ParseInt(context.Arg(7), "limit", 100));
-        var page = await queries.QueryPacketsAsync(PacketQueryLimits.Validate(query), ct);
-        var header = $"total={page.Total}\toffset={page.Offset}\tlimit={page.Limit}";
-        return CommandResult.Ok(page.Items.Count == 0 ? header + Environment.NewLine + "No packets." :
-            header + Environment.NewLine + string.Join(Environment.NewLine, page.Items.Select(FormatSummary)));
-    }
-
-    private static string FormatSummary(PacketSummary item) =>
-        $"{item.Id}\t{item.Method}\t{item.StatusCode?.ToString() ?? "-"}\t{(item.Intercepted ? "held" : "pass")}\t{item.Url}";
+    private static PacketQueryIntent ParseQuery(CommandContext context) => new(new PacketQuery(
+        Wildcard(context.Arg(1)), Wildcard(context.Arg(2)), ParseOptionalInt(context.Arg(3), "status"),
+        Wildcard(context.Arg(4)), ParseHeld(context.Arg(5)), ParseInt(context.Arg(6), "offset", 0),
+        ParseInt(context.Arg(7), "limit", 100)));
 
     private static string? Wildcard(string? value) => value is null or "*" ? null : value;
     private static int? ParseOptionalInt(string? value, string name) => value is null or "*" ? null : ParseInt(value, name, 0);
@@ -117,12 +109,6 @@ public static class PacketCommandRegistrar
         "held" => true,
         _ => throw new ArgumentException("state must be held or all.")
     };
-
-    private static async Task<CommandResult> ShowAsync(IPacketCommandService service, string id, string side, bool pretty, CancellationToken ct)
-    {
-        var raw = await GetRequiredAsync(service, id, side, ct);
-        return CommandResult.Ok(pretty ? HttpPacketCodec.Format(HttpPacketCodec.Parse(raw), true) : raw);
-    }
 
     private static async Task<CommandResult> AnalyzeAsync(IPacketCommandService service, string id, string side, CancellationToken ct)
     {
@@ -138,65 +124,30 @@ public static class PacketCommandRegistrar
         return CommandResult.Ok(string.Join(Environment.NewLine, lines));
     }
 
-    private static async Task<CommandResult> DiffAsync(IPacketCommandService service, string leftId, string rightId, string side, CancellationToken ct)
+    private static PacketInterceptionIntent ParseInterception(string value)
     {
-        var left = HttpPacketCodec.Parse(await GetRequiredAsync(service, leftId, side, ct));
-        var right = HttpPacketCodec.Parse(await GetRequiredAsync(service, rightId, side, ct));
-        var differences = HttpPacketAnalyzer.Diff(left, right);
-        return CommandResult.Ok(differences.Count == 0 ? "Packets are equivalent." : string.Join(Environment.NewLine,
-            differences.Select(d => $"@@ {d.Location} @@{Environment.NewLine}- {d.Left}{Environment.NewLine}+ {d.Right}")));
+        if (!bool.TryParse(value.Replace("on", "true", StringComparison.OrdinalIgnoreCase)
+                .Replace("off", "false", StringComparison.OrdinalIgnoreCase), out var enabled))
+            throw new ArgumentException("Usage: packet intercept <on|off>");
+        return new PacketInterceptionIntent(enabled);
     }
 
-    private static async Task<CommandResult> InterceptAsync(IPacketCommandService service, string value, CancellationToken ct)
+    private static PacketInterceptionMode ParseInterceptionMode(string value) => value.Trim().ToLowerInvariant() switch
     {
-        if (!bool.TryParse(value.Replace("on", "true", StringComparison.OrdinalIgnoreCase).Replace("off", "false", StringComparison.OrdinalIgnoreCase), out var enabled))
-            return CommandResult.Fail("Usage: packet intercept <on|off>");
-        await service.SetInterceptionAsync(enabled, ct);
-        return CommandResult.Ok($"Interception {(enabled ? "enabled" : "disabled")}.");
-    }
+        "request" => PacketInterceptionMode.Request,
+        "response" => PacketInterceptionMode.Response,
+        "both" => PacketInterceptionMode.Both,
+        "off" => PacketInterceptionMode.Off,
+        _ => throw new ArgumentException("Usage: packet intercept-mode <request|response|both|off>")
+    };
 
-    private static async Task<CommandResult> InterceptionModeAsync(IPacketCommandService service, string value, CancellationToken ct)
-    {
-        if (service is not IPacketInterceptionModeService modes)
-            return CommandResult.Fail("This packet backend does not support independent request/response interception.");
-        var parsed = value.Trim().ToLowerInvariant() switch
-        {
-            "request" => PacketInterceptionMode.Request,
-            "response" => PacketInterceptionMode.Response,
-            "both" => PacketInterceptionMode.Both,
-            "off" => PacketInterceptionMode.Off,
-            _ => (PacketInterceptionMode?)null
-        };
-        if (parsed is not { } mode)
-            return CommandResult.Fail("Usage: packet intercept-mode <request|response|both|off>");
-        await modes.SetInterceptionModeAsync(mode, ct);
-        return CommandResult.Ok($"Interception mode set to {mode.ToString().ToLowerInvariant()}.");
-    }
-
-    private static async Task<CommandResult> EditAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    private static PacketCommitIntent ParseEdit(CommandContext context)
     {
         var id = Require(context, 1, "id"); var side = Require(context, 2, "request|response");
-        if (context.Args.Count < 4) return CommandResult.Fail("Usage: packet edit <id> <request|response> <raw-http>");
+        if (context.Args.Count < 4) throw new ArgumentException("Usage: packet edit <id> <request|response> <raw-http>");
         var raw = context.Rest(3).Replace("\\r\\n", "\r\n", StringComparison.Ordinal).Replace("\\n", "\n", StringComparison.Ordinal);
         _ = HttpPacketCodec.Parse(raw); // never persist malformed edits
-        if (service is IPacketCommitService commits)
-            return FormatCommit(await commits.CommitEditAsync(id, side, raw, ct));
-        await service.EditAsync(id, side, raw, ct);
-        return CommandResult.Ok("Packet updated.");
-    }
-
-    private static async Task<CommandResult> ContinueAsync(IPacketCommandService service, string id, CancellationToken ct)
-    {
-        if (service is IPacketCommitService commits)
-            return FormatCommit(await commits.CommitContinueAsync(id, ct));
-        return await Mutate(() => service.ContinueAsync(id, ct), "Packet continued.");
-    }
-
-    private static async Task<CommandResult> DropAsync(IPacketCommandService service, string id, CancellationToken ct)
-    {
-        if (service is IPacketCommitService commits)
-            return FormatCommit(await commits.CommitDropAsync(id, ct));
-        return await Mutate(() => service.DropAsync(id, ct), "Packet dropped.");
+        return new PacketCommitIntent(PacketCommitAction.Edit, id, side, raw);
     }
 
     private static async Task<CommandResult> ExportAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
@@ -224,27 +175,13 @@ public static class PacketCommandRegistrar
         return CommandResult.Ok($"length={result.Length}\tsha256={result.Sha256}\tcontent-type={result.ContentType ?? "-"}\tcharset={result.Charset ?? "-"}");
     }
 
-    private static async Task<CommandResult> DraftListAsync(IPacketCommandService service, CancellationToken ct)
+    private static PacketAuditIntent ParseAudit(CommandContext context)
     {
-        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
-        var items = await drafts.ListPendingEditsAsync(ct);
-        return CommandResult.Ok(items.Count == 0 ? "No pending packet edits." : string.Join(Environment.NewLine,
-            items.Select(FormatDraft)));
-    }
-
-    private static CommandResult Audit(IPacketCommandService service, CommandContext context)
-    {
-        if (service is not IPacketAuditQueryService audit) return CommandResult.Fail("This packet backend does not support traffic audit queries.");
         var packetId = context.Arg(1);
-        if (packetId == "*") packetId = null;
         var limit = 100;
         if (context.Arg(2) is { } rawLimit && (!int.TryParse(rawLimit, out limit) || limit <= 0))
-            return CommandResult.Fail("Audit limit must be a positive integer.");
-        var entries = audit.QueryAudit(new PacketAuditQuery(packetId, Limit: limit));
-        return CommandResult.Ok(entries.Count == 0 ? "No traffic audit entries." : string.Join(Environment.NewLine,
-            entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
-                $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}\t" +
-                $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}")));
+            throw new ArgumentException("Audit limit must be a positive integer.");
+        return new PacketAuditIntent(packetId, limit);
     }
 
     private static async Task<CommandResult> AuditExportAsync(
@@ -291,26 +228,38 @@ public static class PacketCommandRegistrar
         return true;
     }
 
-    private static async Task<CommandResult> DraftShowAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    public static CommandResult FormatOutcome(PacketOperationOutcome outcome)
     {
-        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
-        var item = await drafts.GetPendingEditAsync(Require(context, 1, "id"), context.Arg(2) ?? "request", ct);
-        return item is null ? CommandResult.Fail("Pending packet edit was not found.") : CommandResult.Ok(FormatDraft(item));
-    }
+        if (outcome is PacketOperationFailure failure) return CommandResult.Fail(failure.Error);
+        if (outcome is PacketTextOutcome text) return CommandResult.Ok(text.Text);
+        if (outcome is PacketListOutcome list)
+            return CommandResult.Ok(list.Items.Count == 0 ? "No packets." : string.Join(Environment.NewLine,
+                list.Items.Select(item =>
+                    $"{item.Id}\t{item.Method}\t{item.StatusCode?.ToString() ?? "-"}\t{(item.Intercepted ? "held" : "pass")}\t{item.Url}")));
+        if (outcome is PacketQueryOutcome query)
+        {
+            var page = query.Page;
+            var header = $"total={page.Total}\toffset={page.Offset}\tlimit={page.Limit}";
+            return CommandResult.Ok(page.Items.Count == 0 ? header + Environment.NewLine + "No packets." :
+                header + Environment.NewLine + string.Join(Environment.NewLine, page.Items.Select(item =>
+                    $"{item.Id}\t{item.Method}\t{item.StatusCode?.ToString() ?? "-"}\t{(item.Intercepted ? "held" : "pass")}\t{item.Url}")));
+        }
+        if (outcome is PacketAuditOutcome audit)
+            return CommandResult.Ok(audit.Entries.Count == 0 ? "No traffic audit entries." : string.Join(Environment.NewLine,
+                audit.Entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
+                    $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}\t" +
+                    $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}")));
+        if (outcome is PacketParametersOutcome parameters)
+            return CommandResult.Ok(parameters.Parameters.Count == 0 ? "No structured parameters." : string.Join(Environment.NewLine,
+                parameters.Parameters.Select(parameter =>
+                    $"{parameter.Location.ToString().ToLowerInvariant()}[{parameter.Occurrence}]\t{parameter.Name}\t{parameter.Value}")));
+        if (outcome is PacketDraftsOutcome drafts)
+            return CommandResult.Ok(drafts.Drafts.Count == 0 ? "No pending packet edits." : string.Join(Environment.NewLine,
+                drafts.Drafts.Select(FormatDraft)));
+        if (outcome is not PacketCommitOutcome commit)
+            return CommandResult.Fail("Unsupported packet operation outcome.");
 
-    private static async Task<CommandResult> DraftDiscardAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
-    {
-        var id = Require(context, 1, "id");
-        var side = context.Arg(2) ?? "request";
-        if (service is IPacketCommitService commits)
-            return FormatCommit(await commits.CommitDiscardAsync(id, side, ct));
-        if (service is not IPacketEditDraftService drafts) return CommandResult.Fail("This packet backend does not support edit drafts.");
-        var discarded = await drafts.DiscardPendingEditAsync(id, side, ct);
-        return discarded ? CommandResult.Ok("Pending packet edit discarded.") : CommandResult.Fail("Pending packet edit was not found.");
-    }
-
-    private static CommandResult FormatCommit(PacketCommitResult result)
-    {
+        var result = commit.Result;
         var output = string.Join(Environment.NewLine,
             $"success={result.Success.ToString().ToLowerInvariant()}",
             $"operation={SafeValue(result.Operation)}",
@@ -340,29 +289,17 @@ public static class PacketCommandRegistrar
             $"after={draft.After.Length}/{draft.After.Sha256}/cl:{draft.After.ContentLength ?? "-"}\tfailure={failure}";
     }
 
-    private static async Task<CommandResult> ParameterListAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
-    {
-        var side = context.Arg(2) ?? "request";
-        var packet = HttpPacketCodec.Parse(await GetRequiredAsync(service, Require(context, 1, "id"), side, ct));
-        var parameters = HttpPacketParameters.Read(packet);
-        return CommandResult.Ok(parameters.Count == 0 ? "No structured parameters." : string.Join(Environment.NewLine,
-            parameters.Select(parameter => $"{parameter.Location.ToString().ToLowerInvariant()}[{parameter.Occurrence}]\t{parameter.Name}\t{parameter.Value}")));
-    }
-
-    private static async Task<CommandResult> ParameterSetAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
+    private static PacketParameterSetIntent ParseParameterSet(CommandContext context)
     {
         var id = Require(context, 1, "id");
         var side = context.Arg(2) ?? "request";
         if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json|header|cookie"), true, out var location))
-            return CommandResult.Fail("Parameter location must be query, form, json, header or cookie.");
+            throw new ArgumentException("Parameter location must be query, form, json, header or cookie.");
         var name = Require(context, 4, "name");
         if (!int.TryParse(Require(context, 5, "occurrence"), out var occurrence))
-            return CommandResult.Fail("Parameter occurrence must be an integer.");
-        if (context.Args.Count < 7) return CommandResult.Fail("Missing parameter value.");
-        var packet = HttpPacketCodec.Parse(await GetRequiredAsync(service, id, side, ct));
-        var updated = HttpPacketParameters.Set(packet, location, name, occurrence, context.Rest(6));
-        await service.EditAsync(id, side, HttpPacketCodec.Format(updated, false), ct);
-        return CommandResult.Ok("Parameter updated and packet submitted.");
+            throw new ArgumentException("Parameter occurrence must be an integer.");
+        if (context.Args.Count < 7) throw new ArgumentException("Missing parameter value.");
+        return new PacketParameterSetIntent(id, side, location, name, occurrence, context.Rest(6));
     }
 
     private static async Task<CommandResult> BodyReadAsync(IPacketCommandService service, CommandContext context, CancellationToken ct)
@@ -400,5 +337,4 @@ public static class PacketCommandRegistrar
 
     private static string Require(CommandContext context, int index, string name) =>
         context.Arg(index) ?? throw new ArgumentException($"Missing {name}.");
-    private static async Task<CommandResult> Mutate(Func<Task> operation, string message) { await operation(); return CommandResult.Ok(message); }
 }

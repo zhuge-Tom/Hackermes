@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Hackermes.Platform.Services;
@@ -11,6 +12,7 @@ namespace Hackermes.Platform.Services;
 public static class StartupPerformance
 {
     private static volatile bool _layoutReady;
+    private static Action<Action, DispatcherPriority>? _testDispatcher;
 
     /// <summary>
     /// 主布局是否已经稳定。WebView2 必须等到它为 true 才允许创建 ——
@@ -45,11 +47,52 @@ public static class StartupPerformance
         _ = Task.Run(async () =>
         {
             await Task.Delay(delayMs).ConfigureAwait(false);
-            UiThreadBridge.Post(action, effective);
+            Dispatch(action, effective);
         });
+    }
+
+    /// <summary>
+    /// Executes once on the UI thread after the main layout is ready. The
+    /// subscribe-then-recheck pattern closes the race where readiness changes
+    /// between observing <see cref="IsLayoutReady"/> and attaching the handler.
+    /// </summary>
+    public static void RunWhenLayoutReady(Action action, DispatcherPriority? priority = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        var effective = priority ?? DispatcherPriority.Background;
+        var invoked = 0;
+        Action? handler = null;
+        handler = () =>
+        {
+            if (Interlocked.Exchange(ref invoked, 1) != 0)
+                return;
+
+            LayoutReady -= handler;
+            Dispatch(action, effective);
+        };
+
+        LayoutReady += handler;
+        if (IsLayoutReady)
+            handler();
     }
 
     /// <summary>UI 空闲时执行。</summary>
     public static void RunOnUiIdle(Action action) =>
         Dispatcher.UIThread.Post(action, DispatcherPriority.ApplicationIdle);
+
+    private static void Dispatch(Action action, DispatcherPriority priority)
+    {
+        if (_testDispatcher is { } testDispatcher)
+            testDispatcher(action, priority);
+        else
+            UiThreadBridge.Post(action, priority);
+    }
+
+    internal static void ResetForTests(Action<Action, DispatcherPriority>? dispatcher = null)
+    {
+        _layoutReady = false;
+        LayoutReady = null;
+        _testDispatcher = dispatcher;
+    }
 }

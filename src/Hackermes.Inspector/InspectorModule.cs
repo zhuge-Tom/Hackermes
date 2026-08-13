@@ -27,7 +27,9 @@ public sealed class InspectorModule : IModule
         services.AddSingleton<NetworkStore>();
         services.AddSingleton<ConsoleStore>();
         services.AddSingleton<INetworkQueryService>(sp => sp.GetRequiredService<NetworkStore>());
+        services.AddSingleton<INetworkSecurityMetadataQueryService>(sp => sp.GetRequiredService<NetworkStore>());
         services.AddSingleton<IConsoleQueryService>(sp => sp.GetRequiredService<ConsoleStore>());
+        services.AddSingleton<IPageSecuritySnapshotService, PageSecuritySnapshotService>();
         services.AddSingleton<PageInspectionService>();
     }
 

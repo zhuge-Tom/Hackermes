@@ -58,17 +58,48 @@ public partial class AiChatViewModel : ViewModelBase
         _skills = skills;
         _memory = memory;
         _context = context;
-        SubscribeEvent<ActiveContentTabChangedEvent>(eventBus, e =>
-            ActivePageId = e.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal) ? id : null);
+        SubscribeEvent<ActiveContentTabChangedEvent>(eventBus, UpdateActivePage);
+        SubscribeEvent<UpdateDockTabTitleEvent>(eventBus, UpdateActivePageTitle);
         RestoreMemory();
     }
 
     public ObservableCollection<AiChatLine> Messages { get; } = [];
-    public string? ActivePageId { get; private set; }
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActivePage))]
+    [NotifyPropertyChangedFor(nameof(ActivePageLabel))]
+    private string? _activePageId;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActivePageLabel))]
+    private string? _activePageTitle;
+
+    public bool HasActivePage => ActivePageId is not null;
+    public string ActivePageLabel => string.IsNullOrWhiteSpace(ActivePageTitle)
+        ? ActivePageId ?? string.Empty
+        : ActivePageTitle;
+
     [ObservableProperty] private string _input = string.Empty;
     [ObservableProperty] private string _model = "gpt-4.1-mini";
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _error;
+
+    private void UpdateActivePage(ActiveContentTabChangedEvent message)
+    {
+        var pageId = message.TabId is { } id && id.StartsWith("page-", StringComparison.Ordinal)
+            ? id
+            : null;
+
+        ActivePageId = pageId;
+        ActivePageTitle = pageId is null || string.IsNullOrWhiteSpace(message.Title)
+            ? null
+            : message.Title.Trim();
+    }
+
+    private void UpdateActivePageTitle(UpdateDockTabTitleEvent message)
+    {
+        if (!string.Equals(ActivePageId, message.TabId, StringComparison.Ordinal)) return;
+        ActivePageTitle = string.IsNullOrWhiteSpace(message.Title) ? ActivePageId : message.Title.Trim();
+    }
 
     [RelayCommand]
     private async Task SendAsync()

@@ -15,7 +15,7 @@ namespace Hackermes.Inspector.Services;
 /// <summary>
 /// 网络记录中心。自动跟随所有已打开的页面会话。
 /// </summary>
-public sealed class NetworkStore : INetworkQueryService
+public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadataQueryService
 {
     /// <summary>列表上限。超出后丢弃最旧的 —— 长时间运行的页面能产生上万条请求。</summary>
     private const int MaxEntries = 1000;
@@ -47,13 +47,25 @@ public sealed class NetworkStore : INetworkQueryService
 
     public event Action? Changed;
 
-    public IReadOnlyList<NetworkObservation> Read(int last = 100, bool failuresOnly = false) => Entries
+    public IReadOnlyList<NetworkObservation> Read(int last = 100, bool failuresOnly = false, string? pageId = null) => Entries
+        .Where(entry => string.IsNullOrWhiteSpace(pageId) || string.Equals(entry.PageId, pageId, StringComparison.Ordinal))
         .Where(entry => !failuresOnly || entry.IsFailed)
         .Take(Math.Clamp(last, 1, MaxEntries))
         .Select(entry => new NetworkObservation(
             entry.RequestId, entry.Method, entry.Url, entry.Status, entry.StatusText,
             entry.IsFailed, entry.DurationMs, entry.InitiatorKind, entry.InitiatorStack))
         .ToArray();
+
+    public NetworkSecurityMetadata ReadSecurityMetadata(string pageId, string documentUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pageId) || string.IsNullOrWhiteSpace(documentUrl))
+            return NetworkSecurityMetadata.Empty;
+        var entry = Entries.FirstOrDefault(candidate =>
+            string.Equals(candidate.PageId, pageId, StringComparison.Ordinal) &&
+            string.Equals(candidate.ResourceType, "Document", StringComparison.OrdinalIgnoreCase) &&
+            DocumentUrlsMatch(candidate.Url, documentUrl));
+        return entry?.SecurityMetadata ?? NetworkSecurityMetadata.Empty;
+    }
 
     public void Clear()
     {
@@ -176,6 +188,8 @@ public sealed class NetworkStore : INetworkQueryService
         var status = CdpJson.TryGetInt(e.ParametersJson, "response", "status") ?? 0;
         var mime = CdpJson.TryGetString(e.ParametersJson, "response", "mimeType") ?? string.Empty;
         var statusText = CdpJson.TryGetString(e.ParametersJson, "response", "statusText");
+        var headers = CdpJson.TryGetElement(e.ParametersJson, "response", "headers");
+        var securityMetadata = ReadSecurityMetadata(headers, status);
 
         UpdateEntry(requestId, entry =>
         {
@@ -183,7 +197,94 @@ public sealed class NetworkStore : INetworkQueryService
             entry.StatusText = string.IsNullOrEmpty(statusText) ? status.ToString() : $"{status} {statusText}";
             entry.MimeType = mime;
             entry.IsFailed = status >= 400;
+            entry.SecurityMetadata = securityMetadata;
         });
+    }
+
+    private static NetworkSecurityMetadata ReadSecurityMetadata(System.Text.Json.JsonElement? headersElement, int status)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (headersElement is { ValueKind: System.Text.Json.JsonValueKind.Object } element)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                var value = property.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? property.Value.GetString()
+                    : property.Value.ToString();
+                if (!string.IsNullOrEmpty(value)) headers[property.Name] = value;
+            }
+        }
+
+        headers.TryGetValue("content-security-policy", out var csp);
+        headers.TryGetValue("content-security-policy-report-only", out var cspReportOnly);
+        var policy = string.Join(";", new[] { csp, cspReportOnly }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var directives = policy.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.ToLowerInvariant())
+            .Where(value => value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
+            .Distinct(StringComparer.Ordinal)
+            .Take(64)
+            .ToArray();
+        var policyTokens = policy.Split(new[] { ' ', '\t', '\r', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        var cookies = headers.TryGetValue("set-cookie", out var setCookie)
+            ? ReadCookieSummary(setCookie)
+            : new PageSecurityCookieSummary(0, 0, 0, 0, 0, 0, 0);
+
+        return new NetworkSecurityMetadata(
+            true,
+            status,
+            headers.ContainsKey("strict-transport-security"),
+            !string.IsNullOrWhiteSpace(csp),
+            !string.IsNullOrWhiteSpace(cspReportOnly),
+            directives,
+            policyTokens.Contains("'unsafe-inline'", StringComparer.OrdinalIgnoreCase),
+            policyTokens.Contains("'unsafe-eval'", StringComparer.OrdinalIgnoreCase),
+            policyTokens.Contains("*", StringComparer.Ordinal),
+            headers.TryGetValue("x-content-type-options", out var contentType) &&
+                contentType.Contains("nosniff", StringComparison.OrdinalIgnoreCase),
+            headers.ContainsKey("x-frame-options") || directives.Contains("frame-ancestors", StringComparer.Ordinal),
+            headers.ContainsKey("referrer-policy"),
+            headers.ContainsKey("permissions-policy"),
+            headers.ContainsKey("cross-origin-opener-policy"),
+            headers.ContainsKey("cross-origin-embedder-policy"),
+            headers.ContainsKey("cross-origin-resource-policy"),
+            cookies);
+    }
+
+    private static PageSecurityCookieSummary ReadCookieSummary(string value)
+    {
+        var rows = value.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (rows.Length == 0 && !string.IsNullOrWhiteSpace(value)) rows = [value];
+        var secure = 0;
+        var httpOnly = 0;
+        var strict = 0;
+        var lax = 0;
+        var none = 0;
+        var partitioned = 0;
+        foreach (var row in rows.Take(256))
+        {
+            var attributes = row.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1).ToArray();
+            if (attributes.Any(attribute => string.Equals(attribute, "secure", StringComparison.OrdinalIgnoreCase))) secure++;
+            if (attributes.Any(attribute => string.Equals(attribute, "httponly", StringComparison.OrdinalIgnoreCase))) httpOnly++;
+            if (attributes.Any(attribute => string.Equals(attribute, "partitioned", StringComparison.OrdinalIgnoreCase))) partitioned++;
+            var sameSite = attributes.FirstOrDefault(attribute => attribute.StartsWith("samesite=", StringComparison.OrdinalIgnoreCase));
+            if (sameSite?.EndsWith("strict", StringComparison.OrdinalIgnoreCase) == true) strict++;
+            else if (sameSite?.EndsWith("lax", StringComparison.OrdinalIgnoreCase) == true) lax++;
+            else if (sameSite?.EndsWith("none", StringComparison.OrdinalIgnoreCase) == true) none++;
+        }
+        return new PageSecurityCookieSummary(Math.Min(rows.Length, 256), secure, httpOnly, strict, lax, none, partitioned);
+    }
+
+    private static bool DocumentUrlsMatch(string first, string second)
+    {
+        if (!Uri.TryCreate(first, UriKind.Absolute, out var left) ||
+            !Uri.TryCreate(second, UriKind.Absolute, out var right))
+            return string.Equals(first, second, StringComparison.Ordinal);
+        return Uri.Compare(left, right,
+            UriComponents.SchemeAndServer | UriComponents.PathAndQuery,
+            UriFormat.UriEscaped,
+            StringComparison.Ordinal) == 0;
     }
 
     private void OnLoadingFinished(CdpEventArgs e)

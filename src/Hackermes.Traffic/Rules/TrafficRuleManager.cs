@@ -1,4 +1,5 @@
 using System;
+using Hackermes.Base;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -303,10 +304,7 @@ public sealed class TrafficRuleManager : ITrafficRuleManager
 
     private static string ResolveDefaultPath()
     {
-        var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(root))
-            root = Path.GetTempPath();
-        return Path.Combine(root, "Hackermes", FileName);
+        return AppDataPaths.Resolve(FileName);
     }
 
     private sealed record TrafficRuleDocument(int SchemaVersion, IReadOnlyList<TrafficRule>? Rules);

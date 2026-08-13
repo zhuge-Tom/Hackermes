@@ -5,13 +5,13 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Hackermes.Base;
 
 namespace Hackermes.ToolHost;
 
 internal static class ToolHostReplayGuard
 {
-    private static readonly string PathName = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hackermes", "toolhost-nonces.json");
+    private static readonly string PathName = AppDataPaths.Resolve("toolhost-nonces.json");
 
     public static void Consume(string nonce, DateTimeOffset expiresAt)
     {
