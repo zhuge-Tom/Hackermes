@@ -13,10 +13,12 @@ namespace Hackermes.ToolHost;
 
 internal static class Program
 {
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
         try
         {
+            if (args.Length == 2 && args[0].Equals("--verify-report", StringComparison.OrdinalIgnoreCase))
+                return await VerifyReportAsync(args[1]).ConfigureAwait(false);
             var input = await Console.In.ReadToEndAsync().ConfigureAwait(false);
             if (input.Length is 0 or > 32_768) return await WriteAsync(new(false, string.Empty, "ToolHost request is empty or too large.")).ConfigureAwait(false);
             var envelope = JsonSerializer.Deserialize<ToolHostEnvelope>(input) ?? throw new UnauthorizedAccessException("ToolHost envelope is invalid.");
@@ -34,6 +36,42 @@ internal static class Program
         {
             return await WriteAsync(new(false, string.Empty, exception.Message)).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Third-party offline verification of a signed assessment report. Uses only the public key
+    /// embedded in the document; no secret store, ticket or control plane is involved.
+    /// </summary>
+    private static async Task<int> VerifyReportAsync(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists) return await WriteVerificationAsync("file_not_found").ConfigureAwait(false);
+            if (file.Length > AssessmentReportExportService.MaximumContentBytes)
+                return await WriteVerificationAsync("content_too_large").ConfigureAwait(false);
+            var verification = AssessmentReportExportService.VerifyDocument(
+                await File.ReadAllTextAsync(path).ConfigureAwait(false));
+            return await WriteVerificationAsync(verification.ErrorCode ?? (verification.Valid ? "-" : "invalid_document"),
+                verification).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            return await WriteVerificationAsync(exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<int> WriteVerificationAsync(string errorOrDetail, AssessmentReportVerification? verification = null)
+    {
+        var valid = verification?.Valid == true;
+        var line = string.Join('\t',
+            $"valid={valid.ToString().ToLowerInvariant()}",
+            $"keyId={verification?.KeyId ?? "-"}",
+            $"job={verification?.JobId ?? "-"}",
+            $"exportedAt={verification?.ExportedAt?.ToString("O") ?? "-"}",
+            $"error={(valid ? "-" : errorOrDetail)}");
+        await Console.Out.WriteLineAsync(line).ConfigureAwait(false);
+        return valid ? 0 : 1;
     }
 
     private static async Task<ToolHostResponse> ExecuteAsync(AuthorizedToolInvocation invocation)

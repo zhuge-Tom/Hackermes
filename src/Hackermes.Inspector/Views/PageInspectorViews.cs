@@ -28,6 +28,13 @@ public sealed partial class DomInspectorView : UserControl
     private void RevealNode(DomTreeNodeViewModel node) =>
         Dispatcher.UIThread.Post(() => PART_DomTree.ScrollIntoView(node), DispatcherPriority.Loaded);
 
+    private void OnSearchKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not DomInspectorViewModel viewModel) return;
+        viewModel.FindNextCommand.Execute(null);
+        e.Handled = true;
+    }
+
     private void OnDomNodePointerEntered(object? sender, PointerEventArgs eventArgs)
     {
         if (sender is Control { DataContext: DomTreeNodeViewModel node } && DataContext is DomInspectorViewModel viewModel)

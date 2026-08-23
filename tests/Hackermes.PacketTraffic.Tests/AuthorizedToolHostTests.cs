@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.Versioning;
+using System.Text.Json;
 using Xunit;
 
 namespace Hackermes.PacketTraffic.Tests;
@@ -83,15 +84,15 @@ public sealed class AuthorizedToolHostTests
             Environment.SetEnvironmentVariable("HACKERMES_WAFW00F_PATH", main);
             Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", python);
             var step = new AssessmentStep(AuthorizedToolCatalog.Wafw00fQuick,
-                "{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":8080}", 500, 999_999);
+                "{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":8080}", 900, 999_999);
 
             var invocation = AuthorizedToolCatalog.BuildInvocation(step, ["127.0.0.1"]);
 
             Assert.Equal(python, invocation.ExecutablePath);
             Assert.Equal(root, invocation.WorkingDirectory);
-            Assert.Equal(120, invocation.TimeoutSeconds);
+            Assert.Equal(600, invocation.TimeoutSeconds);
             Assert.Equal(262_144, invocation.MaxOutputBytes);
-            Assert.Equal(["-m", "wafw00f.main", "http://127.0.0.1:8080/", "--no-colors", "-T", "120", "-o", "-", "-f", "json"], invocation.Arguments);
+            Assert.Equal(["-m", "wafw00f.main", "http://127.0.0.1:8080/", "--no-colors", "-T", "600", "-o", "-", "-f", "json"], invocation.Arguments);
             Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(step, ["localhost"]));
             Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.BuildInvocation(step with
             {
@@ -104,6 +105,202 @@ public sealed class AuthorizedToolHostTests
             Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", oldPython);
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Catalog_BuildsBoundedWebProbeInvocationsAndValidatesScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-webprobe-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var curl = Path.Combine(root, "curl.exe");
+        var httpx = Path.Combine(root, "httpx.exe");
+        File.WriteAllText(curl, string.Empty);
+        File.WriteAllText(httpx, string.Empty);
+        var oldCurl = Environment.GetEnvironmentVariable("HACKERMES_CURL_PATH");
+        var oldHttpx = Environment.GetEnvironmentVariable("HACKERMES_HTTPX_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_CURL_PATH", curl);
+            Environment.SetEnvironmentVariable("HACKERMES_HTTPX_PATH", httpx);
+
+            var headers = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpHeadersProbe,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"https\",\"port\":8443}", 15), ["127.0.0.1"]);
+            Assert.Equal(curl, headers.ExecutablePath);
+            Assert.Equal(root, headers.WorkingDirectory);
+            Assert.Equal(["-sS", "-I", "--connect-timeout", "10", "--max-time", "15", "https://127.0.0.1:8443/"],
+                headers.Arguments);
+
+            var probe = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpxProbe, "{\"target\":\"127.0.0.1\"}", 900, 999_999),
+                ["127.0.0.1"]);
+            Assert.Equal(httpx, probe.ExecutablePath);
+            Assert.Equal(600, probe.TimeoutSeconds);
+            Assert.Equal(262_144, probe.MaxOutputBytes);
+            Assert.Equal(["-u", "http://127.0.0.1:80/", "-status-code", "-no-color", "-threads", "1", "-timeout", "600"],
+                probe.Arguments);
+
+            // Plan normalization keeps the shared bounded endpoint shape for both adapters.
+            Assert.Equal("{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":80}",
+                AuthorizedToolCatalog.NormalizeStep(
+                    new AssessmentStep(AuthorizedToolCatalog.HttpHeadersProbe, "{\"target\":\"127.0.0.1\"}"),
+                    ["127.0.0.1"]).Input);
+
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpHeadersProbe, "{\"target\":\"example.com\"}"),
+                ["127.0.0.1"]));
+            Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpxProbe,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"gopher\"}"), ["127.0.0.1"]));
+            Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.NormalizeStep(
+                new AssessmentStep("recon.unknown.adapter", "{\"target\":\"127.0.0.1\"}"), ["127.0.0.1"]));
+
+            var tools = AuthorizedToolCatalog.Describe();
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.HttpHeadersProbe).Available);
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.HttpxProbe).Available);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_CURL_PATH", oldCurl);
+            Environment.SetEnvironmentVariable("HACKERMES_HTTPX_PATH", oldHttpx);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Catalog_BuildsBoundedHttpGetAndDnsInvocationsAndValidatesInput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-getdns-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var curl = Path.Combine(root, "curl.exe");
+        var nslookup = Path.Combine(root, "nslookup.exe");
+        File.WriteAllText(curl, string.Empty);
+        File.WriteAllText(nslookup, string.Empty);
+        var oldCurl = Environment.GetEnvironmentVariable("HACKERMES_CURL_PATH");
+        var oldNslookup = Environment.GetEnvironmentVariable("HACKERMES_NSLOOKUP_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_CURL_PATH", curl);
+            Environment.SetEnvironmentVariable("HACKERMES_NSLOOKUP_PATH", nslookup);
+
+            var get = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"https\",\"port\":8443,\"path\":\"/admin\"}", 30), ["127.0.0.1"]);
+            Assert.Equal(curl, get.ExecutablePath);
+            Assert.Equal(root, get.WorkingDirectory);
+            Assert.Equal(["-sS", "-D", "-", "-o", "-", "--connect-timeout", "10", "--max-time", "30",
+                "https://127.0.0.1:8443/admin"], get.Arguments);
+
+            var getDefault = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe, "{\"target\":\"127.0.0.1\"}", 900, 999_999),
+                ["127.0.0.1"]);
+            Assert.Contains("http://127.0.0.1:80/", getDefault.Arguments);
+            Assert.Equal(600, getDefault.TimeoutSeconds);
+            Assert.Equal(262_144, getDefault.MaxOutputBytes);
+
+            Assert.Equal("{\"target\":\"127.0.0.1\",\"scheme\":\"https\",\"port\":8443,\"path\":\"/admin\"}",
+                AuthorizedToolCatalog.NormalizeStep(
+                    new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe,
+                        "{\"target\":\"127.0.0.1\",\"scheme\":\"https\",\"port\":8443,\"path\":\"/admin\"}"),
+                    ["127.0.0.1"]).Input);
+            Assert.Equal("{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":80,\"path\":\"/\"}",
+                AuthorizedToolCatalog.NormalizeStep(
+                    new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe, "{\"target\":\"127.0.0.1\"}"),
+                    ["127.0.0.1"]).Input);
+
+            foreach (var badPath in new[] { "/bad path", "relative", "/" + new string('x', 256) })
+                Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.BuildInvocation(
+                    new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe,
+                        JsonSerializer.Serialize(new { target = "127.0.0.1", path = badPath })), ["127.0.0.1"]));
+
+            var dns = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.DnsResolve, "{\"target\":\"127.0.0.1\"}", 10), ["127.0.0.1"]);
+            Assert.Equal(nslookup, dns.ExecutablePath);
+            Assert.Equal(root, dns.WorkingDirectory);
+            Assert.Equal(["127.0.0.1"], dns.Arguments);
+            Assert.Equal("{\"target\":\"localhost\"}",
+                AuthorizedToolCatalog.NormalizeStep(
+                    new AssessmentStep(AuthorizedToolCatalog.DnsResolve, "{\"target\":\"LOCALHOST\"}"), ["localhost"]).Input);
+
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.DnsResolve, "{\"target\":\"example.com\"}"), ["127.0.0.1"]));
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.NormalizeStep(
+                new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe, "{\"target\":\"example.com\"}"), ["127.0.0.1"]));
+
+            var tools = AuthorizedToolCatalog.Describe();
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.HttpGetProbe).Available);
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.DnsResolve).Available);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_CURL_PATH", oldCurl);
+            Environment.SetEnvironmentVariable("HACKERMES_NSLOOKUP_PATH", oldNslookup);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ToolHost_RunsHeaderProbeAgainstLoopback()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = ToolHostPath();
+        if (!File.Exists(host) || !AuthorizedToolCatalog.Describe().Single(x => x.Id == AuthorizedToolCatalog.HttpHeadersProbe).Available) return;
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var stop = new CancellationTokenSource();
+        var server = ServeAsync(listener, stop.Token);
+        try
+        {
+            var result = await RunExternalAsync(host, new AssessmentStep(AuthorizedToolCatalog.HttpHeadersProbe,
+                $"{{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":{port}}}", 20), ["127.0.0.1"]);
+            Assert.True(result.Success, result.Error + Environment.NewLine + result.Output);
+            Assert.Contains("404 Not Found", result.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { stop.Cancel(); listener.Stop(); try { await server; } catch (OperationCanceledException) { } catch (SocketException) { } }
+    }
+
+    [Fact]
+    public async Task ToolHost_RunsHttpGetProbeAgainstLoopback()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = ToolHostPath();
+        if (!File.Exists(host) || !AuthorizedToolCatalog.Describe().Single(x => x.Id == AuthorizedToolCatalog.HttpGetProbe).Available) return;
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var stop = new CancellationTokenSource();
+        var server = ServeAsync(listener, stop.Token);
+        try
+        {
+            var result = await RunExternalAsync(host, new AssessmentStep(AuthorizedToolCatalog.HttpGetProbe,
+                $"{{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":{port},\"path\":\"/status\"}}", 20), ["127.0.0.1"]);
+            Assert.True(result.Success, result.Error + Environment.NewLine + result.Output);
+            Assert.Contains("404 Not Found", result.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Connection: close", result.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { stop.Cancel(); listener.Stop(); try { await server; } catch (OperationCanceledException) { } catch (SocketException) { } }
+    }
+
+    [Fact]
+    public async Task ToolHost_RunsBoundedHttpxAgainstLoopback()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = ToolHostPath();
+        if (!File.Exists(host) || !AuthorizedToolCatalog.Describe().Single(x => x.Id == AuthorizedToolCatalog.HttpxProbe).Available) return;
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var stop = new CancellationTokenSource();
+        var server = ServeAsync(listener, stop.Token);
+        try
+        {
+            var result = await RunExternalAsync(host, new AssessmentStep(AuthorizedToolCatalog.HttpxProbe,
+                $"{{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":{port}}}", 20), ["127.0.0.1"]);
+            Assert.True(result.Success, result.Error + Environment.NewLine + result.Output);
+            Assert.Contains("127.0.0.1", result.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { stop.Cancel(); listener.Stop(); try { await server; } catch (OperationCanceledException) { } catch (SocketException) { } }
     }
 
     [Fact]

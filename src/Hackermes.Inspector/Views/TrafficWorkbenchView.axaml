@@ -104,7 +104,7 @@
             <StackPanel Orientation="Horizontal" Spacing="6">
               <TextBlock VerticalAlignment="Center" Text="Side" />
               <TextBox Width="100" PlaceholderText="request/response" Text="{Binding ParameterSide}" />
-              <TextBlock VerticalAlignment="Center" Opacity="0.65" Text="Query, form, top-level JSON, Header and Cookie parameters" />
+              <TextBlock VerticalAlignment="Center" Opacity="0.65" Text="Query, form, top-level JSON, Header, Cookie and multipart form-data parameters" />
             </StackPanel>
             <DataGrid Grid.Row="1" ItemsSource="{Binding Parameters}" SelectedItem="{Binding SelectedParameter, Mode=TwoWay}"
                       AutoGenerateColumns="False" IsReadOnly="True" Margin="0,6">
@@ -181,6 +181,7 @@
                 <DataGridTextColumn Header="Before" Width="*" Binding="{Binding Before}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="After" Width="*" Binding="{Binding After}" x:DataType="vm:TrafficAuditItem" />
                 <DataGridTextColumn Header="Result" Width="80" Binding="{Binding Result}" x:DataType="vm:TrafficAuditItem" />
+                <DataGridTextColumn Header="Operator" Width="110" Binding="{Binding Operator}" x:DataType="vm:TrafficAuditItem" />
               </DataGrid.Columns>
             </DataGrid>
           </Grid>

@@ -24,6 +24,10 @@ public static class AuthorizedToolCatalog
     public const string NmapService = "recon.nmap.service";
     public const string DirsearchQuick = "recon.dirsearch.quick";
     public const string Wafw00fQuick = "recon.wafw00f.quick";
+    public const string HttpHeadersProbe = "recon.http.headers";
+    public const string HttpxProbe = "recon.httpx.probe";
+    public const string HttpGetProbe = "recon.http.get";
+    public const string DnsResolve = "recon.dns.resolve";
     public const string SimulationEcho = "simulation.echo";
 
     public static IReadOnlyList<AuthorizedToolDescriptor> Describe()
@@ -33,6 +37,7 @@ public static class AuthorizedToolCatalog
         var python = PythonPath();
         var wordlist = DirsearchWordlistPath();
         var wafw00f = Wafw00fPath();
+        var curl = CurlPath();
         return
         [
             Descriptor(NmapQuick, "信息收集 / 网络", "Nmap 快速端口", "TCP connect；精确主机，最多 64 个端口。", nmap),
@@ -40,7 +45,15 @@ public static class AuthorizedToolCatalog
             Descriptor(DirsearchQuick, "信息收集 / Web", "Dirsearch 常见路径", "低并发、非递归，使用随工具提供的小型字典。",
                 File.Exists(dirsearch) && File.Exists(python) && File.Exists(wordlist) ? python : string.Empty),
             Descriptor(Wafw00fQuick, "Web 检测", "Wafw00f 基础识别", "精确 Web 目标、固定超时和有界输出的 WAF 识别。",
-                File.Exists(wafw00f) && File.Exists(python) ? python : string.Empty)
+                File.Exists(wafw00f) && File.Exists(python) ? python : string.Empty),
+            Descriptor(HttpHeadersProbe, "信息收集 / Web", "HTTP 响应头探测",
+                "对精确 Web 目标发起单次 HEAD 请求，返回状态行与响应头。", curl),
+            Descriptor(HttpGetProbe, "信息收集 / Web", "HTTP GET 探测",
+                "对精确 Web 目标的固定路径发起单次 GET，返回状态、响应头与有界正文。", curl),
+            Descriptor(DnsResolve, "信息收集 / 网络", "DNS 解析",
+                "解析授权范围内的精确主机名，输出有界的 DNS 应答。", NslookupPath()),
+            Descriptor(HttpxProbe, "信息收集 / Web", "Httpx 存活探测",
+                "对精确 Web 目标发起单次 GET 探测，输出 URL 与状态码。", HttpxPath())
         ];
     }
 
@@ -57,7 +70,7 @@ public static class AuthorizedToolCatalog
 
     public static AuthorizedToolInvocation BuildInvocation(AssessmentStep step, IReadOnlyList<string> allowedTargets)
     {
-        var timeout = Math.Clamp(step.TimeoutSeconds, 1, 120);
+        var timeout = Math.Clamp(step.TimeoutSeconds, 1, 600);
         var output = Math.Clamp(step.MaxOutputBytes, 4_096, 262_144);
         if (step.AdapterId == SimulationEcho)
             return new(step.AdapterId, string.Empty, string.Empty, [], timeout, output, SimulationEcho);
@@ -77,14 +90,19 @@ public static class AuthorizedToolCatalog
             return new(step.AdapterId, executable, Path.GetDirectoryName(executable)!, arguments, timeout, output, step.AdapterId);
         }
 
+        if (step.AdapterId == DnsResolve)
+        {
+            var executable = RequireFile(NslookupPath(), "nslookup");
+            return new(step.AdapterId, executable, Path.GetDirectoryName(executable)!, [target], timeout, output, step.AdapterId);
+        }
+
+        var (_, scheme, port) = ReadWebEndpoint(root);
+
         if (step.AdapterId == DirsearchQuick)
         {
             var script = RequireFile(DirsearchPath(), "dirsearch");
             var python = RequireFile(PythonPath(), "Python");
             var wordlist = RequireFile(DirsearchWordlistPath(), "dirsearch wordlist");
-            var scheme = OptionalText(root, "scheme", 5, "http").ToLowerInvariant();
-            if (scheme is not ("http" or "https")) throw new ArgumentException("scheme must be http or https.");
-            var port = OptionalInt(root, "port", scheme == "https" ? 443 : 80, 1, 65535);
             var url = $"{scheme}://{FormatHost(target)}:{port}/";
             var arguments = new[] { script, "-u", url, "-w", wordlist, "--threads", "2", "--timeout", "3", "--retries", "0", "--max-time", timeout.ToString(CultureInfo.InvariantCulture) };
             return new(step.AdapterId, python, Path.GetDirectoryName(script)!, arguments, timeout, output, step.AdapterId);
@@ -94,9 +112,6 @@ public static class AuthorizedToolCatalog
         {
             var main = RequireFile(Wafw00fPath(), "Wafw00f");
             var python = RequireFile(PythonPath(), "Python");
-            var scheme = OptionalText(root, "scheme", 5, "http").ToLowerInvariant();
-            if (scheme is not ("http" or "https")) throw new ArgumentException("scheme must be http or https.");
-            var port = OptionalInt(root, "port", scheme == "https" ? 443 : 80, 1, 65535);
             var url = $"{scheme}://{FormatHost(target)}:{port}/";
             var arguments = new[]
             {
@@ -107,6 +122,44 @@ public static class AuthorizedToolCatalog
             return new(step.AdapterId, python, packageRoot, arguments, timeout, output, step.AdapterId);
         }
 
+        if (step.AdapterId == HttpHeadersProbe)
+        {
+            var executable = RequireFile(CurlPath(), "curl");
+            var url = $"{scheme}://{FormatHost(target)}:{port}/";
+            var arguments = new[]
+            {
+                "-sS", "-I", "--connect-timeout",
+                Math.Min(10, timeout).ToString(CultureInfo.InvariantCulture),
+                "--max-time", timeout.ToString(CultureInfo.InvariantCulture), url
+            };
+            return new(step.AdapterId, executable, Path.GetDirectoryName(executable)!, arguments, timeout, output, step.AdapterId);
+        }
+
+        if (step.AdapterId == HttpGetProbe)
+        {
+            var executable = RequireFile(CurlPath(), "curl");
+            var url = $"{scheme}://{FormatHost(target)}:{port}{NormalizeRequestPath(RootOptionalText(root, "path"))}";
+            var arguments = new[]
+            {
+                "-sS", "-D", "-", "-o", "-",
+                "--connect-timeout", Math.Min(10, timeout).ToString(CultureInfo.InvariantCulture),
+                "--max-time", timeout.ToString(CultureInfo.InvariantCulture), url
+            };
+            return new(step.AdapterId, executable, Path.GetDirectoryName(executable)!, arguments, timeout, output, step.AdapterId);
+        }
+
+        if (step.AdapterId == HttpxProbe)
+        {
+            var executable = RequireFile(HttpxPath(), "httpx");
+            var url = $"{scheme}://{FormatHost(target)}:{port}/";
+            var arguments = new[]
+            {
+                "-u", url, "-status-code", "-no-color", "-threads", "1",
+                "-timeout", timeout.ToString(CultureInfo.InvariantCulture)
+            };
+            return new(step.AdapterId, executable, Path.GetDirectoryName(executable)!, arguments, timeout, output, step.AdapterId);
+        }
+
         throw new ArgumentException($"Adapter '{step.AdapterId}' is not registered.");
     }
 
@@ -114,25 +167,40 @@ public static class AuthorizedToolCatalog
     {
         if (adapterId == SimulationEcho) return input[..Math.Min(input.Length, 262_144)];
         using var document = ParseObject(input);
-        var target = RequiredText(document.RootElement, "target", 253).ToLowerInvariant();
-        EnsureAuthorizedTarget(target, allowedTargets);
+        var root = document.RootElement;
         if (adapterId is NmapQuick or NmapService)
-            return JsonSerializer.Serialize(new { target, ports = NormalizePorts(RequiredText(document.RootElement, "ports", 512)) });
-        if (adapterId == DirsearchQuick)
         {
-            var scheme = OptionalText(document.RootElement, "scheme", 5, "http").ToLowerInvariant();
-            if (scheme is not ("http" or "https")) throw new ArgumentException("scheme must be http or https.");
-            var port = OptionalInt(document.RootElement, "port", scheme == "https" ? 443 : 80, 1, 65535);
-            return JsonSerializer.Serialize(new { target, scheme, port });
+            var target = RequiredText(root, "target", 253).ToLowerInvariant();
+            EnsureAuthorizedTarget(target, allowedTargets);
+            return JsonSerializer.Serialize(new { target, ports = NormalizePorts(RequiredText(root, "ports", 512)) });
         }
-        if (adapterId == Wafw00fQuick)
+        if (adapterId == DnsResolve)
         {
-            var scheme = OptionalText(document.RootElement, "scheme", 5, "http").ToLowerInvariant();
-            if (scheme is not ("http" or "https")) throw new ArgumentException("scheme must be http or https.");
-            var port = OptionalInt(document.RootElement, "port", scheme == "https" ? 443 : 80, 1, 65535);
-            return JsonSerializer.Serialize(new { target, scheme, port });
+            var dnsTarget = RequiredText(root, "target", 253).ToLowerInvariant();
+            EnsureAuthorizedTarget(dnsTarget, allowedTargets);
+            return JsonSerializer.Serialize(new { target = dnsTarget });
         }
-        throw new ArgumentException($"Adapter '{adapterId}' is not registered.");
+        if (adapterId is not (DirsearchQuick or Wafw00fQuick or HttpHeadersProbe or HttpxProbe or HttpGetProbe))
+            throw new ArgumentException($"Adapter '{adapterId}' is not registered.");
+        var (webTarget, webScheme, webPort) = ReadWebEndpoint(root, allowedTargets);
+        if (adapterId == HttpGetProbe)
+            return JsonSerializer.Serialize(new
+            {
+                target = webTarget, scheme = webScheme, port = webPort,
+                path = NormalizeRequestPath(RootOptionalText(root, "path"))
+            });
+        return JsonSerializer.Serialize(new { target = webTarget, scheme = webScheme, port = webPort });
+    }
+
+    /// <summary>Shared exact-target + http(s) endpoint shape for every web adapter.</summary>
+    private static (string Target, string Scheme, int Port) ReadWebEndpoint(JsonElement root, IReadOnlyList<string>? allowedTargets = null)
+    {
+        var target = RequiredText(root, "target", 253).ToLowerInvariant();
+        if (allowedTargets is not null) EnsureAuthorizedTarget(target, allowedTargets);
+        var scheme = OptionalText(root, "scheme", 5, "http").ToLowerInvariant();
+        if (scheme is not ("http" or "https")) throw new ArgumentException("scheme must be http or https.");
+        var port = OptionalInt(root, "port", scheme == "https" ? 443 : 80, 1, 65535);
+        return (target, scheme, port);
     }
 
     private static AuthorizedToolDescriptor Descriptor(string id, string category, string name, string description, string path) =>
@@ -143,6 +211,26 @@ public static class AuthorizedToolCatalog
     private static string DirsearchPath() => Environment.GetEnvironmentVariable("HACKERMES_DIRSEARCH_PATH") ?? Bundled("recon.dirsearch.terminal", "dirsearch.py");
     private static string DirsearchWordlistPath() => Environment.GetEnvironmentVariable("HACKERMES_DIRSEARCH_WORDLIST") ?? Bundled("recon.dirsearch.terminal", "db", "templates", "admin.txt");
     private static string Wafw00fPath() => Environment.GetEnvironmentVariable("HACKERMES_WAFW00F_PATH") ?? Bundled("detect.wafw00f.terminal", "wafw00f", "main.py");
+    private static string HttpxPath() => Environment.GetEnvironmentVariable("HACKERMES_HTTPX_PATH") ?? Bundled("recon.httpx.terminal", "httpx.exe");
+    private static string CurlPath() => Environment.GetEnvironmentVariable("HACKERMES_CURL_PATH")
+        ?? FindOnPath("curl.exe")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "curl.exe");
+    private static string NslookupPath() => Environment.GetEnvironmentVariable("HACKERMES_NSLOOKUP_PATH")
+        ?? FindOnPath("nslookup.exe")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "nslookup.exe");
+    private static string? RootOptionalText(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    /// <summary>Bounded URL path for GET probes: absolute, whitespace/control-free, at most 256 characters.</summary>
+    private static string NormalizeRequestPath(string? candidate)
+    {
+        var path = string.IsNullOrWhiteSpace(candidate) ? "/" : candidate.Trim();
+        if (!path.StartsWith('/') || path.Length > 256)
+            throw new ArgumentException("path must start with '/' and be at most 256 characters.");
+        if (path.Any(character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            throw new ArgumentException("path must not contain whitespace or control characters.");
+        return path;
+    }
     private static string PythonPath() => Environment.GetEnvironmentVariable("HACKERMES_PYTHON_PATH") ?? Bundled("_runtime", "python", "python.exe");
     private static string? FindOnPath(string name) => (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator).Select(path => Path.Combine(path, name)).FirstOrDefault(File.Exists);
     private static string RequireFile(string path, string label) => File.Exists(path) ? Path.GetFullPath(path) : throw new FileNotFoundException($"{label} is unavailable.", path);
@@ -162,7 +250,10 @@ public static class AuthorizedToolCatalog
     private static int OptionalInt(JsonElement root, string name, int fallback, int min, int max) => root.TryGetProperty(name, out var value) && value.TryGetInt32(out var number) ? Math.Clamp(number, min, max) : fallback;
     private static void EnsureAuthorizedTarget(string target, IReadOnlyList<string> allowedTargets)
     {
-        if (!allowedTargets.Any(value => string.Equals(value.Trim(), target, StringComparison.OrdinalIgnoreCase))) throw new UnauthorizedAccessException($"Target '{target}' is outside the approved exact-target scope.");
+        // A scope created with the wildcard target authorizes every exact target ("全部授权").
+        if (allowedTargets.Any(value => string.Equals(value.Trim(), "*", StringComparison.Ordinal))) return;
+        if (!allowedTargets.Any(value => string.Equals(value.Trim(), target, StringComparison.OrdinalIgnoreCase)))
+            throw new UnauthorizedAccessException($"Target '{target}' is outside the approved exact-target scope.");
     }
     private static string NormalizePorts(string value)
     {

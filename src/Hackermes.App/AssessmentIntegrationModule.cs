@@ -1,6 +1,7 @@
 using Hackermes.AiPanel.Tools;
 using Hackermes.Assessment;
 using Hackermes.Automation.Commands;
+using Hackermes.Automation.Packet;
 using Hackermes.Base;
 using Hackermes.App.Views;
 using Hackermes.Platform.Registries;
@@ -27,6 +28,13 @@ public sealed class AssessmentIntegrationModule : IModule
         services.AddSingleton<ToolHostTicketSigner>();
         services.AddSingleton<IAssessmentExecutionHost, ExternalToolHost>();
         services.AddSingleton<IAssessmentControlPlane, AssessmentControlPlane>();
+        services.AddSingleton<IAssessmentReportSigningKey>(serviceProvider =>
+            (PacketAuditSigningKey)serviceProvider.GetRequiredService<IPacketAuditSigningKey>());
+        services.AddSingleton<IAssessmentReportExportService>(serviceProvider =>
+            new AssessmentReportExportService(
+                serviceProvider.GetRequiredService<IAssessmentControlPlane>(),
+                serviceProvider.GetRequiredService<IAssessmentReportSigningKey>(),
+                serviceProvider.GetRequiredService<IAssessmentReportTrustPolicy>()));
         services.AddSingleton<ToolLaunchService>();
     }
 
@@ -35,9 +43,10 @@ public sealed class AssessmentIntegrationModule : IModule
         var plane = serviceProvider.GetRequiredService<IAssessmentControlPlane>();
         var settings = serviceProvider.GetRequiredService<ISettingsService>();
         var launcher = serviceProvider.GetRequiredService<ToolLaunchService>();
-        RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane);
+        var reports = serviceProvider.GetRequiredService<IAssessmentReportExportService>();
+        RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane, reports);
         RegisterAgent(serviceProvider.GetRequiredService<IAiToolRegistry>(), plane,
-            serviceProvider.GetRequiredService<IPageContextQueryService>());
+            serviceProvider.GetRequiredService<IPageContextQueryService>(), reports);
         AuthorizedToolsView? toolsView = null;
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
@@ -80,19 +89,21 @@ public sealed class AssessmentIntegrationModule : IModule
         public event EventHandler? CanExecuteChanged { add { } remove { } }
     }
 
-    public static void RegisterCli(CommandRegistry commands, IAssessmentControlPlane plane)
+    public static void RegisterCli(CommandRegistry commands, IAssessmentControlPlane plane,
+        IAssessmentReportExportService? reports = null)
     {
         commands.Register(new CommandDefinition
         {
             Name = "assessment",
             Summary = "Manage authorized scopes, plans and isolated ToolHost jobs",
-            Usage = "assessment scope|plan|approve|run|cancel|jobs|evidence|finding|audit|report ...",
+            Usage = "assessment scope|plan|approve|run|cancel|jobs|evidence|finding|audit|report|report-export|report-verify ...",
             IsMutating = true,
-            Handler = async (context, token) => await ExecuteCliAsync(context, plane, token).ConfigureAwait(false)
+            Handler = async (context, token) => await ExecuteCliAsync(context, plane, reports, token).ConfigureAwait(false)
         });
     }
 
-    private static async Task<CommandResult> ExecuteCliAsync(CommandContext context, IAssessmentControlPlane plane, System.Threading.CancellationToken ct)
+    private static async Task<CommandResult> ExecuteCliAsync(CommandContext context, IAssessmentControlPlane plane,
+        IAssessmentReportExportService? reports, System.Threading.CancellationToken ct)
     {
         try
         {
@@ -156,15 +167,38 @@ public sealed class AssessmentIntegrationModule : IModule
                         .Select(value => $"{value.Timestamp:O} {value.Actor} {value.Action} {value.EntityId} {value.Detail}")));
                 case "report":
                     return CommandResult.Ok(plane.ExportReport(Required(context, 1, "job"), context.Arg(2) ?? "json"));
+                case "report-export" when reports is not null:
+                {
+                    var path = Required(context, 1, "path");
+                    var content = reports.Export(Required(context, 2, "job"));
+                    await System.IO.File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
+                    return CommandResult.Ok($"Exported signed assessment report to {System.IO.Path.GetFullPath(path)}.");
+                }
+                case "report-verify" when reports is not null:
+                    return VerifyReportFile(reports, context);
+                case "report-export" or "report-verify":
+                    return CommandResult.Fail("This assessment backend does not support signed report exports.");
                 default:
-                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve/run/revoke/jobs | evidence <job> | evidence-verify <evidence> | findings <job> | finding create|review ... | audit <entity>|verify | report <job> [json|markdown|html]");
+                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve/run/revoke/jobs | evidence <job> | evidence-verify <evidence> | findings <job> | finding create|review ... | audit <entity>|verify | report <job> [json|markdown|html] | report-export <path> <job> | report-verify <path> [keyId]");
             }
         }
         catch (Exception exception) { return CommandResult.Fail(exception.Message); }
     }
 
+    private static CommandResult VerifyReportFile(IAssessmentReportExportService reports, CommandContext context)
+    {
+        var path = Required(context, 1, "path");
+        if (new System.IO.FileInfo(path).Length > AssessmentReportExportService.MaximumContentBytes)
+            return CommandResult.Fail($"Signed report exceeds {AssessmentReportExportService.MaximumContentBytes} bytes.");
+        var verification = reports.Verify(System.IO.File.ReadAllText(path), context.Arg(2));
+        var output = $"valid={verification.Valid.ToString().ToLowerInvariant()}\tkeyId={verification.KeyId ?? "-"}\t" +
+            $"job={verification.JobId ?? "-"}\texportedAt={verification.ExportedAt?.ToString("O") ?? "-"}\t" +
+            $"error={verification.ErrorCode ?? "-"}";
+        return verification.Valid ? CommandResult.Ok(output) : CommandResult.Fail(output);
+    }
+
     public static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane,
-        IPageContextQueryService? pageContexts = null)
+        IPageContextQueryService? pageContexts = null, IAssessmentReportExportService? reports = null)
     {
         registry.Register(new AiToolDefinition("assessment_scopes", "List authorized assessment scopes.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.Scopes)))));
@@ -216,6 +250,32 @@ public sealed class AssessmentIntegrationModule : IModule
         }), AiToolRisk.Mutating, (call, _) => ValueTask.FromResult(ReviewFinding(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_verify_audit", "Verify the append-only assessment audit hash chain.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(Try(plane.VerifyAudit))));
+        if (reports is not null)
+        {
+            registry.Register(new AiToolDefinition("assessment_report_export",
+                "Export the signed ECDSA assessment report document for one job. Requires confirmation.",
+                Schema(new { jobId = new { type = "string" } }), AiToolRisk.Dangerous,
+                (call, _) => ValueTask.FromResult(ExportReport(reports, call.Arguments))));
+            registry.Register(new AiToolDefinition("assessment_report_verify",
+                "Verify a signed assessment report document offline through its embedded public key.",
+                Schema(new { content = new { type = "string" }, expectedKeyId = new { type = "string" } }), AiToolRisk.ReadOnly,
+                (call, _) => ValueTask.FromResult(VerifyReport(reports, call.Arguments))));
+        }
+    }
+
+    private static ToolResult ExportReport(IAssessmentReportExportService reports, JsonElement args)
+    {
+        try { return ToolResult.Ok(reports.Export(Text(args, "jobId"))); }
+        catch (Exception exception) { return ToolResult.Fail(exception.Message); }
+    }
+
+    private static ToolResult VerifyReport(IAssessmentReportExportService reports, JsonElement args)
+    {
+        var expectedKeyId = Text(args, "expectedKeyId");
+        var verification = reports.Verify(Text(args, "content"),
+            expectedKeyId.Length > 0 ? expectedKeyId : null);
+        var json = JsonSerializer.Serialize(verification);
+        return verification.Valid ? ToolResult.Ok(json) : ToolResult.Fail(json);
     }
 
     private static ToolResult CreateScope(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateScope(Text(args, "name"), Text(args, "authorization"), Text(args, "operatorId"), Strings(args, "targets"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 60))));

@@ -20,7 +20,9 @@ public static class PacketArchiveContent
         if (entries.Count > MaximumEntries)
             throw new InvalidDataException($"Agent archives cannot contain more than {MaximumEntries} entries; narrow the filter.");
         var content = PacketArchiveCodec.Serialize(entries, format);
-        EnsureSize(content);
+        if (Encoding.UTF8.GetByteCount(content) > MaximumUtf8Bytes)
+            throw new InvalidDataException(
+                $"Agent archive content exceeds {MaximumUtf8Bytes} UTF-8 bytes; retry with a smaller limit so each batch fits.");
         return content;
     }
 
@@ -40,6 +42,28 @@ public static class PacketArchiveContent
         "har" => PacketArchiveFormat.Har,
         _ => throw new ArgumentException("Archive format must be hackermesJson or har.", nameof(value))
     };
+
+    /// <summary>
+    /// Slices one exchange batch out of the full matched entry list. Offset may sit at or
+    /// past the end (yielding an empty page with the unchanged total) so callers can walk
+    /// batches until they have seen <see cref="PacketArchivePage.Total"/> entries.
+    /// </summary>
+    public static PacketArchivePage Page(IReadOnlyList<PacketArchiveEntry> entries, PacketArchiveExchangeQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(query);
+        if (query.Offset < 0)
+            throw new ArgumentException("Archive page offset must not be negative.", nameof(query));
+        if (query.Limit is < 1 or > MaximumEntries)
+            throw new ArgumentException($"Archive page limit must be between 1 and {MaximumEntries}.", nameof(query));
+
+        var total = entries.Count;
+        var count = Math.Min(query.Limit, Math.Max(0, total - query.Offset));
+        var slice = new PacketArchiveEntry[count];
+        for (var index = 0; index < count; index++)
+            slice[index] = entries[query.Offset + index];
+        return new PacketArchivePage(slice, total);
+    }
 
     private static void EnsureSize(string content)
     {

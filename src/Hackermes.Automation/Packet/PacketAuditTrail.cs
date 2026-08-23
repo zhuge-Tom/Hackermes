@@ -21,7 +21,8 @@ public sealed record PacketAuditEntry(
     PacketAuditResult Result,
     string? ErrorCode = null,
     string? RuleId = null,
-    string? RuleAction = null);
+    string? RuleAction = null,
+    string? Operator = null);
 
 public sealed record PacketAuditQuery(string? PacketId = null, PacketAuditOperation? Operation = null, int Limit = 100);
 
@@ -44,12 +45,14 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
     private readonly object _gate = new();
     private readonly string _path;
     private readonly List<PacketAuditEntry> _entries;
+    private readonly Func<string?>? _operatorProvider;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public PacketAuditTrail(string path)
+    public PacketAuditTrail(string path, Func<string?>? operatorProvider = null)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Audit path is required.", nameof(path));
         _path = Path.GetFullPath(path);
+        _operatorProvider = operatorProvider;
         _entries = Load(_path).TakeLast(MaximumEntries).ToList();
     }
 
@@ -59,7 +62,10 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
         ValidateEntry(entry);
         lock (_gate)
         {
-            _entries.Add(entry with { ErrorCode = SanitizeCode(entry.ErrorCode) });
+            // The operator is stamped at this single seam so every entry point
+            // (workbench, CLI, Agent, rule bridge) records the same identity.
+            var @operator = entry.Operator ?? _operatorProvider?.Invoke();
+            _entries.Add(entry with { ErrorCode = SanitizeCode(entry.ErrorCode), Operator = SanitizeOperator(@operator) });
             if (_entries.Count > MaximumEntries) _entries.RemoveRange(0, _entries.Count - MaximumEntries);
             TrySave();
         }
@@ -142,6 +148,8 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
             throw new ArgumentException("Audit rule id is invalid.");
         if ((entry.RuleAction?.Length ?? 0) > 64)
             throw new ArgumentException("Audit rule metadata is invalid.");
+        if ((entry.Operator?.Length ?? 0) > 64 || (entry.Operator ?? string.Empty).Any(char.IsControl))
+            throw new ArgumentException("Audit operator is invalid.");
         ValidateVersion(entry.Before); ValidateVersion(entry.After);
     }
 
@@ -157,6 +165,13 @@ public sealed class PacketAuditTrail : IPacketAuditTrail
         if (string.IsNullOrWhiteSpace(code)) return null;
         var safe = new string(code.TakeWhile(character => char.IsLetterOrDigit(character) || character is '.' or '_' or '-').Take(128).ToArray());
         return safe.Length == 0 ? "Error" : safe;
+    }
+
+    private static string? SanitizeOperator(string? @operator)
+    {
+        if (string.IsNullOrWhiteSpace(@operator)) return null;
+        var trimmed = new string(@operator.Trim().Take(64).ToArray());
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     private static void TryDeleteTemporary(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }

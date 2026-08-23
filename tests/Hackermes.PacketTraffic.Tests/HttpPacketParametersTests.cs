@@ -92,4 +92,45 @@ public sealed class HttpPacketParametersTests
         Assert.Throws<ArgumentException>(() => HttpPacketParameters.Set(request,
             HttpParameterLocation.Cookie, "session", 0, "bad; injected=yes"));
     }
+
+    private const string MultipartBody =
+        "--X-BOUND\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nold value\r\n" +
+        "--X-BOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhello\r\n--X-BOUND--\r\n";
+
+    [Fact]
+    public void Read_ListsMultipartPartsAndToleratesBrokenBoundary()
+    {
+        var packet = HttpPacketCodec.Parse(
+            "POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=X-BOUND\r\n\r\n" + MultipartBody);
+        var parts = HttpPacketParameters.Read(packet)
+            .Where(item => item.Location == HttpParameterLocation.Multipart).ToArray();
+
+        Assert.Equal(["note", "title"], parts.Select(item => item.Name));
+        Assert.Equal(["old value", "hello"], parts.Select(item => item.Value));
+
+        var broken = HttpPacketCodec.Parse(
+            "POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data\r\n\r\n--X-BOUND\r\n\r\n");
+        Assert.Empty(HttpPacketParameters.Read(broken)
+            .Where(item => item.Location == HttpParameterLocation.Multipart));
+    }
+
+    [Fact]
+    public void Set_MultipartReplacesOnePartAndPreservesTheRestVerbatim()
+    {
+        var packet = HttpPacketCodec.Parse(
+            "POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=X-BOUND\r\n\r\n" + MultipartBody);
+
+        var changed = HttpPacketParameters.Set(packet, HttpParameterLocation.Multipart, "title", 0, "hi there");
+
+        Assert.Contains("name=\"title\"\r\n\r\nhi there\r\n", changed.Body);
+        Assert.Contains("\r\nold value\r\n", changed.Body);
+        Assert.EndsWith("--X-BOUND--\r\n", changed.Body);
+        Assert.Equal(MultipartBody.Length - "hello".Length + "hi there".Length, changed.Body.Length);
+
+        Assert.Throws<KeyNotFoundException>(() =>
+            HttpPacketParameters.Set(packet, HttpParameterLocation.Multipart, "absent", 0, "x"));
+        var plain = HttpPacketCodec.Parse("POST / HTTP/1.1\r\nContent-Type: text/plain\r\n\r\nbody");
+        Assert.Throws<InvalidDataException>(() =>
+            HttpPacketParameters.Set(plain, HttpParameterLocation.Multipart, "note", 0, "x"));
+    }
 }

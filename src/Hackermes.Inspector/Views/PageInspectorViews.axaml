@@ -11,16 +11,37 @@
     <Style Selector="SelectableTextBlock.muted">
       <Setter Property="Foreground" Value="{DynamicResource SemiColorText2}" />
     </Style>
+    <!-- DevTools Elements 面板的着色方案:标签蓝、属性名浅蓝、值橙、括号灰 -->
+    <Style Selector="TextBlock.tok-punct">
+      <Setter Property="Foreground" Value="#808080" />
+    </Style>
+    <Style Selector="TextBlock.tok-tag">
+      <Setter Property="Foreground" Value="#569CD6" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.tok-attr">
+      <Setter Property="Foreground" Value="#9CDCFE" />
+    </Style>
+    <Style Selector="TextBlock.tok-value">
+      <Setter Property="Foreground" Value="#CE9178" />
+    </Style>
+    <Style Selector="TextBlock.tok-close">
+      <Setter Property="Foreground" Value="#808080" />
+    </Style>
   </UserControl.Styles>
 
   <Grid RowDefinitions="Auto,Auto,Auto,*" MinHeight="0">
     <Border Grid.Row="0" Padding="8,5" BorderThickness="0,0,0,1"
             BorderBrush="{DynamicResource SemiColorBorder}">
-      <Grid ColumnDefinitions="Auto,*,Auto">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto">
         <TextBlock VerticalAlignment="Center" FontSize="15" FontWeight="SemiBold" Text="Elements" />
         <SelectableTextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Margin="12,0,0,0"
-                             Text="DOM tree · hover to preview · click to reveal on the page" />
-        <Button Grid.Column="2" Content="Refresh" ToolTip.Tip="Reload the DOM after the page structure changes"
+                             Text="DOM tree · hover to preview · click to reveal · Enter 查找下一个" />
+        <TextBox Grid.Column="2" Width="200" Margin="0,0,6,0" VerticalAlignment="Center"
+                 PlaceholderText="按 tag / id / class / 文本查找"
+                 Text="{Binding SearchText, Mode=TwoWay}"
+                 KeyDown="OnSearchKeyDown" />
+        <Button Grid.Column="3" Content="Refresh" ToolTip.Tip="Reload the DOM after the page structure changes"
                 Command="{Binding RefreshCommand}" />
       </Grid>
     </Border>
@@ -58,14 +79,26 @@
           </TreeView.Styles>
           <TreeView.ItemTemplate>
             <TreeDataTemplate DataType="vm:DomTreeNodeViewModel" ItemsSource="{Binding Children}">
-              <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="2,1" PointerEntered="OnDomNodePointerEntered">
-                <TextBlock Grid.Column="0" Width="14" Foreground="{DynamicResource SemiColorPrimary}"
+              <Grid ColumnDefinitions="Auto,Auto,Auto,*" Margin="2,1" PointerEntered="OnDomNodePointerEntered">
+                <TextBlock Grid.Column="0" Width="14" Foreground="#E11D48" FontWeight="Bold"
                            Text="{Binding PageHoverMarker}" />
-                <SelectableTextBlock Grid.Column="1" Classes="code" Foreground="#A12BAF" Text="{Binding Display}" />
-                <SelectableTextBlock Grid.Column="2" Classes="muted" Margin="8,0,0,0"
-                                     TextTrimming="CharacterEllipsis" Text="{Binding Preview}" />
-                <TextBlock Grid.Column="3" Margin="8,0,4,0" Foreground="{DynamicResource SemiColorText2}"
-                           Text="{Binding ChildSummary}" />
+                <!-- DevTools 式分段着色行:标签/属性/值/内联文本 -->
+                <ItemsControl Grid.Column="1" ItemsSource="{Binding Segments}" VerticalAlignment="Center">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DomTokenSegment">
+                      <TextBlock FontFamily="Consolas,monospace" Foreground="{Binding Brush}"
+                                 Text="{Binding Text}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <!-- 折叠时显示子元素数量提示,展开后消失 -->
+                <TextBlock Grid.Column="3" Margin="10,0,4,0" FontSize="10" Opacity="0.55"
+                           VerticalAlignment="Center"
+                           Text="{Binding CollapsedSummary}"
+                           IsVisible="{Binding CollapsedSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               </Grid>
             </TreeDataTemplate>
           </TreeView.ItemTemplate>

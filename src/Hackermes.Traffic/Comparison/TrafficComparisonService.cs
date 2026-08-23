@@ -1,3 +1,4 @@
+using Hackermes.Base.Cryptography;
 using Hackermes.Traffic.Models;
 using Hackermes.Traffic.Persistence;
 using Hackermes.Traffic.Repeater;
@@ -5,7 +6,6 @@ using Hackermes.Traffic.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace Hackermes.Traffic.Comparison;
@@ -340,7 +340,10 @@ public sealed class TrafficComparisonService : ITrafficComparisonService
 
     private static BodySummary Summarize(byte[] body, string? contentType)
     {
-        var hash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
+        // Bodies are immutable byte[] instances shared with the store, so the identity-
+        // keyed cache in BodySha256 never returns a stale digest and skips rehashing
+        // when the same snapshot is compared repeatedly (create/update/recalculate).
+        var hash = BodySha256.Of(body);
         if (body.Length == 0)
             return new BodySummary(BodyContentKind.Empty, 0, hash, contentType, string.Empty);
         var text = TryDecodeText(body, contentType);

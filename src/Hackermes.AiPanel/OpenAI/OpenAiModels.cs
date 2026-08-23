@@ -21,7 +21,13 @@ public sealed record OpenAiChatRequest(
 
 public sealed record ToolCallDelta(int Index, string? Id, string? Name, string? Arguments);
 
-public sealed record ChatStreamDelta(string? Content, ToolCallDelta? ToolCall, string? FinishReason);
+public sealed record StreamUsage(int PromptTokens, int CompletionTokens, int? TotalTokens);
+
+public sealed record ChatStreamDelta(
+    string? Content,
+    ToolCallDelta? ToolCall,
+    string? FinishReason,
+    StreamUsage? Usage = null);
 
 public interface IOpenAiChatClient
 {

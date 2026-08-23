@@ -7,16 +7,22 @@ namespace Hackermes.Traffic.History;
 public interface ITrafficHistoryPolicyStore
 {
     string StorageFilePath { get; }
+    string PolicySource { get; }
     TrafficHistoryPolicy Current { get; }
     TrafficHistoryPolicy Update(TrafficHistoryPolicy policy);
     void Reload();
+    /// <summary>Hot-swaps the backing policy file (e.g. per-workspace) and reloads from it.</summary>
+    TrafficHistoryPolicy SwitchStorage(string filePath, string source);
 }
 
 public sealed class TrafficHistoryPolicyStore : ITrafficHistoryPolicyStore
 {
+    public const string GlobalSource = "global";
+
     private const int SchemaVersion = 1;
     private readonly object _gate = new();
-    private readonly string _storageFilePath;
+    private string _storageFilePath;
+    private string _policySource = GlobalSource;
     private TrafficHistoryPolicy _current = Normalize(new TrafficHistoryPolicy());
 
     public TrafficHistoryPolicyStore()
@@ -31,6 +37,7 @@ public sealed class TrafficHistoryPolicyStore : ITrafficHistoryPolicyStore
     }
 
     public string StorageFilePath => _storageFilePath;
+    public string PolicySource { get { lock (_gate) return _policySource; } }
     public TrafficHistoryPolicy Current { get { lock (_gate) return _current; } }
 
     public TrafficHistoryPolicy Update(TrafficHistoryPolicy policy)
@@ -49,6 +56,23 @@ public sealed class TrafficHistoryPolicyStore : ITrafficHistoryPolicyStore
     {
         var document = VersionedJsonFile.ReadWithBackup<PolicyDocument>(_storageFilePath, IsValidDocument);
         lock (_gate) _current = document is null ? Normalize(new TrafficHistoryPolicy()) : Normalize(document.Policy);
+    }
+
+    public TrafficHistoryPolicy SwitchStorage(string filePath, string source)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            throw new ArgumentException("Storage file path is required.", nameof(filePath));
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var resolved = System.IO.Path.GetFullPath(filePath);
+        lock (_gate)
+        {
+            _policySource = source;
+            if (_storageFilePath.Equals(resolved, StringComparison.OrdinalIgnoreCase)) return _current;
+            _storageFilePath = resolved;
+            var document = VersionedJsonFile.ReadWithBackup<PolicyDocument>(resolved, IsValidDocument);
+            _current = document is null ? Normalize(new TrafficHistoryPolicy()) : Normalize(document.Policy);
+            return _current;
+        }
     }
 
     public static TrafficHistoryPolicy Normalize(TrafficHistoryPolicy policy)

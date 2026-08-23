@@ -60,8 +60,20 @@ public sealed record PacketBody(
 public interface IPacketArchiveService
 {
     Task<IReadOnlyList<PacketArchiveEntry>> ExportArchiveAsync(string? filter, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// One bounded batch of the filtered archive plus the total matched entry count, so
+    /// path-free (Agent) exchanges can walk stores larger than a single content envelope.
+    /// </summary>
+    Task<PacketArchivePage> ExportArchivePageAsync(PacketArchiveExchangeQuery query, CancellationToken cancellationToken);
     Task<int> ImportArchiveAsync(IReadOnlyList<PacketArchiveEntry> entries, CancellationToken cancellationToken);
 }
+
+/// <summary>Batch selector for bounded archive exchange.</summary>
+public sealed record PacketArchiveExchangeQuery(string? Filter, int Offset, int Limit);
+
+/// <summary>One batch of an archive exchange; <see cref="Total"/> is the full matched count.</summary>
+public sealed record PacketArchivePage(IReadOnlyList<PacketArchiveEntry> Entries, int Total);
 
 public enum PacketArchiveFormat { HackermesJson, Har }
 

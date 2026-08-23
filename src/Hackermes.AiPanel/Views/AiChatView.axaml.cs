@@ -5,6 +5,7 @@ using Hackermes.AiPanel.Tools;
 using Hackermes.AiPanel.Agent;
 using Hackermes.AiPanel.ViewModels;
 using Hackermes.Platform.Services;
+using System;
 
 namespace Hackermes.AiPanel.Views;
 
@@ -33,5 +34,25 @@ public partial class AiChatView : UserControl
         var dialog = new AiSettingsWindow(_settings, _secrets, _client, _policy, _skills);
         if (await dialog.ShowDialog<bool>(owner) && DataContext is AiChatViewModel viewModel)
             viewModel.Model = dialog.SavedModel;
+    }
+
+    private async void NewSession(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        var name = await PromptInputWindow.ShowAsync(owner, "新建会话", "会话名称",
+            $"新会话 {DateTimeOffset.Now:MM-dd HH:mm}");
+        if (name is null) return; // Cancelled: keep the current session untouched.
+        viewModel.NewSessionCommand.Execute(name.Length == 0 ? null : name);
+    }
+
+    private async void RenameSessionClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        if ((sender as Avalonia.Controls.MenuItem)?.DataContext is not AgentSessionOption option) return;
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        var name = await PromptInputWindow.ShowAsync(owner, "重命名会话", "会话名称", option.Name);
+        if (string.IsNullOrWhiteSpace(name)) return;
+        viewModel.RenameSession(option.Id, name);
     }
 }

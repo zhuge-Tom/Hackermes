@@ -42,6 +42,7 @@ public sealed class PacketParameterEntryPointTests
         Assert.Equal(AiToolRisk.Dangerous, agentTool.Risk);
         Assert.Contains("header", agentTool.InputSchema.GetRawText());
         Assert.Contains("cookie", agentTool.InputSchema.GetRawText());
+        Assert.Contains("multipart", agentTool.InputSchema.GetRawText());
         var agent = await agentTool.Handler(new ToolInvocation(agentTool.Name,
             JsonSerializer.SerializeToElement(new
             {
@@ -55,6 +56,37 @@ public sealed class PacketParameterEntryPointTests
         Assert.True(cli.Success);
         Assert.Contains("X-Mode: agent", service.Edits[0]);
         Assert.Contains("Cookie: sid=cli; theme=dark", service.Edits[1]);
+    }
+
+    [Fact]
+    public async Task Agent_and_cli_share_multipart_mutation_contract()
+    {
+        var service = new ParameterService();
+        var registry = new AiToolRegistry();
+        TrafficAiToolRegistrar.Register(registry, service);
+        var agentTool = registry.All.Single(item => item.Name == "packet_parameter_set");
+
+        var agent = await agentTool.Handler(new ToolInvocation(agentTool.Name,
+            JsonSerializer.SerializeToElement(new
+            {
+                id = "mp-1", side = "request", location = "multipart",
+                name = "note", occurrence = 0, value = "from agent"
+            })), CancellationToken.None);
+        var cli = await PacketCommandRegistrar.ExecuteAsync(service,
+            Context("param-set", "mp-1", "request", "multipart", "note", "0", "from cli"), CancellationToken.None);
+        var rejected = await agentTool.Handler(new ToolInvocation(agentTool.Name,
+            JsonSerializer.SerializeToElement(new
+            {
+                id = "mp-1", side = "request", location = "multipart",
+                name = "absent", occurrence = 3, value = "x"
+            })), CancellationToken.None);
+
+        Assert.True(agent.Success);
+        Assert.True(cli.Success);
+        Assert.Contains("name=\"note\"\r\n\r\nfrom agent\r\n", service.Edits[0]);
+        Assert.Contains("name=\"note\"\r\n\r\nfrom cli\r\n", service.Edits[1]);
+        Assert.False(rejected.Success);
+        Assert.Contains("was not found", rejected.Content);
     }
 
     [Fact]
@@ -88,10 +120,14 @@ public sealed class PacketParameterEntryPointTests
     private sealed class ParameterService : IPacketCommandService
     {
         private const string Raw = "GET / HTTP/1.1\r\nAuthorization: Bearer secret\r\nX-Mode: old\r\nCookie: sid=cookie-secret; theme=dark\r\n\r\n";
+        private const string MultipartRaw =
+            "POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=X-BOUND\r\n\r\n" +
+            "--X-BOUND\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nold value\r\n--X-BOUND--\r\n";
         public List<string> Edits { get; } = [];
         public Task<IReadOnlyList<PacketSummary>> ListAsync(string? filter, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<PacketSummary>>([]);
-        public Task<string?> GetRawAsync(string id, string side, CancellationToken cancellationToken) => Task.FromResult<string?>(Raw);
+        public Task<string?> GetRawAsync(string id, string side, CancellationToken cancellationToken) =>
+            Task.FromResult<string?>(id == "mp-1" ? MultipartRaw : Raw);
         public Task ReplayAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetInterceptionAsync(bool enabled, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task ContinueAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;

@@ -26,6 +26,69 @@ public partial class NetworkPanelViewModel : ViewModelBase
     [ObservableProperty]
     private NetworkEntry? _selected;
 
+    /// <summary>Burp 风格的请求原始报文(请求行 + 头部块 + 请求体)。</summary>
+    [ObservableProperty]
+    private string? _requestView;
+
+    /// <summary>Burp 风格的响应原始报文;响应体在选中后懒加载。</summary>
+    [ObservableProperty]
+    private string? _responseView;
+
+    private bool _isBodyLoading;
+
+    partial void OnSelectedChanged(NetworkEntry? value)
+    {
+        if (value is null)
+        {
+            RequestView = ResponseView = null;
+            return;
+        }
+
+        RequestView = Services.HttpPacketFormatter.FormatRequest(
+            value.Method, value.Url, value.RequestHeadersJson, value.RequestBody);
+        ResponseView = value.ResponseHeadersJson is null
+            ? "（暂无响应记录）"
+            : Services.HttpPacketFormatter.FormatResponse(value.Status, StatusPhrase(value), value.Url,
+                value.ResponseHeadersJson, value.ResponseBodyText);
+
+        // 响应体只在点开这一条时才取,避免对全量记录放大流量。
+        if (!value.IsResponseBodyLoaded && value.ResponseHeadersJson is not null && !_isBodyLoading)
+            _ = LoadBodyAsync(value);
+    }
+
+    private async System.Threading.Tasks.Task LoadBodyAsync(NetworkEntry entry)
+    {
+        _isBodyLoading = true;
+        try
+        {
+            var body = await _store.LoadResponseBodyAsync(entry);
+            entry.ResponseBodyText = body;
+            entry.DetailError = null;
+        }
+        catch (Exception exception)
+        {
+            entry.ResponseBodyText = $"(响应体读取失败: {exception.Message})";
+            entry.DetailError = exception.Message;
+        }
+        finally
+        {
+            entry.IsResponseBodyLoaded = true;
+            _isBodyLoading = false;
+            if (ReferenceEquals(Selected, entry) && entry.ResponseHeadersJson is not null)
+                ResponseView = Services.HttpPacketFormatter.FormatResponse(entry.Status, StatusPhrase(entry),
+                    entry.Url, entry.ResponseHeadersJson, entry.ResponseBodyText);
+        }
+    }
+
+    private static string StatusPhrase(NetworkEntry entry)
+    {
+        // StatusText 存的是 "200 OK" 形态;格式化器自己拼状态码,这里只留短语部分。
+        var prefix = entry.Status.ToString();
+        var text = entry.StatusText;
+        if (!text.StartsWith(prefix, StringComparison.Ordinal)) return text;
+        return text.Length > prefix.Length ? text[(prefix.Length + 1)..] : string.Empty;
+    }
+
     [ObservableProperty]
     private string _filterText = string.Empty;
 

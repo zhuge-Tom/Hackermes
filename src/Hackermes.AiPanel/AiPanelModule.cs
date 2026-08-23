@@ -28,11 +28,25 @@ public sealed class AiPanelModule : IModule
         services.AddSingleton<DefaultToolPolicyGate>();
         services.AddSingleton<IToolPolicyGate>(sp => sp.GetRequiredService<DefaultToolPolicyGate>());
         services.AddSingleton<IToolConfirmationService, AvaloniaToolConfirmationService>();
-        services.AddSingleton<AiToolDispatcher>();
+        services.AddSingleton(sp =>
+        {
+            var ai = sp.GetRequiredService<ISettingsService>().Load().Ai;
+            return new AiToolDispatcher(
+                sp.GetRequiredService<IAiToolRegistry>(),
+                sp.GetRequiredService<IToolPolicyGate>(),
+                sp.GetRequiredService<IToolConfirmationService>(),
+                TimeProvider.System,
+                AiToolDispatcher.DefaultSessionGrantLifetime,
+                Math.Clamp(ai.MaxToolResultCharacters, 1_000, 200_000),
+                TimeSpan.FromSeconds(Math.Clamp(ai.ToolCallTimeoutSeconds, 5, 3_600)));
+        });
         services.AddSingleton<HttpClient>();
         services.AddSingleton<IAgentSkillStore, AgentSkillStore>();
         services.AddSingleton<IAgentMemoryStore, AgentMemoryStore>();
+        services.AddSingleton<IAgentSessionStore, AgentSessionStore>();
         services.AddSingleton<AgentContextCompactor>();
+        services.AddSingleton<AcpContextRegistry>();
+        services.AddSingleton<AcpToolAdapter>();
         services.AddSingleton<IAgentArtifactStore, AgentArtifactStore>();
         services.AddSingleton<AgentWorkflowToolAdapter>();
         services.AddSingleton<OpenAiCompatibleClient>();
@@ -68,6 +82,8 @@ public sealed class AiPanelModule : IModule
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<AgentWorkflowToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        serviceProvider.GetRequiredService<AcpToolAdapter>()
+            .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         _ = serviceProvider.GetRequiredService<McpToolAdapter>().InitializeAsync(aiSettings);
 
         var dock = serviceProvider.GetRequiredService<IDockLayoutRegistry>();
@@ -99,7 +115,9 @@ public sealed class AiPanelModule : IModule
                         serviceProvider.GetRequiredService<ISettingsService>(),
                         serviceProvider.GetRequiredService<IAgentSkillStore>(),
                         serviceProvider.GetRequiredService<IAgentMemoryStore>(),
-                        serviceProvider.GetRequiredService<AgentContextCompactor>())
+                        serviceProvider.GetRequiredService<AgentContextCompactor>(),
+                        serviceProvider.GetRequiredService<IAgentSessionStore>(),
+                        serviceProvider.GetRequiredService<AcpContextRegistry>())
                     {
                         Model = aiSettings.Model
                     }

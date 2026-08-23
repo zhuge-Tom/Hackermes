@@ -20,7 +20,8 @@ public enum AssessmentFindingStatus { Unreviewed, InReview, Confirmed, FalsePosi
 public sealed record AssessmentScope(string Id, string Name, string AuthorizationReference, string OperatorId,
     IReadOnlyList<string> Targets, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, bool Revoked = false);
 
-public sealed record AssessmentStep(string AdapterId, string Input, int TimeoutSeconds = 30, int MaxOutputBytes = 262_144);
+public sealed record AssessmentStep(string AdapterId, string Input, int TimeoutSeconds = 30,
+    int MaxOutputBytes = 262_144, bool ContinueOnError = false);
 
 public sealed record AssessmentPlan(string Id, string ScopeId, string Name, IReadOnlyList<AssessmentStep> Steps,
     string CreatedBy, DateTimeOffset CreatedAt, string VersionHash);
@@ -186,12 +187,19 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
 
     public AssessmentScope CreateScope(string name, string authorizationReference, string operatorId, IReadOnlyList<string> targets, DateTimeOffset expiresAt)
     {
-        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(authorizationReference) || string.IsNullOrWhiteSpace(operatorId)) throw new ArgumentException("Scope name, authorization reference and operator are required.");
         if (expiresAt <= DateTimeOffset.UtcNow) throw new ArgumentException("Scope expiry must be in the future.");
         var normalized = targets.Where(IsSafeTarget).Select(value => value.Trim().ToLowerInvariant()).Distinct(StringComparer.Ordinal).Take(64).ToArray();
-        if (normalized.Length == 0) throw new ArgumentException("At least one exact hostname, loopback address or localhost target is required.");
-        var value = new AssessmentScope(Id(), Limit(name, 120), Limit(authorizationReference, 240), Limit(operatorId, 120), normalized, DateTimeOffset.UtcNow, expiresAt);
-        lock (_gate) { _document.Scopes.Add(value); AuditUnsafe(operatorId, "scope.create", value.Id, value.Name); SaveUnsafe(); }
+        if (normalized.Length == 0)
+            throw new ArgumentException("At least one exact hostname, loopback address, localhost target or '*' for an all-authorized scope is required.");
+        var allAuthorized = normalized.Contains("*", StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(name) && !allAuthorized)
+            throw new ArgumentException("Scope name is required for an exact-target scope.");
+        var normalizedName = string.IsNullOrWhiteSpace(name) ? "全部范围" : name;
+        var normalizedAuthorization = string.IsNullOrWhiteSpace(authorizationReference) ? "系统确认" : authorizationReference;
+        var normalizedOperator = string.IsNullOrWhiteSpace(operatorId) ? "system" : operatorId;
+        var value = new AssessmentScope(Id(), Limit(normalizedName, 120), Limit(normalizedAuthorization, 240),
+            Limit(normalizedOperator, 120), normalized, DateTimeOffset.UtcNow, expiresAt);
+        lock (_gate) { _document.Scopes.Add(value); AuditUnsafe(normalizedOperator, "scope.create", value.Id, value.Name); SaveUnsafe(); }
         return value;
     }
 
@@ -202,7 +210,8 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         var clean = steps.Select(step => AuthorizedToolCatalog.NormalizeStep(step, scope!.Targets)).ToArray();
         if (clean.Length == 0 || clean.Length > 32) throw new ArgumentException("A plan must have 1 to 32 bounded steps.");
         var id = Id();
-        var hash = Hash(scopeId + "\n" + name + "\n" + string.Join("\n", clean.Select(step => $"{step.AdapterId}|{step.Input}|{step.TimeoutSeconds}|{step.MaxOutputBytes}")));
+        var hash = Hash(scopeId + "\n" + name + "\n" + string.Join("\n", clean.Select(step =>
+            $"{step.AdapterId}|{step.Input}|{step.TimeoutSeconds}|{step.MaxOutputBytes}|{step.ContinueOnError}")));
         var plan = new AssessmentPlan(id, scopeId, Limit(name, 120), clean, Limit(actor, 120), DateTimeOffset.UtcNow, hash);
         lock (_gate) { _document.Plans.Add(plan); AuditUnsafe(actor, "plan.create", id, plan.Name); SaveUnsafe(); }
         return plan;
@@ -399,10 +408,29 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds));
                 var authorization = new AssessmentExecutionAuthorization(job.Id, plan.Id, approval.Id, scope.Id,
-                    job.RequestedBy, scope.Targets, DateTimeOffset.UtcNow.AddSeconds(Math.Min(step.TimeoutSeconds + 15, 135)));
-                var result = await _host.ExecuteAsync(step, authorization, timeout.Token).ConfigureAwait(false);
-                if (!result.Success) throw new InvalidOperationException(result.Error ?? "ToolHost execution failed.");
-                AddEvidence(job.Id, step.AdapterId, result.Output);
+                    job.RequestedBy, scope.Targets, DateTimeOffset.UtcNow.AddSeconds(step.TimeoutSeconds + 15));
+                try
+                {
+                    var result = await _host.ExecuteAsync(step, authorization, timeout.Token).ConfigureAwait(false);
+                    if (!result.Success)
+                    {
+                        if (!step.ContinueOnError)
+                            throw new InvalidOperationException(result.Error ?? "ToolHost execution failed.");
+                        AddEvidence(job.Id, step.AdapterId,
+                            $"warning: {result.Error ?? "ToolHost execution failed."}\n{result.Output}".TrimEnd());
+                        continue;
+                    }
+                    AddEvidence(job.Id, step.AdapterId, result.Output);
+                }
+                catch (OperationCanceledException) when (step.ContinueOnError && !cancellation.IsCancellationRequested)
+                {
+                    AddEvidence(job.Id, step.AdapterId, "warning: tool execution timed out; remaining tools will continue.");
+                }
+                catch (Exception exception) when (step.ContinueOnError)
+                {
+                    AddEvidence(job.Id, step.AdapterId,
+                        $"warning: {Limit(exception.Message, 500)}; remaining tools will continue.");
+                }
             }
             lock (_gate) { ReplaceJobUnsafe(job = job with { Status = AssessmentJobStatus.Completed, FinishedAt = DateTimeOffset.UtcNow }); AuditUnsafe(job.RequestedBy, "job.complete", job.Id, "ok"); SaveUnsafe(); }
         }
@@ -560,7 +588,14 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         if (createBackup && File.Exists(_path)) File.Copy(_path, _path + ".bak", true);
         File.Move(temporary, _path, true);
     }
-    private static bool IsSafeTarget(string value) => !string.IsNullOrWhiteSpace(value) && value.Trim().Length <= 253 && value.All(character => char.IsLetterOrDigit(character) || character is '.' or '-' or ':');
+    /// <summary>Exact targets only, plus the reserved "*" wildcard used by all-authorized scopes.</summary>
+    private static bool IsSafeTarget(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > 253) return false;
+        if (trimmed == "*") return true;
+        return trimmed.All(character => char.IsLetterOrDigit(character) || character is '.' or '-' or ':');
+    }
     private static string Id() => Guid.NewGuid().ToString("N");
     private static string Limit(string? value, int max) => (value ?? string.Empty).Trim()[..Math.Min((value ?? string.Empty).Trim().Length, max)];
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

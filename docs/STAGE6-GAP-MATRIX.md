@@ -12,16 +12,16 @@
 | 请求拦截、继续、丢弃 | ✅ | ✅ | ✅ | `IPacketCommitService` 返回统一最终状态、前后摘要、audit id/error code；UI 摘要、CLI `key=value`、Agent JSON；真实 WebView2/CDP loopback 已通过暂停/继续 | 基础阶段无缺口 |
 | 响应拦截与 Fulfill | ✅ | ✅ | ✅ | UI 有独立 Response Intercept；CLI/Agent 四态拦截；响应 Edit 通过统一提交结果报告 Fulfilled 与 audit id | `packet intercept on|off` 保留为仅控制请求拦截的兼容入口 |
 | 原始 HTTP 文本编辑并应用 | ✅ | ✅ | ✅ | Request/Response editor、`packet edit`、`packet_edit` 共用 `IPacketCommitService`；正文编辑统一重写单一 Content-Length 并移除冲突 Transfer-Encoding；真实 loopback 已断言服务端收到请求改写后的精确字节、浏览器收到 Fulfill 后的精确字节 | 基础阶段无缺口 |
-| 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters`、CLI `packet param-*`、Agent `packet_parameter*` 共享 query/form/顶层 JSON/重复 Header/Cookie occurrence 契约；修改有界并防 Header 注入，Agent 遮蔽 Cookie/认证值 | UI 修改先应用到文本编辑器、CLI/Agent 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON 与 multipart |
-| 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor 固定显示长度/SHA-256/类型/字符集，支持 64 KiB 前后/跳转、实际范围和进度；`body-info/body-read`；`packet_body_info/chunk` | 超大 body 的完整 SHA-256 仍为 O(n)，尚无增量缓存 |
+| 结构化参数分析与修改 | ✅ | ✅ | ✅ | Workbench `Parameters`、CLI `packet param-*`、Agent `packet_parameter*` 共享 query/form/顶层 JSON/重复 Header/Cookie/multipart form-data occurrence 契约；修改有界并防 Header 注入，Agent 遮蔽 Cookie/认证值 | UI 修改先应用到文本编辑器、CLI/Agent 直接提交 held packet，交互语义不同；尚不支持嵌套 JSON；multipart 走 raw 字符串路径，二进制 part 仅显示占位、字节级修改需用 body-edit |
+| 大 body 元数据与范围读取 | ✅ | ✅ | ✅ | Binary editor 固定显示长度/SHA-256/类型/字符集，支持 64 KiB 前后/跳转、实际范围和进度；`body-info/body-read`；`packet_body_info/chunk` | 完整 SHA-256 已按不可变 byte[] 引用做 memoize 缓存（编辑即新实例，不可能返回陈旧值），对比快照路径（Comparer `Summarize`）已同样接入 |
 | Hex/Base64 Replace/Insert/Delete | ✅ | ✅ | ✅ | `IPacketEditDraftService` 保存首次快照、前后长度/SHA-256/Content-Length和最近失败；Binary editor 可 Refresh/Discard；CLI `draft-list/show/discard`；Agent `packet_edit_drafts/draft/discard`；成功与失败提交进入元数据审计 | 仍需真实 echo 对修改后字节、响应 Fulfill 与 CDP 失败重试执行验收 |
 | 请求重放 | ✅ | ✅ | ✅ | Replay；`packet replay`；`packet_replay` | 已具备基本对等性；后续应支持显式超时和取消结果 |
 | Repeater 草稿与多轮历史 | ✅ | ✅ | ✅ | Repeater Workbench 可选择任意持久 send-result，以稳定 `DraftId + ResultId` 比较并保存持久 Comparison Session；发送支持 0.1–600 秒超时与取消并持久化 `TimedOut` / `Cancelled`；CLI `repeater send <id> [timeoutSeconds]`；Agent `repeater_send` 可传 `timeoutSeconds`；工作台命令定向验证已通过 | 可继续增加跨工作台拖放来源 |
-| 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 使用系统 JSON picker、覆盖/replace 确认和最近路径；`rule ...`；`traffic_rule_list/change` | 复杂 request/response edit 规则没有完整表单 |
+| 持久拦截规则 | ✅ | ✅ | ✅ | Rules Workbench 使用系统 JSON picker、覆盖/replace 确认和最近路径；`rule ...`；`traffic_rule_list/change`；工作台高级编辑区支持 request rewrite / response fulfill 完整表单（URL/method/header 行/body、状态码），可加载选中规则回填并保存更新 | CLI `rule add` 与 Agent `traffic_rule_change` 仍仅 pause/drop，复杂规则经表单或 JSON 导入创建；二进制 body 表单不回显（仍走 JSON 导入/body-edit） |
 | 分析标注与复核状态 | ✅ | ✅ | ✅ | Workbench `Annotation` 页维护 starred、tags、note、review status，支持精确标签/状态筛选、清除筛选与删除；`annotation list/show/set/delete/prune`；`packet_annotation_get/list/set/delete/prune`；`TrafficAnnotationService` 版本化 JSON 原子持久化；工作台命令定向验证已通过 | 尚无批量标注；标注引用的包被清理后需明确自动 prune 策略 |
-| HAR / Hackermes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench 使用系统 HAR/JSON picker、覆盖确认和最近路径；`packet export/import`；Agent 只交换有限内容、不接受路径 | Agent 大归档仍需先过滤、分批交换，且导出内容可能包含 body secrets |
-| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用版本化持久化服务；历史支持全局及精确主机/`*.domain` 条数容量配额、保留期、自动清理、统计与显式清空，三端共享策略 | 尚无按工作区隔离的配额配置 |
-| 操作安全与审计 | ✅ | ✅ | ✅ | 修改、Discard、继续、丢弃、Fulfill、重放和规则执行均进入元数据审计；三端共享 ECDSA P-256 签名导出/离线验签及可选指纹信任固定，不保存原始包；DPAPI 当前用户密钥复用、损坏恢复和轮换后旧指纹拒绝已有验收测试，默认密钥文件的真实跨重启指纹验证已通过 | 尚无撤销、操作者身份和可信指纹分发机制 |
+| HAR / Hackermes JSON 导入导出 | ✅ | ✅ | ✅ | Traffic Workbench 使用系统 HAR/JSON picker、覆盖确认和最近路径；`packet export/import`；Agent 只交换有限内容、不接受路径，`packet_archive_export` 支持 offset/limit 分批（信封带 total，可遍历大归档） | Agent 导出内容本身仍为全量包数据，可能包含 body secrets（Dangerous 确认 + 工具描述明示；单批 ≤500 条 / 2 MiB） |
+| 历史、Repeater、Comparer 跨重启 | ✅ | ✅ | ✅ | 共用版本化持久化服务；历史支持全局及精确主机/`*.domain` 条数容量配额、保留期、自动清理、统计与显式清空，三端共享策略；策略文件按活动工作区解析到 `<workspace>/.hackermes/traffic-history-policy.json`（无工作区回退全局文件），切换时热替换并立即应用，stats 标注 `policySource=workspace/global` | 数据面（历史条目本身）仍为全局单份，按工作区分实例/打标属更大改造 |
+| 操作安全与审计 | ✅ | ✅ | ✅（治理 CLI） | 修改、Discard、继续、丢弃、Fulfill、重放和规则执行均进入元数据审计（含操作者身份，支持本地多档案 `identity adopt/use`，活动档案自动盖入审计与签名负载）；三端共享 ECDSA P-256 签名导出/离线验签及可选指纹信任固定；本地信任文件 `audit-signing-trust.v1.json` 提供可信指纹分发：adopt 后进入 allowlist 验证，rotate 单次原子退役旧代并销毁旧私钥（历史文档仍可离线验签），revoke 支持未知 keyId 黑名单 | 身份与密钥治理仅限操作者 CLI（`identity` / `signing-keys`），刻意不进 Agent 工具面；外部身份提供方仍未做 |
 
 ## 下一阶段优先级
 
@@ -47,8 +47,8 @@
 
 ### P2：可审计性与大数据体验
 
-- 为审计补充操作者身份、密钥轮换和可信指纹分发；签名导出源码入口已覆盖三端。
-- 缓存超大 body 摘要，并增加按工作区隔离的历史配额。
+- ~~为审计补充操作者身份、密钥轮换和可信指纹分发~~（操作者身份已随审计链落地；密钥轮换/撤销/信任分发经 `signing-keys` CLI + 本地信任文件完成，见"操作安全与审计"行）；签名导出源码入口已覆盖三端。
+- ~~缓存超大 body 摘要~~（已按数组引用 memoize）与~~按工作区隔离的历史配额~~（策略文件已按工作区解析并热替换）均已完成；评估报告 ECDSA 签名导出/离线验签已落地（CLI `assessment report-export/report-verify`、Agent `assessment_report_export/verify`、ToolHost `--verify-report`）。
 - 为 Finding 增加自动切换目标编辑页和插件式分析器发现。
 
 ## 完成门槛

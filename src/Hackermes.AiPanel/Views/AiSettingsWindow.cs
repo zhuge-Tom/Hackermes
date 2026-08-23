@@ -27,8 +27,10 @@ public sealed class AiSettingsWindow : Window
     private readonly ComboBox _model = new() { PlaceholderText = "请先测试连接并获取模型" };
     private readonly TextBox _apiKey = new() { PasswordChar = '●' };
     private readonly ComboBox _permission = new();
-    private readonly NumericUpDown _rounds = new() { Minimum = 1, Maximum = 50, Increment = 1 };
-    private readonly NumericUpDown _contextCharacters = new() { Minimum = 4_000, Maximum = 120_000, Increment = 1_000 };
+    private readonly NumericUpDown _rounds = new() { Minimum = 1, Maximum = 256, Increment = 1 };
+    private readonly NumericUpDown _contextCharacters = new() { Minimum = 4_000, Maximum = 600_000, Increment = 1_000 };
+    private readonly NumericUpDown _toolResultCharacters = new() { Minimum = 1_000, Maximum = 100_000, Increment = 1_000 };
+    private readonly NumericUpDown _toolTimeout = new() { Minimum = 5, Maximum = 3_600, Increment = 5 };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     private readonly Button _testButton = new() { Content = "测试连接", MinWidth = 92 };
 
@@ -132,9 +134,11 @@ public sealed class AiSettingsWindow : Window
             TextWrapping = TextWrapping.Wrap
         });
         form.Children.Add(Field("上下文上限（字符）", _contextCharacters));
+        form.Children.Add(Field("单条工具结果上限（字符）", _toolResultCharacters));
+        form.Children.Add(Field("工具调用超时（秒）", _toolTimeout));
         form.Children.Add(new TextBlock
         {
-            Text = "上下文压缩与持久记忆由系统内部自动管理，不保存 API Key 或工具原始敏感数据。",
+            Text = "上下文压缩与持久记忆由系统内部自动管理，不保存 API Key 或工具原始敏感数据。超长工具结果会在截断后附截断标记；超时调用会取消并把原因返回给模型。",
             Opacity = .65,
             TextWrapping = TextWrapping.Wrap
         });
@@ -162,6 +166,8 @@ public sealed class AiSettingsWindow : Window
         _permission.SelectedItem = PermissionOption.All.First(option => option.Mode == value.PermissionMode);
         _rounds.Value = value.MaxToolRounds;
         _contextCharacters.Value = value.MaxContextCharacters;
+        _toolResultCharacters.Value = value.MaxToolResultCharacters;
+        _toolTimeout.Value = value.ToolCallTimeoutSeconds;
     }
 
     private void ApplyPreset()
@@ -208,8 +214,8 @@ public sealed class AiSettingsWindow : Window
             var endpoint = (_endpoint.Text ?? string.Empty).Trim().TrimEnd('/');
             var resolved = AiProviderPresets.ResolveChatEndpoint(endpoint);
             var model = RequiredModel();
-            var rounds = (int)(_rounds.Value ?? 12);
-            var contextCharacters = (int)(_contextCharacters.Value ?? 24_000);
+            var rounds = (int)(_rounds.Value ?? 48);
+            var contextCharacters = (int)(_contextCharacters.Value ?? 120_000);
             var permission = (_permission.SelectedItem as PermissionOption)?.Mode ?? AiPermissionMode.RequestApproval;
 
             _settings.Update(s =>
@@ -221,6 +227,8 @@ public sealed class AiSettingsWindow : Window
                 s.Ai.PermissionMode = permission;
                 s.Ai.MaxToolRounds = rounds;
                 s.Ai.MaxContextCharacters = contextCharacters;
+                s.Ai.MaxToolResultCharacters = (int)(_toolResultCharacters.Value ?? 12_000);
+                s.Ai.ToolCallTimeoutSeconds = (int)(_toolTimeout.Value ?? 120);
                 // Memory is an internal invariant, no longer a user-facing toggle.
                 s.Ai.MemoryEnabled = true;
             }, SettingsSection.Ai);

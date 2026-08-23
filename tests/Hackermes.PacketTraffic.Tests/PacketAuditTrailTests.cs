@@ -54,6 +54,71 @@ public sealed class PacketAuditTrailTests : IDisposable
         Assert.Equal("one", result[0].PacketId);
     }
 
+    [Fact]
+    public void Record_StampsOperatorFromProviderAtTheSingleSeam()
+    {
+        var trail = new PacketAuditTrail(PathName, () => "analyst-one");
+        trail.Record(Entry("stamped"));
+        trail.Record(Entry("explicit", null) with { Operator = "explicit-operator" });
+
+        var entries = new PacketAuditTrail(PathName, () => "analyst-one").Query(new PacketAuditQuery());
+        Assert.Equal("analyst-one", entries.Single(e => e.PacketId == "stamped").Operator);
+        Assert.Equal("explicit-operator", entries.Single(e => e.PacketId == "explicit").Operator);
+    }
+
+    [Fact]
+    public void Record_SanitizesOperatorAndPersistsIt()
+    {
+        var trail = new PacketAuditTrail(PathName, () => "  padded name exceeding sixty four characters in total length limit  ");
+        trail.Record(Entry("sanitized"));
+
+        var saved = Assert.Single(trail.Query(new PacketAuditQuery()));
+        Assert.Equal(64, saved.Operator!.Length);
+        Assert.StartsWith("padded", saved.Operator);
+
+        var empty = new PacketAuditTrail(PathName, () => "   ");
+        empty.Record(Entry("blank"));
+        Assert.Null(empty.Query(new PacketAuditQuery()).Single(e => e.PacketId == "blank").Operator);
+    }
+
+    [Fact]
+    public void Load_AcceptsLegacyEntriesWithoutOperatorField()
+    {
+        // Mirrors a v0.8.0 audit file: same schema version, entries without an operator member.
+        var sha = new string('a', 64);
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(PathName, $$"""
+        {
+          "version": 1,
+          "entries": [
+            {
+              "auditId": "legacy-1",
+              "timestamp": "2026-08-14T00:00:00Z",
+              "entryPoint": "workbench",
+              "operation": 0,
+              "packetId": "legacy",
+              "side": "request",
+              "before": { "length": 3, "sha256": "{{sha}}", "contentLength": "3" },
+              "after": { "length": 3, "sha256": "{{sha}}", "contentLength": "3" },
+              "result": 1
+            }
+          ]
+        }
+        """);
+
+        var restored = Assert.Single(new PacketAuditTrail(PathName).Query(new PacketAuditQuery()));
+        Assert.Equal("legacy", restored.PacketId);
+        Assert.Null(restored.Operator);
+    }
+
+    [Fact]
+    public void Record_RejectsControlCharactersInOperator()
+    {
+        var trail = new PacketAuditTrail(PathName);
+        Assert.Throws<ArgumentException>(() => trail.Record(Entry("bad") with { Operator = "bad\u0001operator" }));
+        Assert.Throws<ArgumentException>(() => trail.Record(Entry("long") with { Operator = new string('x', 65) }));
+    }
+
     private static PacketAuditEntry Entry(string packetId, string? error = null)
     {
         var version = new PacketEditVersion(3, new string('a', 64), "3");

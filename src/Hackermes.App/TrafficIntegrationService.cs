@@ -1,4 +1,5 @@
 using Hackermes.Automation.Packet;
+using Hackermes.Base.Cryptography;
 using Hackermes.Base.Events;
 using Hackermes.Cdp.Session;
 using Hackermes.Inspector.ViewModels;
@@ -77,6 +78,14 @@ public sealed class TrafficIntegrationService :
     public event Action? Changed;
     public event Action? RulesChanged;
     public event Action? RepeaterChanged;
+    public event Action? HistoryPolicyChanged;
+
+    /// <summary>
+    /// Raised by the workspace policy isolation module after it switched the policy
+    /// file and applied it, so workbench views can refresh history statistics without
+    /// a manual refresh. Must be called on the UI thread (workspace events are).
+    /// </summary>
+    public void NotifyHistoryPolicyChanged() => HistoryPolicyChanged?.Invoke();
 
     public IReadOnlyList<PacketAuditEntry> QueryAudit(PacketAuditQuery query) => _audit.Query(query);
     public string Export(PacketAuditQuery query) => _auditExports.Export(query);
@@ -128,7 +137,7 @@ public sealed class TrafficIntegrationService :
         _audit.Query(new PacketAuditQuery(exchangeId, Limit: limit)).Select(entry => new TrafficAuditItem(
             entry.Timestamp, entry.EntryPoint, entry.Operation.ToString(), entry.Side,
             FormatAuditVersion(entry.Before), FormatAuditVersion(entry.After),
-            entry.Result.ToString(), entry.ErrorCode, entry.RuleId, entry.RuleAction)).ToArray();
+            entry.Result.ToString(), entry.ErrorCode, entry.RuleId, entry.RuleAction, entry.Operator)).ToArray();
 
     public TrafficHistoryOverview GetHistoryOverview() => ToHistoryOverview(_history.GetStatistics());
 
@@ -270,15 +279,23 @@ public sealed class TrafficIntegrationService :
     public Task AddRuleAsync(TrafficRuleDraft draft, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(draft.Id)) throw new ArgumentException("Rule id is required.");
-        if (!Enum.TryParse<TrafficStage>(draft.Stage, true, out var stage))
-            throw new ArgumentException("Stage must be request or response.");
-        var behavior = draft.Behavior.Trim().ToLowerInvariant();
-        if (behavior is not ("pause" or "drop")) throw new ArgumentException("Behavior must be pause or drop.");
-        _rules.Add(new TrafficRule(draft.Id.Trim(), draft.UrlPattern.Trim(),
-            string.IsNullOrWhiteSpace(draft.Method) || draft.Method == "*" ? null : draft.Method.Trim(),
-            stage, Fail: behavior == "drop", Pause: behavior == "pause"));
+        _rules.Add(TrafficRuleDraftMapper.BuildRule(draft));
         return Task.CompletedTask;
+    }
+
+    public Task UpdateRuleAsync(TrafficRuleDraft draft, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _rules.Update(TrafficRuleDraftMapper.BuildRule(draft));
+        return Task.CompletedTask;
+    }
+
+    public Task<TrafficRuleDraft?> GetRuleAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        var rule = _rules.Get(id);
+        return Task.FromResult(rule is null ? null : TrafficRuleDraftMapper.ToDraft(rule));
     }
 
     public Task SetRuleEnabledAsync(string id, bool enabled, CancellationToken cancellationToken)
@@ -446,15 +463,27 @@ public sealed class TrafficIntegrationService :
         string? filter, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<PacketArchiveEntry>>(ResolveArchiveEntries(filter));
+    }
+
+    public Task<PacketArchivePage> ExportArchivePageAsync(
+        PacketArchiveExchangeQuery query, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(PacketArchiveContent.Page(ResolveArchiveEntries(query.Filter), query));
+    }
+
+    private IReadOnlyList<PacketArchiveEntry> ResolveArchiveEntries(string? filter)
+    {
         IEnumerable<TrafficMessage> items = _store.Read(5000, _activePageId);
         if (!string.IsNullOrWhiteSpace(filter))
             items = items.Where(item => item.Url.Contains(filter, StringComparison.OrdinalIgnoreCase)
                 || item.Method.Contains(filter, StringComparison.OrdinalIgnoreCase));
-        return Task.FromResult<IReadOnlyList<PacketArchiveEntry>>(items.Select(item =>
+        return items.Select(item =>
             new PacketArchiveEntry(item.Id, item.CapturedAt, FormatArchiveRequest(item),
                 item.ResponseStatus is null ? null : FormatResponse(item),
                 ToArchiveBody(item.RequestBody, item.RequestHeaders),
-                ToArchiveBody(item.ResponseBody, item.ResponseHeaders))).ToArray());
+                ToArchiveBody(item.ResponseBody, item.ResponseHeaders))).ToArray();
     }
 
     public Task<int> ImportArchiveAsync(
@@ -535,7 +564,7 @@ public sealed class TrafficIntegrationService :
     {
         cancellationToken.ThrowIfCancellationRequested();
         var (body, contentType, charset) = GetBody(id, side);
-        return Task.FromResult(PacketBodyChunker.Describe(body, contentType, charset));
+        return Task.FromResult(new PacketBodyDescriptor(body.LongLength, BodySha256.Of(body), contentType, charset));
     }
 
     public async Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(
@@ -685,7 +714,7 @@ public sealed class TrafficIntegrationService :
     public string SetParameter(string rawPacket, string location, string name, int occurrence, string value)
     {
         if (!Enum.TryParse<HttpParameterLocation>(location, true, out var parsed))
-            throw new ArgumentException("Location must be query, form, json, header or cookie.");
+            throw new ArgumentException("Location must be query, form, json, header, cookie or multipart.");
         var updated = HttpPacketParameters.Set(HttpPacketCodec.Parse(rawPacket), parsed, name, occurrence, value);
         return HttpPacketCodec.Format(updated, false);
     }
@@ -932,7 +961,7 @@ public sealed class TrafficIntegrationService :
     }
 
     private static PacketEditVersion ToEditVersion(byte[] body, IReadOnlyList<TrafficHeader> headers) =>
-        new(body.LongLength, PacketBodyChunker.Describe(body).Sha256,
+        new(body.LongLength, BodySha256.Of(body),
             headers.FirstOrDefault(header => header.Name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))?.Value);
 
     private static PacketEditVersion AuditVersion(TrafficMessage item, string side) =>
@@ -1209,7 +1238,8 @@ public sealed class TrafficIntegrationService :
         value.OldestCapture, value.NewestCapture, value.Policy.MaxEntries,
         value.Policy.MaxStorageBytes, value.Policy.RetentionDays, value.Policy.AutoPrune,
         (value.Policy.SiteQuotas ?? []).Select(quota =>
-            new TrafficHistorySiteQuotaItem(quota.HostPattern, quota.MaxEntries, quota.MaxStorageBytes)).ToArray());
+            new TrafficHistorySiteQuotaItem(quota.HostPattern, quota.MaxEntries, quota.MaxStorageBytes)).ToArray(),
+        value.PolicySource);
 
     public void Dispose()
     {

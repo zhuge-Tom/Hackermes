@@ -12,8 +12,11 @@ namespace Hackermes.AiPanel.Tools;
 public sealed class CommandToolAdapter
 {
     // 文件路径型命令不直接暴露给模型；它们需经过独立文件工具的路径约束与策略检查。
+    // annotation / traffic-history / compare-session 已有专用强类型 AI 工具
+    // （packet_annotation_*、traffic_history_*、comparison_*），单字符串投影只会诱导参数错误。
     private static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
-        { "help", "timeline", "save", "load", "packet", "rule", "repeater", "compare", "agent", "assessment" };
+        { "help", "timeline", "save", "load", "packet", "rule", "repeater", "compare", "compare-session",
+          "agent", "assessment", "annotation", "traffic-history" };
     private readonly CommandRegistry _commands;
 
     public CommandToolAdapter(CommandRegistry commands) => _commands = commands;

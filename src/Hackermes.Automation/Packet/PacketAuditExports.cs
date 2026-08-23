@@ -41,9 +41,19 @@ public interface IPacketAuditExportService
     PacketAuditVerification Verify(string content, string? expectedKeyId = null);
 }
 
+/// <summary>
+/// Optional local trust anchors for signed exports. When attached, a document's keyId must be
+/// listed (trusted or retired, never revoked) in addition to being cryptographically valid.
+/// Absent policy keeps the legacy behaviour: self-consistency plus caller-side pinning only.
+/// </summary>
+public interface IPacketAuditTrustPolicy
+{
+    bool IsTrusted(string keyId);
+}
+
 /// <summary>Creates bounded, metadata-only audit documents verifiable without the private signing key.</summary>
-public sealed class PacketAuditExportService(IPacketAuditTrail audit, IPacketAuditSigningKey signingKey)
-    : IPacketAuditExportService
+public sealed class PacketAuditExportService(IPacketAuditTrail audit, IPacketAuditSigningKey signingKey,
+    IPacketAuditTrustPolicy? trustPolicy = null) : IPacketAuditExportService
 {
     public const int SchemaVersion = 1;
     public const int MaximumEntries = 500;
@@ -92,6 +102,8 @@ public sealed class PacketAuditExportService(IPacketAuditTrail audit, IPacketAud
             var keyId = Fingerprint(publicKey);
             if (!keyId.Equals(document.Payload.KeyId, StringComparison.OrdinalIgnoreCase))
                 return Invalid("key_id_mismatch", keyId, document);
+            if (trustPolicy is not null && !trustPolicy.IsTrusted(keyId.Trim()))
+                return Invalid("untrusted_key", keyId, document);
             if (!string.IsNullOrWhiteSpace(expectedKeyId) &&
                 !keyId.Equals(expectedKeyId.Trim(), StringComparison.OrdinalIgnoreCase))
                 return Invalid("untrusted_key", keyId, document);

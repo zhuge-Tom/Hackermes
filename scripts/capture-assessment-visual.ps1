@@ -203,22 +203,69 @@ try {
         try { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and $_.Current.Name -eq $assessmentName } catch { $false }
     }) | Select-Object -First 1
     if (-not $assessment) { throw 'UI Automation could not locate the authorized-assessment tab.' }
-    Send-ElementClick $assessment $windowHandle
+    # At the minimum window size the content tab strip overflows and clips the
+    # rightmost tab; UIA reports unclipped bounds, so a center click would land
+    # on the right dock panel. Scroll the tab into view when the pattern is
+    # available, and bias the click to the left edge of the header, which stays
+    # visible while the strip is not scrolled.
+    $scrollHost = $assessment
+    try {
+        $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+        $scrollPattern = $null
+        for ($i = 0; $i -lt 4 -and $scrollHost; $i++) {
+            if ($scrollHost.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scrollPattern) -and
+                $scrollPattern) {
+                ([Windows.Automation.ScrollItemPattern]$scrollPattern).ScrollIntoView()
+                Start-Sleep -Milliseconds 400
+                $root = [Windows.Automation.AutomationElement]::FromHandle($windowHandle)
+                $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+                $assessment = @($all | Where-Object {
+                    try { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and $_.Current.Name -eq $assessmentName } catch { $false }
+                }) | Select-Object -First 1
+                if (-not $assessment) { throw 'UI Automation could not re-locate the authorized-assessment tab after scrolling.' }
+                break
+            }
+            $scrollHost = $walker.GetParent($scrollHost)
+        }
+    }
+    catch { throw "Scrolling the assessment tab into view failed: $($_.Exception.Message)" }
+    # Click the tab ITEM's left edge (icon sliver), not the text: when the strip
+    # overflows, only the leftmost sliver of the clipped tab stays visible and
+    # the text element starts further right than the clip line.
+    $clickTarget = $assessment
+    try {
+        $walker2 = [Windows.Automation.TreeWalker]::ControlViewWalker
+        $ancestor = $walker2.GetParent($assessment)
+        for ($i = 0; $i -lt 4 -and $ancestor; $i++) {
+            if ($ancestor.Current.ControlType -eq [Windows.Automation.ControlType]::ListItem) { $clickTarget = $ancestor; break }
+            $ancestor = $walker2.GetParent($ancestor)
+        }
+    } catch { }
+    $assessmentBounds = $clickTarget.Current.BoundingRectangle
+    $clickPoint = New-Object HackermesVisualNative+POINT
+    $clickPoint.X = [int]($assessmentBounds.Left + [Math]::Min(5, $assessmentBounds.Width / 2))
+    $clickPoint.Y = [int]($assessmentBounds.Top + $assessmentBounds.Height / 2)
+    if (-not [HackermesVisualNative]::ScreenToClient($windowHandle, [ref]$clickPoint)) {
+        throw 'ScreenToClient failed for the assessment tab click.'
+    }
+    $clickParameter = [IntPtr]((($clickPoint.Y -band 0xffff) -shl 16) -bor ($clickPoint.X -band 0xffff))
+    [void][HackermesVisualNative]::PostMessage($windowHandle, 0x0201, [IntPtr]1, $clickParameter)
+    [void][HackermesVisualNative]::PostMessage($windowHandle, 0x0202, [IntPtr]0, $clickParameter)
     Start-Sleep -Seconds 3
 
     $windowHandle = Wait-ApplicationWindow $app
     $root = [Windows.Automation.AutomationElement]::FromHandle($windowHandle)
     $rendered = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
-    $createScopeName = -join ([char[]](0x521b,0x5efa,0x6388,0x6743,0x8303,0x56f4))
-    if (-not @($rendered | Where-Object { try { $_.Current.Name -eq $createScopeName } catch { $false } })) {
+    $confirmRunName = -join ([char[]](0x786e,0x8ba4,0x6388,0x6743,0x5e76,0x6267,0x884c))
+    if (-not @($rendered | Where-Object { try { $_.Current.Name -eq $confirmRunName } catch { $false } })) {
         throw 'The assessment workspace did not become active.'
     }
     $assessmentTabName = -join ([char[]](0x6388,0x6743,0x8bc4,0x4f30))
-    $scopeStageName = -join ([char[]](0x31,0x20,0x20,0x6388,0x6743,0x8303,0x56f4))
-    $planStageName = -join ([char[]](0x32,0x20,0x20,0x56fa,0x5b9a,0x8ba1,0x5212))
-    $approvalStageName = -join ([char[]](0x33,0x20,0x20,0x5ba1,0x6279,0x4e0e,0x6267,0x884c))
+    $authorizationExecutionName = -join ([char[]](0x6388,0x6743,0x4e0e,0x6267,0x884c))
+    $assessmentToolsName = -join ([char[]](0x8bc4,0x4f30,0x5de5,0x5177))
+    $stepInputName = -join ([char[]](0x6b65,0x9aa4,0x8f93,0x5165))
     Assert-NamedElementsInsideWindow $root $rendered @(
-        $assessmentTabName, $createScopeName, $scopeStageName, $planStageName, $approvalStageName)
+        $assessmentTabName, $authorizationExecutionName, $confirmRunName, $assessmentToolsName, $stepInputName)
     $windowBounds = $root.Current.BoundingRectangle
     $theme = @($rendered | Where-Object {
         try {
@@ -268,8 +315,8 @@ try {
         dpi = $dpi; scalePercent = $hostScalePercent
         validation = $validation
         window = [ordered]@{ requestedWidth = $Width; requestedHeight = $Height; captured = $lightCapture }
-        layoutSentinels = @($assessmentTabName, $createScopeName, $scopeStageName, $planStageName, $approvalStageName)
-        layoutSentinelPolicy = 'All lifecycle sentinels have non-zero bounds and remain horizontally inside the main window; vertical lifecycle overflow is intentionally reachable through its ScrollViewer.'
+        layoutSentinels = @($assessmentTabName, $authorizationExecutionName, $confirmRunName, $assessmentToolsName, $stepInputName)
+        layoutSentinelPolicy = 'All primary quick-run sentinels have non-zero bounds and remain horizontally inside the main window; vertical overflow is intentionally reachable through its ScrollViewer.'
         browserProfileRoot = $profileRoot; dataRoot = $dataRoot
         light = [ordered]@{ path = $lightPath; sha256 = (Get-FileHash $lightPath -Algorithm SHA256).Hash.ToLowerInvariant() }
         dark = [ordered]@{ path = $darkPath; sha256 = (Get-FileHash $darkPath -Algorithm SHA256).Hash.ToLowerInvariant() }

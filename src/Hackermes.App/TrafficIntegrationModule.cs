@@ -1,9 +1,12 @@
 using Hackermes.Automation.Commands;
 using Hackermes.Automation.Packet;
 using Hackermes.AiPanel.Tools;
+using Hackermes.Assessment;
 using Hackermes.Base;
+using Hackermes.Base.Events;
 using Hackermes.Inspector.ViewModels;
 using Hackermes.Inspector.Views;
+using Hackermes.Platform.Events;
 using Hackermes.Platform.Registries;
 using Hackermes.Platform.Services;
 using Hackermes.Traffic.Rules;
@@ -23,10 +26,22 @@ public sealed class TrafficIntegrationModule : IModule
 
     public void RegisterServices(IServiceCollection services)
     {
-        services.AddSingleton<IPacketAuditTrail>(_ => new PacketAuditTrail(
-            AppDataPaths.Resolve("traffic-audit.v1.json")));
-        services.AddSingleton<IPacketAuditSigningKey, PacketAuditSigningKey>();
-        services.AddSingleton<IPacketAuditExportService, PacketAuditExportService>();
+        services.AddSingleton(_ => new OperatorIdentityDirectory(AppDataPaths.Resolve("operator-identities.v1.json")));
+        services.AddSingleton<IPacketAuditTrail>(sp => new PacketAuditTrail(
+            AppDataPaths.Resolve("traffic-audit.v1.json"),
+            () => sp.GetRequiredService<OperatorIdentityDirectory>().ResolveActiveName()
+                ?? sp.GetRequiredService<ISettingsService>().Load().Traffic.OperatorName
+                ?? Environment.UserName));
+        services.AddSingleton<PacketAuditSigningKey>();
+        services.AddSingleton<IPacketAuditSigningKey>(sp => sp.GetRequiredService<PacketAuditSigningKey>());
+        services.AddSingleton(_ => new AuditKeyTrustFile(AppDataPaths.Resolve("audit-signing-trust.v1.json")));
+        services.AddSingleton<PacketAuditTrustPolicy>();
+        services.AddSingleton<IPacketAuditTrustPolicy>(sp => sp.GetRequiredService<PacketAuditTrustPolicy>());
+        services.AddSingleton<IAssessmentReportTrustPolicy>(sp => sp.GetRequiredService<PacketAuditTrustPolicy>());
+        services.AddSingleton<IPacketAuditExportService>(sp => new PacketAuditExportService(
+            sp.GetRequiredService<IPacketAuditTrail>(),
+            sp.GetRequiredService<IPacketAuditSigningKey>(),
+            sp.GetRequiredService<IPacketAuditTrustPolicy>()));
         services.AddSingleton<TrafficRuleAuditBridge>();
         services.AddSingleton<TrafficIntegrationService>();
         services.AddSingleton<IPacketCommandService>(sp => sp.GetRequiredService<TrafficIntegrationService>());
@@ -49,6 +64,11 @@ public sealed class TrafficIntegrationModule : IModule
         _ = serviceProvider.GetRequiredService<TrafficRuleAuditBridge>();
         var integration = serviceProvider.GetRequiredService<TrafficIntegrationService>();
         PacketCommandRegistrar.Register(serviceProvider.GetRequiredService<CommandRegistry>(), integration);
+        SigningKeysCommandRegistrar.Register(serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<PacketAuditSigningKey>(),
+            serviceProvider.GetRequiredService<AuditKeyTrustFile>());
+        IdentityCommandRegistrar.Register(serviceProvider.GetRequiredService<CommandRegistry>(),
+            serviceProvider.GetRequiredService<OperatorIdentityDirectory>());
         TrafficAiToolRegistrar.Register(serviceProvider.GetRequiredService<IAiToolRegistry>(), integration);
         TrafficRuleToolRegistrar.Register(
             serviceProvider.GetRequiredService<CommandRegistry>(),
@@ -70,6 +90,7 @@ public sealed class TrafficIntegrationModule : IModule
             serviceProvider.GetRequiredService<CommandRegistry>(),
             serviceProvider.GetRequiredService<IAiToolRegistry>(),
             serviceProvider.GetRequiredService<ITrafficHistoryManagementService>());
+        RegisterWorkspacePolicyIsolation(serviceProvider, integration);
 
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
@@ -143,5 +164,32 @@ public sealed class TrafficIntegrationModule : IModule
         });
 
         TrafficSelfTestRunner.TryStart(serviceProvider);
+    }
+
+    /// <summary>
+    /// Routes the traffic history policy file to the active workspace
+    /// (<workspace>/.hackermes/traffic-history-policy.json) and falls back to the global
+    /// file when no workspace is open. Every switch immediately applies the new policy
+    /// and notifies workbench views so their statistics stay current without a manual
+    /// refresh (notification fires after the switch, so observers see the final state).
+    /// </summary>
+    private static void RegisterWorkspacePolicyIsolation(IServiceProvider serviceProvider, TrafficIntegrationService integration)
+    {
+        var eventBus = serviceProvider.GetRequiredService<IEventBus>();
+        var policies = serviceProvider.GetRequiredService<ITrafficHistoryPolicyStore>();
+        var history = serviceProvider.GetRequiredService<ITrafficHistoryManagementService>();
+        eventBus.SubscribeDisposable<ProjectOpenedEvent>(e =>
+        {
+            policies.SwitchStorage(Path.Combine(e.Directory, ".hackermes", "traffic-history-policy.json"), "workspace");
+            history.Cleanup();
+            integration.NotifyHistoryPolicyChanged();
+        });
+        eventBus.SubscribeDisposable<ProjectClosedEvent>(_ =>
+        {
+            policies.SwitchStorage(AppDataPaths.Resolve("traffic-history-policy.json"),
+                TrafficHistoryPolicyStore.GlobalSource);
+            history.Cleanup();
+            integration.NotifyHistoryPolicyChanged();
+        });
     }
 }

@@ -21,29 +21,41 @@
       </Grid>
     </Border>
 
-    <!-- 详情:选中请求的完整 URL 与发起处调用栈 -->
-    <Border DockPanel.Dock="Bottom" MinHeight="90" MaxHeight="180"
-            Padding="8,6" BorderThickness="0,1,0,0"
+    <!-- 详情:Burp 风格的原始报文。请求/响应/调用栈分页,响应体懒加载 -->
+    <Border DockPanel.Dock="Bottom" Height="260"
+            Padding="4,2" BorderThickness="0,1,0,0"
             BorderBrush="{DynamicResource SemiColorBorder}"
             IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
-      <ScrollViewer>
-        <StackPanel Spacing="4">
-          <TextBlock Text="{Binding Selected.Url}" FontSize="11" TextWrapping="Wrap" />
-
-          <TextBlock FontSize="11" Opacity="0.6"
-                     Text="{Binding Selected.InitiatorKind, StringFormat='发起方式: {0}'}"
-                     IsVisible="{Binding Selected.InitiatorKind, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-          <!-- 这一段是 Page Agent 的核心价值:协议层拿不到发起处的调用栈 -->
-          <SelectableTextBlock FontFamily="Consolas,monospace" FontSize="11"
-                               TextWrapping="Wrap"
-                               Text="{Binding Selected.InitiatorStack}"
-                               IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-          <TextBlock FontSize="11" Opacity="0.45" Text="(该请求没有页面内调用栈,可能由浏览器直接发起)"
-                     IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
-        </StackPanel>
-      </ScrollViewer>
+      <TabControl FontSize="11">
+        <TabItem Header="请求">
+          <ScrollViewer Padding="6,4">
+            <SelectableTextBlock FontFamily="Consolas,monospace" TextWrapping="Wrap"
+                                 Text="{Binding RequestView}" />
+          </ScrollViewer>
+        </TabItem>
+        <TabItem Header="响应">
+          <ScrollViewer Padding="6,4">
+            <SelectableTextBlock FontFamily="Consolas,monospace" TextWrapping="Wrap"
+                                 Text="{Binding ResponseView}" />
+          </ScrollViewer>
+        </TabItem>
+        <TabItem Header="调用栈">
+          <ScrollViewer Padding="6,4">
+            <StackPanel Spacing="4">
+              <TextBlock FontSize="11" Opacity="0.6"
+                         Text="{Binding Selected.InitiatorKind, StringFormat='发起方式: {0}'}"
+                         IsVisible="{Binding Selected.InitiatorKind, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <!-- 这一段是 Page Agent 的核心价值:协议层拿不到发起处的调用栈 -->
+              <SelectableTextBlock FontFamily="Consolas,monospace" FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding Selected.InitiatorStack}"
+                                   IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <TextBlock FontSize="11" Opacity="0.45" Text="(该请求没有页面内调用栈,可能由浏览器直接发起)"
+                         IsVisible="{Binding Selected.InitiatorStack, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+      </TabControl>
     </Border>
 
     <DataGrid ItemsSource="{Binding Visible}"

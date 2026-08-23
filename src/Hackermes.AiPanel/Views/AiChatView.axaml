@@ -3,7 +3,7 @@
              xmlns:vm="using:Hackermes.AiPanel.ViewModels"
              x:Class="Hackermes.AiPanel.Views.AiChatView"
              x:DataType="vm:AiChatViewModel">
-  <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="12">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" Margin="12">
     <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
       <TextBlock VerticalAlignment="Center" Text="模型" FontSize="12" Opacity="0.65" Margin="0,0,8,0" />
       <Border Grid.Column="1" Padding="11,7"
@@ -13,9 +13,33 @@
         <TextBlock Text="{Binding Model}" FontSize="12" FontWeight="Medium"
                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
       </Border>
-      <Button Grid.Column="2" Margin="8,0,0,0" Padding="12,6" Content="设置" Click="OpenSettings" />
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" Spacing="6">
+        <Button Padding="12,6" Content="新会话" Click="NewSession" />
+        <Button Padding="12,6" Content="设置" Click="OpenSettings" />
+      </StackPanel>
     </Grid>
-    <Grid Grid.Row="1" Margin="0,0,0,10">
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="0,0,0,10" IsVisible="{Binding HasSessions}">
+      <TextBlock VerticalAlignment="Center" Text="会话" FontSize="12" Opacity="0.65" Margin="0,0,8,0" />
+      <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                ItemsSource="{Binding Sessions}"
+                SelectedItem="{Binding SelectedSession, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:AgentSessionOption">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding UpdatedAt, StringFormat='{}{0:MM-dd HH:mm}'}"
+                         FontSize="11" Opacity="0.55" Margin="10,0,0,0" VerticalAlignment="Center" />
+              <Grid.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="重命名" Click="RenameSessionClick" />
+                </ContextMenu>
+              </Grid.ContextMenu>
+            </Grid>
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+    </Grid>
+    <Grid Grid.Row="2" Margin="0,0,0,10">
       <Border Padding="11,9"
               Background="{DynamicResource SemiColorFill0}"
               BorderBrush="{DynamicResource SemiColorPrimary}"
@@ -55,7 +79,7 @@
         </Grid>
       </Border>
     </Grid>
-    <Grid Grid.Row="2">
+    <Grid Grid.Row="3">
       <Border Padding="24"
               HorizontalAlignment="Stretch"
               VerticalAlignment="Center"
@@ -73,29 +97,70 @@
       </Border>
       <ScrollViewer>
         <ItemsControl ItemsSource="{Binding Messages}">
-          <ItemsControl.ItemTemplate>
+          <ItemsControl.DataTemplates>
+            <!-- Plain conversation turn: user / assistant prose. -->
             <DataTemplate x:DataType="vm:AiChatLine">
               <Border Padding="12,10" Margin="0,0,0,8"
                       Background="{DynamicResource SemiColorFill0}"
                       BorderBrush="{DynamicResource SemiColorBorder}"
                       BorderThickness="1" CornerRadius="8">
                 <StackPanel Spacing="6">
-                  <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.62" Text="{Binding Role}" />
+                  <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.62" Text="{Binding RoleLabel}" />
                   <SelectableTextBlock FontSize="13" LineHeight="20"
                                        TextWrapping="Wrap" Text="{Binding Content}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
-          </ItemsControl.ItemTemplate>
+            <!-- Agent tool call: compact collapsed row; details expand on demand. -->
+            <DataTemplate x:DataType="vm:AiToolCallLine">
+              <Border Margin="0,0,0,6"
+                      Background="{DynamicResource SemiColorFill0}"
+                      BorderBrush="{DynamicResource SemiColorBorder}"
+                      BorderThickness="1" CornerRadius="7">
+                <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}" Padding="10,4,10,2">
+                  <Expander.Header>
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,2" VerticalAlignment="Center">
+                      <ProgressBar Width="14" Height="4" IsIndeterminate="True"
+                                   IsVisible="{Binding IsRunning}" VerticalAlignment="Center" />
+                      <TextBlock Text="✓" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
+                                 Foreground="#3EB877"
+                                 IsVisible="{Binding IsSuccess}" />
+                      <TextBlock Text="✗" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource SemiColorDanger}"
+                                 IsVisible="{Binding IsFailed}" />
+                      <TextBlock Grid.Column="1" Text="{Binding ToolName}" Margin="8,0,0,0"
+                                 FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2" Text="{Binding Summary}" Margin="8,0,0,0"
+                                 FontSize="11" Opacity="0.55" VerticalAlignment="Center"
+                                 TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="3" Text="{Binding DurationLabel}" Margin="8,0,0,0"
+                                 FontSize="10" Opacity="0.45" VerticalAlignment="Center" />
+                    </Grid>
+                  </Expander.Header>
+                  <SelectableTextBlock Text="{Binding Detail}" FontSize="11.5" LineHeight="17"
+                                       TextWrapping="Wrap" Margin="2,4,2,8"
+                                       FontFamily="Consolas, 'Cascadia Mono', 'Courier New', monospace" />
+                </Expander>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.DataTemplates>
         </ItemsControl>
       </ScrollViewer>
     </Grid>
-    <Border Grid.Row="3" Margin="0,8,0,0" Padding="10,8"
-            Background="{DynamicResource SemiColorFill0}" CornerRadius="6"
-            IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-      <TextBlock Foreground="{DynamicResource SemiColorDanger}" TextWrapping="Wrap" Text="{Binding Error}" />
-    </Border>
-    <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+    <StackPanel Grid.Row="4" Margin="0,8,0,0" Spacing="2">
+      <Border Padding="10,8"
+              Background="{DynamicResource SemiColorFill0}" CornerRadius="6"
+              IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock Foreground="{DynamicResource SemiColorDanger}" TextWrapping="Wrap" Text="{Binding Error}" />
+      </Border>
+      <TextBlock HorizontalAlignment="Right" FontSize="11" Opacity="0.65"
+                 Text="{Binding TokenUsage}"
+                 IsVisible="{Binding TokenUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      <TextBlock HorizontalAlignment="Right" FontSize="11" Opacity="0.65"
+                 Text="{Binding ContextUsage}"
+                 IsVisible="{Binding ContextUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    </StackPanel>
+    <Grid Grid.Row="5" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
       <TextBox AcceptsReturn="True" MinHeight="76" MaxHeight="180" Padding="12,10" TextWrapping="Wrap"
                Text="{Binding Input, Mode=TwoWay}" PlaceholderText="描述你想检查的页面问题…" />
       <StackPanel Grid.Column="1" Width="72" Margin="8,0,0,0" Spacing="6">
@@ -105,7 +170,7 @@
                 Command="{Binding StopCommand}" IsVisible="{Binding IsBusy}" />
       </StackPanel>
     </Grid>
-    <ProgressBar Grid.Row="4" IsIndeterminate="True" Height="2"
+    <ProgressBar Grid.Row="5" IsIndeterminate="True" Height="2"
                  VerticalAlignment="Bottom" Margin="12,0,92,1"
                  IsVisible="{Binding IsBusy}" />
   </Grid>

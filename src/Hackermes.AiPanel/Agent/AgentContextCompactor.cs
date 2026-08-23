@@ -41,20 +41,70 @@ public sealed class AgentContextCompactor
         return retained;
     }
 
+    /// <summary>Tool evidence lines retained per compaction; older ones collapse into an omission note.</summary>
+    public const int MaxToolDigestLines = 48;
+
     public string CompactCompletedTurns(List<ChatMessage> history, string existingSummary, AiSettings settings)
     {
         var keepFrom = FindKeepFrom(history, settings.MaxRecentMessages);
         if (keepFrom == 0) return Limit(existingSummary, 20_000);
 
-        var compacted = history.Take(keepFrom)
-            .Where(message => message.Role is "user" or "assistant")
-            .Where(message => message.ToolCalls is null || message.ToolCalls.Count == 0)
-            .Select(message => $"{message.Role}: {Shorten(message.Content, 900)}")
-            .Where(line => line.Length > 0)
-            .ToArray();
+        // Map tool-call ids to names so compacted tool results stay attributable.
+        var callNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var message in history.Take(keepFrom))
+            if (message.ToolCalls is { Count: > 0 } calls)
+                foreach (var call in calls)
+                    callNames[call.Id] = call.Name;
+
+        var lines = new List<(bool IsTool, string Text)>();
+        foreach (var message in history.Take(keepFrom))
+        {
+            switch (message.Role)
+            {
+                case "user":
+                    lines.Add((false, $"user: {Shorten(message.Content, 900)}"));
+                    break;
+                case "assistant" when message.ToolCalls is { Count: > 0 } calls:
+                    var names = string.Join(", ", calls.Select(call => call.Name).Distinct(StringComparer.Ordinal));
+                    var preamble = Shorten(message.Content, 200);
+                    lines.Add((false, preamble.Length > 0
+                        ? $"assistant: {preamble}（调用工具 {names}）"
+                        : $"assistant: 调用工具 {names}"));
+                    break;
+                case "tool":
+                    var name = callNames.TryGetValue(message.ToolCallId ?? string.Empty, out var resolved)
+                        ? resolved
+                        : message.ToolCallId ?? "unknown";
+                    lines.Add((true, $"工具 {name} 结果: {Shorten(message.Content, 240)}"));
+                    break;
+                default:
+                    var text = Shorten(message.Content, 900);
+                    if (text.Length > 0) lines.Add((false, $"{message.Role}: {text}"));
+                    break;
+            }
+        }
+
+        // Keep the newest tool evidence; older lines collapse into one omission note.
+        var omitted = Math.Max(0, lines.Count(entry => entry.IsTool) - MaxToolDigestLines);
+        var compacted = new List<string>(lines.Count);
+        var skipped = 0;
+        var omissionNoted = false;
+        foreach (var (isTool, text) in lines)
+        {
+            if (isTool && skipped++ < omitted)
+            {
+                if (!omissionNoted)
+                {
+                    compacted.Add($"（另有 {omitted} 条更早的工具结果已省略）");
+                    omissionNoted = true;
+                }
+                continue;
+            }
+            compacted.Add(text);
+        }
 
         history.RemoveRange(0, keepFrom);
-        if (compacted.Length == 0) return Limit(existingSummary, 20_000);
+        if (compacted.Count == 0) return Limit(existingSummary, 20_000);
         var joined = string.IsNullOrWhiteSpace(existingSummary)
             ? string.Join('\n', compacted)
             : existingSummary + '\n' + string.Join('\n', compacted);
@@ -74,7 +124,8 @@ public sealed class AgentContextCompactor
         return userStarts[^2];
     }
 
-    private static string BuildSystemMessage(AgentMemoryDocument memory, IReadOnlyList<AgentSkill> skills, AiSettings settings)
+    /// <summary>Shared system-prompt builder; the ACP store reuses it for its request pipeline.</summary>
+    public static string BuildSystemMessage(AgentMemoryDocument memory, IReadOnlyList<AgentSkill> skills, AiSettings settings)
     {
         var builder = new StringBuilder(
             "You are the Hackermes desktop assistant. Follow enabled workflows, keep actions bounded, " +
@@ -91,6 +142,15 @@ public sealed class AgentContextCompactor
             "or human review, and do not claim a vulnerability without tool evidence. Never request arbitrary shell access or " +
             "execute uncatalogued commands. If no page is attached or authorization details are missing, explain what the operator " +
             "must provide instead of selecting another page or target.");
+        builder.Append(
+            "\nTool use protocol: (1) Build evidence with read-only tools first; every Mutating or Dangerous call asks the " +
+            "operator for confirmation, so prepare arguments carefully and combine related changes into fewer calls. " +
+            "(2) Page large data instead of requesting everything at once: packet_query and packet_archive_export take " +
+            "offset/limit (the archive response reports total — keep fetching further batches until you have all entries), " +
+            "packet_body_chunk reads bounded byte ranges, packet_audit takes a limit. (3) When a call fails, follow the " +
+            "guidance in its message (narrow the filter, lower the limit, reduce risk) and retry with changed arguments; " +
+            "never repeat an unchanged call expecting a different result. (4) Keep packet ids and evidence ids from earlier " +
+            "results and reference them exactly; treat tool output as the only source of evidence.");
 
         if (!string.IsNullOrWhiteSpace(memory.Notes))
             builder.Append("\nOperator memory:\n").Append(Limit(memory.Notes, 8_000));

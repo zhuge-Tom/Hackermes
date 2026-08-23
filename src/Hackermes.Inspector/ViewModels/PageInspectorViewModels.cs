@@ -62,7 +62,11 @@ public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase, 
     [ObservableProperty] private string _selectedNodePath = "";
     [ObservableProperty] private string _editableCss = string.Empty;
     [ObservableProperty] private DomCssRuleItem? _selectedCssRule;
+    [ObservableProperty] private string _searchText = string.Empty;
     public string SelectedResourceUrl => SelectedItem?.Item.ResourceUrl ?? "No linked src/href resource on this element.";
+
+    private List<DomTreeNodeViewModel> _matches = [];
+    private int _matchIndex = -1;
 
     public DomInspectorViewModel(PageInspectionService inspection) : base(inspection)
     {
@@ -118,6 +122,41 @@ public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase, 
         EditableCss = string.Empty;
         SelectedCssRule = null;
         Status = $"{values.Count} elements (bounded to {PageInspectionService.MaximumItems}, depth {PageInspectionService.MaximumDomDepth}). Select one to highlight it on the page.";
+    }
+
+    partial void OnSearchTextChanged(string value) => _matchIndex = -1;
+
+    /// <summary>DevTools 风格的 DOM 查找:回车逐个跳到 tag/id/class/文本匹配的节点并高亮。</summary>
+    [RelayCommand]
+    private void FindNext()
+    {
+        var query = SearchText.Trim().ToLowerInvariant();
+        if (query.Length == 0) return;
+        if (RootItems.Count == 0)
+        {
+            Status = "The DOM tree is empty; refresh after selecting a page.";
+            return;
+        }
+
+        _matches = Flatten(RootItems).Where(node => node.SearchText.Contains(query, StringComparison.Ordinal)).ToList();
+        if (_matches.Count == 0)
+        {
+            Status = $"No element matches \"{SearchText.Trim()}\".";
+            return;
+        }
+
+        _matchIndex = (_matchIndex + 1) % _matches.Count;
+        SelectNode(_matches[_matchIndex], preview: false);
+        Status = $"Match {_matchIndex + 1}/{_matches.Count} for \"{SearchText.Trim()}\". Press Enter to cycle.";
+    }
+
+    private static IEnumerable<DomTreeNodeViewModel> Flatten(IEnumerable<DomTreeNodeViewModel> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in Flatten(node.Children)) yield return child;
+        }
     }
 
     private async Task InspectSelectedAsync(DomTreeNodeViewModel node, int selectionVersion, bool scrollTo)
@@ -319,25 +358,80 @@ public sealed partial class DomInspectorViewModel : PageInspectorViewModelBase, 
     }
 }
 
+/// <summary>One syntax-highlight token of a DOM row; Brush follows the DevTools Elements palette.</summary>
+public sealed record DomTokenSegment(string Text, string Kind)
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Avalonia.Media.IBrush> BrushCache = new();
+
+    public Avalonia.Media.IBrush? Brush => Kind == "text"
+        ? null // inherit the ambient foreground so page text stays theme-aware
+        : BrushCache.GetOrAdd(Kind, static kind =>
+            new Avalonia.Media.SolidColorBrush(kind switch
+            {
+                "tag" => Avalonia.Media.Color.Parse("#569CD6"),
+                "attr" => Avalonia.Media.Color.Parse("#9CDCFE"),
+                "value" => Avalonia.Media.Color.Parse("#CE9178"),
+                _ => Avalonia.Media.Color.Parse("#808080")
+            }));
+}
+
+/// <summary>
+/// DevTools 风格的 DOM 树行:标签/属性/值分段着色,叶子节点的文本内联显示,
+/// 默认整棵树收起(仅根展开),选中时才逐层展开祖先 —— 与浏览器 Elements 面板一致。
+/// </summary>
 public sealed partial class DomTreeNodeViewModel : ObservableObject
 {
     public DomTreeNodeViewModel(DomNodeItem item)
     {
         Item = item;
-        IsExpanded = item.Depth < 2;
+        IsExpanded = item.Depth == 0;
+        Segments = BuildSegments(item);
+        SearchText = string.Join(' ', item.NodeName, item.Id, item.Classes, item.Text)
+            .ToLowerInvariant();
     }
 
     public DomNodeItem Item { get; }
     public DomTreeNodeViewModel? Parent { get; set; }
     public ObservableCollection<DomTreeNodeViewModel> Children { get; } = [];
+    public IReadOnlyList<DomTokenSegment> Segments { get; }
+    public string SearchText { get; }
+    public bool IsLeaf => Item.ChildCount == 0;
     public string Display => Item.Display;
-    public string Preview => string.IsNullOrWhiteSpace(Item.Text) ? string.Empty : Item.Text;
-    public string ChildSummary => Item.ChildCount == 0 ? string.Empty : $"{Item.ChildCount} child{(Item.ChildCount == 1 ? string.Empty : "ren")}";
     public string PageHoverMarker => IsPageHovered ? "▶" : string.Empty;
+
+    /// <summary>折叠状态下显示的子元素数量提示;展开后为空(与 DevTools 的省略提示类似)。</summary>
+    [NotifyPropertyChangedFor(nameof(CollapsedSummary))]
     [ObservableProperty] private bool _isExpanded;
+
+    public string CollapsedSummary => !IsExpanded && Item.ChildCount > 0
+        ? $"… {Item.ChildCount} 子元素"
+        : string.Empty;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PageHoverMarker))]
     private bool _isPageHovered;
+
+    private static IReadOnlyList<DomTokenSegment> BuildSegments(DomNodeItem item)
+    {
+        var tag = item.NodeName.ToLowerInvariant();
+        var segments = new List<DomTokenSegment> { new("<", "punct"), new(tag, "tag") };
+        foreach (var attribute in item.Attributes ?? [])
+        {
+            segments.Add(new DomTokenSegment(" " + attribute.Name, "attr"));
+            if (attribute.Value.Length == 0) continue;
+            segments.Add(new DomTokenSegment("=\"", "punct"));
+            segments.Add(new DomTokenSegment(attribute.Value, "value"));
+            segments.Add(new DomTokenSegment("\"", "punct"));
+        }
+        segments.Add(new DomTokenSegment(">", "punct"));
+
+        if (!string.IsNullOrWhiteSpace(item.Text))
+        {
+            segments.Add(new DomTokenSegment(item.Text!, "text"));
+            segments.Add(new DomTokenSegment($"</{tag}>", "close"));
+        }
+        return segments;
+    }
 }
 
 public sealed partial class StorageInspectorViewModel(PageInspectionService inspection) : PageInspectorViewModelBase(inspection)

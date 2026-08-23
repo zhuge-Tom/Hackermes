@@ -271,9 +271,11 @@ public sealed class SettingsService : ISettingsService
         }
         if (!Enum.IsDefined(settings.Ai.PermissionMode))
             settings.Ai.PermissionMode = AiPermissionMode.RequestApproval;
-        settings.Ai.MaxToolRounds = Math.Clamp(settings.Ai.MaxToolRounds, 1, 64);
-        settings.Ai.MaxContextCharacters = Math.Clamp(settings.Ai.MaxContextCharacters, 4_000, 120_000);
+        settings.Ai.MaxToolRounds = Math.Clamp(settings.Ai.MaxToolRounds, 1, 256);
+        settings.Ai.MaxContextCharacters = Math.Clamp(settings.Ai.MaxContextCharacters, 4_000, 600_000);
         settings.Ai.MaxRecentMessages = Math.Clamp(settings.Ai.MaxRecentMessages, 2, 64);
+        settings.Ai.MaxToolResultCharacters = Math.Clamp(settings.Ai.MaxToolResultCharacters, 1_000, 200_000);
+        settings.Ai.ToolCallTimeoutSeconds = Math.Clamp(settings.Ai.ToolCallTimeoutSeconds, 5, 3_600);
         // Persistent compaction/memory is a system capability, not an operator preference.
         // Keep reading the legacy setting for compatibility, but always run it enabled.
         settings.Ai.MemoryEnabled = true;

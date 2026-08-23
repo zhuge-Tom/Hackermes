@@ -90,12 +90,22 @@ public sealed class RejectingToolConfirmationService : IToolConfirmationService
 public sealed class AiToolDispatcher
 {
     public static readonly TimeSpan DefaultSessionGrantLifetime = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan DefaultToolCallTimeout = TimeSpan.FromSeconds(120);
+    public const int DefaultMaxToolResultCharacters = 12_000;
+    /// <summary>Bounded memory for the duplicate read-only call detector; cleared wholesale when full.</summary>
+    private const int MaximumTrackedReadonlyCalls = 256;
+    private const string DuplicateCallHint =
+        "\n[提示] 这次只读调用的工具与参数和之前完全一致，结果不会变化。" +
+        " 请调整参数（例如分页 offset/limit、过滤条件、chunk 范围）或改用其他工具推进任务。";
     private readonly IAiToolRegistry _registry;
     private readonly IToolPolicyGate _policy;
     private readonly IToolConfirmationService _confirmation;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _sessionGrantLifetime;
+    private readonly TimeSpan _toolCallTimeout;
+    private readonly int _maxToolResultCharacters;
     private readonly ConcurrentDictionary<SessionGrantKey, DateTimeOffset> _sessionGrants = new();
+    private readonly ConcurrentDictionary<SessionGrantKey, byte> _recentReadOnlyCalls = new();
 
     public AiToolDispatcher(IAiToolRegistry registry, IToolPolicyGate policy, IToolConfirmationService confirmation)
         : this(registry, policy, confirmation, TimeProvider.System, DefaultSessionGrantLifetime)
@@ -108,6 +118,19 @@ public sealed class AiToolDispatcher
         IToolConfirmationService confirmation,
         TimeProvider timeProvider,
         TimeSpan sessionGrantLifetime)
+        : this(registry, policy, confirmation, timeProvider, sessionGrantLifetime,
+              DefaultMaxToolResultCharacters, DefaultToolCallTimeout)
+    {
+    }
+
+    public AiToolDispatcher(
+        IAiToolRegistry registry,
+        IToolPolicyGate policy,
+        IToolConfirmationService confirmation,
+        TimeProvider timeProvider,
+        TimeSpan sessionGrantLifetime,
+        int maxToolResultCharacters,
+        TimeSpan toolCallTimeout)
     {
         _registry = registry;
         _policy = policy;
@@ -117,18 +140,30 @@ public sealed class AiToolDispatcher
             throw new ArgumentOutOfRangeException(nameof(sessionGrantLifetime),
                 "Session grant lifetime must be greater than zero and no more than 24 hours.");
         _sessionGrantLifetime = sessionGrantLifetime;
+        if (maxToolResultCharacters < 256)
+            throw new ArgumentOutOfRangeException(nameof(maxToolResultCharacters),
+                "Tool result budget must be at least 256 characters.");
+        _maxToolResultCharacters = maxToolResultCharacters;
+        if (toolCallTimeout <= TimeSpan.Zero || toolCallTimeout > TimeSpan.FromHours(1))
+            throw new ArgumentOutOfRangeException(nameof(toolCallTimeout),
+                "Tool call timeout must be greater than zero and no more than one hour.");
+        _toolCallTimeout = toolCallTimeout;
     }
 
     public async ValueTask<ToolResult> InvokeAsync(ToolInvocation invocation, CancellationToken ct = default)
     {
         if (!_registry.TryGet(invocation.ToolName, out var tool) || tool is null)
-            return ToolResult.Fail($"Unknown AI tool: {invocation.ToolName}");
+            return ToolResult.Fail(
+                $"Unknown AI tool: {invocation.ToolName}。请改用工具列表中的确切名称，不要自行发明工具名。");
 
         if (tool.Prepare is not null)
         {
             try { invocation = await tool.Prepare(invocation, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception exception) { return ToolResult.Fail(exception.Message); }
+            catch (Exception exception)
+            {
+                return Limit(ToolResult.Fail($"{invocation.ToolName} 参数准备失败: {exception.Message}"));
+            }
         }
 
         var grantKey = CreateGrantKey(invocation, tool.Name);
@@ -143,20 +178,74 @@ public sealed class AiToolDispatcher
             : await _policy.EvaluateAsync(tool, invocation, ct).ConfigureAwait(false);
 
         if (decision.Kind == ToolPolicyDecisionKind.Deny)
-            return ToolResult.Fail(decision.Reason ?? "Tool invocation denied by policy.");
+            return ToolResult.Fail(
+                (decision.Reason ?? "操作被策略拒绝。") +
+                " 不要尝试绕过或用变体参数重试；如确属授权评估必需，请向操作者说明目的，由操作者调整权限模式或手动执行。");
 
         if (decision.Kind == ToolPolicyDecisionKind.RequireConfirmation)
         {
             var answer = await _confirmation.ConfirmAsync(
                 invocation, decision.Reason ?? "Confirmation required.", ct).ConfigureAwait(false);
-            if (!answer.Approved) return ToolResult.Fail("Tool invocation was not approved.");
+            if (!answer.Approved)
+                return ToolResult.Fail(
+                    "操作者未批准该操作。可先降低风险（缩小范围、改为只读查询）后重新请求，" +
+                    "或向操作者解释该步骤对当前评估的必要性；不要在未获批准时重复发起同一操作。");
             if (answer.RememberForSession && grantKey is { } approvedKey)
                 _sessionGrants[approvedKey] = _timeProvider.GetUtcNow() + _sessionGrantLifetime;
         }
 
-        try { return await tool.Handler(invocation, ct).ConfigureAwait(false); }
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(_toolCallTimeout);
+        ToolResult result;
+        try
+        {
+            result = await tool.Handler(invocation, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            result = ToolResult.Fail(
+                $"工具 '{invocation.ToolName}' 超过 {_toolCallTimeout.TotalSeconds:0} 秒未完成，已按超时取消。" +
+                " 可把步骤拆小（缩小过滤/分页/缩短等待）后重试。");
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return ToolResult.Fail(ex.Message); }
+        catch (Exception ex)
+        {
+            result = ToolResult.Fail($"{invocation.ToolName} 执行失败: {ex.Message}");
+        }
+        // Annotate after limiting: the hint must survive truncation of oversized results.
+        return AnnotateDuplicateReadOnlyCall(tool, invocation, Limit(result));
+    }
+
+    /// <summary>
+    /// Repeating an identical read-only call cannot change anything; the corrective hint
+    /// steers the model toward paging, filtering or a different tool instead of looping.
+    /// Mutating/Dangerous calls are never annotated (re-execution may be legitimate).
+    /// </summary>
+    private ToolResult AnnotateDuplicateReadOnlyCall(AiToolDefinition tool, ToolInvocation invocation, ToolResult result)
+    {
+        if (tool.Risk != AiToolRisk.ReadOnly || string.IsNullOrEmpty(invocation.SessionId))
+            return result;
+
+        var key = CreateGrantKey(invocation, tool.Name);
+        if (key is null) return result;
+        var repeated = !_recentReadOnlyCalls.TryAdd(key.GetValueOrDefault(), 0);
+        if (_recentReadOnlyCalls.Count > MaximumTrackedReadonlyCalls) _recentReadOnlyCalls.Clear();
+        return repeated ? result with { Content = result.Content + DuplicateCallHint } : result;
+    }
+
+    /// <summary>
+    /// Single exit funnel so one chatty tool cannot crowd the shared context window;
+    /// the model sees an explicit marker and can page through bounded reads instead.
+    /// </summary>
+    private ToolResult Limit(ToolResult result)
+    {
+        if (result.Content.Length <= _maxToolResultCharacters) return result;
+        return result with
+        {
+            Content = result.Content[.._maxToolResultCharacters] +
+                $"\n…[已截断：仅保留前 {_maxToolResultCharacters} / {result.Content.Length} 字符。" +
+                " 请改用分页、chunk 或过滤参数获取剩余部分，不要凭空补全被截断的内容。]"
+        };
     }
 
     public void ClearSessionGrants(string sessionId)

@@ -44,7 +44,7 @@ public sealed class TrafficHistoryManagementService : ITrafficHistoryManagementS
         return new TrafficHistoryStatistics(items.Count, items.Sum(TrafficHistorySizing.Estimate),
             PersistedLength(),
             items.Count == 0 ? null : items[0].CapturedAt,
-            items.Count == 0 ? null : items[^1].CapturedAt, Policy);
+            items.Count == 0 ? null : items[^1].CapturedAt, Policy, _policies.PolicySource);
     }
 
     public TrafficCleanupPreview PreviewCleanup(TrafficHistoryPolicy? policy = null) =>

@@ -1,6 +1,7 @@
 using Hackermes.App;
 using Hackermes.Automation.Commands;
 using Hackermes.Automation.Packet;
+using Hackermes.Platform.Services;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Generic;
 using System.Threading;
@@ -20,6 +21,21 @@ public sealed class PacketInterceptionModeTests
 
         Assert.Contains(services, descriptor =>
             descriptor.ServiceType == typeof(IPacketInterceptionModeService));
+    }
+
+    [Fact]
+    public void IntegrationModule_MapsPacketSigningInterfacesToOneConcreteSingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ISecretStore>(new MemorySecretStore());
+        new TrafficIntegrationModule().RegisterServices(services);
+        new AssessmentIntegrationModule().RegisterServices(services);
+        using var provider = services.BuildServiceProvider();
+
+        var concrete = provider.GetRequiredService<PacketAuditSigningKey>();
+
+        Assert.Same(concrete, provider.GetRequiredService<IPacketAuditSigningKey>());
+        Assert.Same(concrete, provider.GetRequiredService<Hackermes.Assessment.IAssessmentReportSigningKey>());
     }
 
     [Theory]
@@ -86,5 +102,14 @@ public sealed class PacketInterceptionModeTests
             ModeChanges++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class MemorySecretStore : ISecretStore
+    {
+        private readonly Dictionary<string, string?> _values = new();
+        public string? Get(string key) => _values.GetValueOrDefault(key);
+        public void Set(string key, string? value) => _values[key] = value;
+        public bool Contains(string key) => _values.ContainsKey(key);
+        public void Remove(string key) => _values.Remove(key);
     }
 }

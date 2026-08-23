@@ -12,8 +12,11 @@ using System.Threading.Tasks;
 
 namespace Hackermes.Inspector.Services;
 
+public sealed record DomAttributeItem(string Name, string Value);
+
 public sealed record DomNodeItem(int Depth, string NodeName, string? Id, string? Classes, string? Text,
-    string Path = "", string? ResourceUrl = null, int ChildCount = 0, string? NodeKey = null)
+    string Path = "", string? ResourceUrl = null, int ChildCount = 0, string? NodeKey = null,
+    IReadOnlyList<DomAttributeItem>? Attributes = null)
 {
     public string Display => $"<{NodeName.ToLowerInvariant()}" +
         (string.IsNullOrEmpty(Id) ? "" : $" id=\"{Id}\"") +
@@ -105,7 +108,7 @@ public sealed class PageInspectionService : IDisposable
     public async Task<IReadOnlyList<DomNodeItem>> ReadDomAsync(CancellationToken cancellationToken)
     {
         const string expression = "(()=>{const o=[],w=(n,d,p)=>{if(!n||o.length>=2000||d>32||n.id==='__hackermes-inspector-overlay__'||n.id==='__hackermes-inspector-preview__')return;" +
-            "const s=window.__hackermesInspectorStore||(window.__hackermesInspectorStore={next:0,nodes:new Map(),keys:new WeakMap(),nextRule:0,rules:new Map(),ruleKeys:new WeakMap()});const key=e=>{let k=s.keys.get(e);if(!k){k='n'+(++s.next);s.keys.set(e,k)}s.nodes.set(k,e);return k};if(n.nodeType===1){let resourceUrl=null,source=n.getAttribute('src')||n.getAttribute('href'),tag=n.nodeName.toLowerCase();try{if(source)resourceUrl=new URL(source,document.baseURI).href}catch{}o.push({depth:d,nodeName:n.nodeName,id:n.id||null,classes:typeof n.className==='string'?n.className:null,text:(n.childElementCount===0&&!['script','style','noscript'].includes(tag)?(n.textContent||'').trim().slice(0,160):null),path:p.join('/'),resourceUrl,childCount:n.children.length,nodeKey:key(n)})};" +
+            "const s=window.__hackermesInspectorStore||(window.__hackermesInspectorStore={next:0,nodes:new Map(),keys:new WeakMap(),nextRule:0,rules:new Map(),ruleKeys:new WeakMap()});const key=e=>{let k=s.keys.get(e);if(!k){k='n'+(++s.next);s.keys.set(e,k)}s.nodes.set(k,e);return k};if(n.nodeType===1){let resourceUrl=null,source=n.getAttribute('src')||n.getAttribute('href'),tag=n.nodeName.toLowerCase();try{if(source)resourceUrl=new URL(source,document.baseURI).href}catch{}o.push({depth:d,nodeName:n.nodeName,id:n.id||null,classes:typeof n.className==='string'?n.className:null,text:(n.childElementCount===0&&!['script','style','noscript'].includes(tag)?(n.textContent||'').trim().slice(0,160):null),path:p.join('/'),resourceUrl,childCount:n.children.length,nodeKey:key(n),attributes:Array.from(n.attributes||[]).slice(0,10).map(a=>({name:a.name,value:a.value.slice(0,80)}))})};" +
             "for(let i=0;i<(n.children||[]).length;i++)w(n.children[i],d+1,p.concat(i))};w(document.documentElement,0,[]);return o})()";
         return await EvaluateAsync<DomNodeItem[]>(expression, cancellationToken).ConfigureAwait(false) ?? [];
     }

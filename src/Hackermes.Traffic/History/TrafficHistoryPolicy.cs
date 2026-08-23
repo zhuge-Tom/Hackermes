@@ -18,7 +18,8 @@ public sealed record TrafficHistoryStatistics(
     long PersistedFileBytes,
     DateTimeOffset? OldestCapture,
     DateTimeOffset? NewestCapture,
-    TrafficHistoryPolicy Policy);
+    TrafficHistoryPolicy Policy,
+    string? PolicySource = null);
 
 public sealed record TrafficCleanupPreview(
     int RemovedEntries,

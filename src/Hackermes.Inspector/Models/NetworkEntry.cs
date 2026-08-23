@@ -68,6 +68,28 @@ public partial class NetworkEntry : ObservableObject
     [ObservableProperty]
     private bool _isFailed;
 
+    /// <summary>请求头原始 JSON(CDP request.headers),详情面板按 Burp 风格渲染。</summary>
+    [ObservableProperty]
+    private string? _requestHeadersJson;
+
+    /// <summary>请求体(CDP request.postData,存在时才有)。</summary>
+    [ObservableProperty]
+    private string? _requestBody;
+
+    /// <summary>响应头原始 JSON(CDP response.headers)。</summary>
+    [ObservableProperty]
+    private string? _responseHeadersJson;
+
+    /// <summary>响应体文本,选中该条时经 Network.getResponseBody 懒加载。</summary>
+    [ObservableProperty]
+    private string? _responseBodyText;
+
+    [ObservableProperty]
+    private bool _isResponseBodyLoaded;
+
+    [ObservableProperty]
+    private string? _detailError;
+
     /// <summary>
     /// Value-free security facts derived from the response headers. Raw header and
     /// Set-Cookie values are never exposed through this model.

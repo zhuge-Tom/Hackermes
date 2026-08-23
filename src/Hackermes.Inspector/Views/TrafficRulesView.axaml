@@ -3,13 +3,13 @@
              xmlns:vm="using:Hackermes.Inspector.ViewModels"
              x:Class="Hackermes.Inspector.Views.TrafficRulesView"
              x:DataType="vm:TrafficRulesViewModel">
-  <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <Grid Grid.Row="0" Margin="8" ColumnDefinitions="130,*,90,100,100,Auto">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
+    <Grid Grid.Row="0" Margin="8" ColumnDefinitions="130,*,90,100,110,Auto">
       <TextBox Grid.Column="0" Margin="0,0,6,0" PlaceholderText="Rule id" Text="{Binding Id}" />
       <TextBox Grid.Column="1" Margin="0,0,6,0" PlaceholderText="URL glob, e.g. *://*/api/*" Text="{Binding UrlPattern}" />
       <TextBox Grid.Column="2" Margin="0,0,6,0" PlaceholderText="Method or *" Text="{Binding Method}" />
-      <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="request/response" Text="{Binding Stage}" />
-      <TextBox Grid.Column="4" Margin="0,0,6,0" PlaceholderText="pause/drop" Text="{Binding Behavior}" />
+      <TextBox Grid.Column="3" Margin="0,0,6,0" PlaceholderText="request/response/any" Text="{Binding Stage}" />
+      <TextBox Grid.Column="4" Margin="0,0,6,0" PlaceholderText="pause/drop/edit/fulfill" Text="{Binding Behavior}" />
       <Button Grid.Column="5" Content="Add rule" Command="{Binding AddCommand}" />
     </Grid>
     <Grid Grid.Row="1" Margin="8,0,8,6" ColumnDefinitions="Auto,260,Auto,Auto,Auto,*">
@@ -20,7 +20,29 @@
       <Button Grid.Column="4" Margin="6,0,0,0" Content="Import" Command="{Binding ImportRulesCommand}" />
       <TextBlock Grid.Column="5" Margin="10,0,0,0" VerticalAlignment="Center" Opacity="0.6" Text="Replace is the default import mode" />
     </Grid>
-    <DataGrid Grid.Row="2" ItemsSource="{Binding Rules}" SelectedItem="{Binding Selected}"
+    <Expander Grid.Row="2" Margin="8,0,8,6" Header="Advanced edits — request rewrite or response fulfill" IsExpanded="False">
+      <Grid ColumnDefinitions="*,*" Margin="0,6,0,0">
+        <StackPanel Grid.Column="0" Margin="0,0,6,0" Spacing="4">
+          <TextBlock Text="Request edit (behavior = edit)" FontWeight="SemiBold" />
+          <TextBox PlaceholderText="New URL (optional)" Text="{Binding RequestUrl}" />
+          <TextBox PlaceholderText="New method (optional)" Text="{Binding RequestMethod}" />
+          <TextBox PlaceholderText="Headers to override, one per line: Name: value" Text="{Binding RequestHeaderText}"
+                   AcceptsReturn="True" MinHeight="70" TextWrapping="NoWrap" />
+          <TextBox PlaceholderText="Replacement body (UTF-8 text, optional)" Text="{Binding RequestBodyText}"
+                   AcceptsReturn="True" MinHeight="70" TextWrapping="NoWrap" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Margin="6,0,0,0" Spacing="4">
+          <TextBlock Text="Response fulfill (behavior = fulfill)" FontWeight="SemiBold" />
+          <TextBox PlaceholderText="Status (default 200)" Text="{Binding ResponseStatus}" />
+          <TextBox PlaceholderText="Status text (optional)" Text="{Binding ResponseStatusText}" />
+          <TextBox PlaceholderText="Full response headers, one per line: Name: value" Text="{Binding ResponseHeaderText}"
+                   AcceptsReturn="True" MinHeight="70" TextWrapping="NoWrap" />
+          <TextBox PlaceholderText="Response body (UTF-8 text, optional)" Text="{Binding ResponseBodyText}"
+                   AcceptsReturn="True" MinHeight="70" TextWrapping="NoWrap" />
+        </StackPanel>
+      </Grid>
+    </Expander>
+    <DataGrid Grid.Row="3" ItemsSource="{Binding Rules}" SelectedItem="{Binding Selected}"
               AutoGenerateColumns="False" IsReadOnly="True">
       <DataGrid.Columns>
         <DataGridCheckBoxColumn Header="On" Width="50" Binding="{Binding Enabled}" x:DataType="vm:TrafficRuleItem" />
@@ -31,12 +53,14 @@
         <DataGridTextColumn Header="Behavior" Width="90" Binding="{Binding Behavior}" x:DataType="vm:TrafficRuleItem" />
       </DataGrid.Columns>
     </DataGrid>
-    <Grid Grid.Row="3" Margin="8,6" ColumnDefinitions="Auto,Auto,Auto,Auto,*">
-      <Button Grid.Column="0" Content="Enable / disable" Command="{Binding ToggleCommand}" />
-      <Button Grid.Column="1" Margin="6,0,0,0" Content="Remove" Command="{Binding RemoveCommand}" />
-      <Button Grid.Column="2" Margin="6,0,0,0" Content="Move up" Command="{Binding MoveUpCommand}" />
-      <Button Grid.Column="3" Margin="6,0,0,0" Content="Move down" Command="{Binding MoveDownCommand}" />
-      <TextBlock Grid.Column="4" Margin="12,0,0,0" VerticalAlignment="Center" Text="{Binding Status}" Opacity="0.7" />
+    <Grid Grid.Row="4" Margin="8,6" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*">
+      <Button Grid.Column="0" Content="Load selected" Command="{Binding LoadSelectedCommand}" />
+      <Button Grid.Column="1" Margin="6,0,0,0" Content="Save changes" Command="{Binding SaveChangesCommand}" />
+      <Button Grid.Column="2" Margin="12,0,0,0" Content="Enable / disable" Command="{Binding ToggleCommand}" />
+      <Button Grid.Column="3" Margin="6,0,0,0" Content="Remove" Command="{Binding RemoveCommand}" />
+      <Button Grid.Column="4" Margin="6,0,0,0" Content="Move up" Command="{Binding MoveUpCommand}" />
+      <Button Grid.Column="5" Margin="6,0,0,0" Content="Move down" Command="{Binding MoveDownCommand}" />
+      <TextBlock Grid.Column="6" Margin="12,0,0,0" VerticalAlignment="Center" Text="{Binding Status}" Opacity="0.7" />
     </Grid>
   </Grid>
 </UserControl>

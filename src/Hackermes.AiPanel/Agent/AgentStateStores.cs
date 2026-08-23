@@ -253,9 +253,36 @@ public sealed class AgentMemoryStore : IAgentMemoryStore
     private static string Limit(string? value, int max) => (value ?? string.Empty).Trim()[..Math.Min((value ?? string.Empty).Trim().Length, max)];
 }
 
+/// <summary>One persisted AI chat session: its own compacted summary plus recent verbatim messages.</summary>
+public sealed class AgentSessionEntry
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public string Summary { get; set; } = string.Empty;
+    public List<AgentMemoryMessage> RecentMessages { get; set; } = new();
+
+    public override string ToString() => string.IsNullOrWhiteSpace(Name) ? Id : Name;
+}
+
+public sealed class AgentSessionDocument
+{
+    public int Version { get; set; } = 1;
+    public string ActiveId { get; set; } = string.Empty;
+    public List<AgentSessionEntry> Sessions { get; set; } = new();
+}
+
+public interface IAgentSessionStore
+{
+    AgentSessionDocument Load();
+    void Save(AgentSessionDocument document);
+}
+
 [JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(AgentSkillDocument))]
 [JsonSerializable(typeof(AgentMemoryDocument))]
+[JsonSerializable(typeof(AgentSessionDocument))]
 internal partial class AgentStateJsonContext : JsonSerializerContext
 {
 }

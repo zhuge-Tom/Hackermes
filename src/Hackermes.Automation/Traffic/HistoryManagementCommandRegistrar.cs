@@ -90,7 +90,8 @@ public static class HistoryManagementCommandRegistrar
 
     public static string Format(TrafficHistoryStatistics value) =>
         $"entries={value.EntryCount}\tcontentBytes={value.EstimatedContentBytes}\tfileBytes={value.PersistedFileBytes}\t" +
-        $"oldest={value.OldestCapture?.ToString("O") ?? "-"}\tnewest={value.NewestCapture?.ToString("O") ?? "-"}\n{Format(value.Policy)}";
+        $"oldest={value.OldestCapture?.ToString("O") ?? "-"}\tnewest={value.NewestCapture?.ToString("O") ?? "-"}\t" +
+        $"policySource={value.PolicySource ?? "-"}\n{Format(value.Policy)}";
 
     public static string Format(TrafficHistoryPolicy value) =>
         $"maxEntries={value.MaxEntries}\tmaxBytes={value.MaxStorageBytes}\tretentionDays={value.RetentionDays}\tautoPrune={value.AutoPrune}" +

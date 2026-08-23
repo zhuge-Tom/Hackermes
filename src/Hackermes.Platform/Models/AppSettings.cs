@@ -63,6 +63,13 @@ public sealed class TrafficSettings
 
     [JsonPropertyName("lastRulesPath")]
     public string? LastRulesPath { get; set; }
+
+    /// <summary>
+    /// Local operator identity stamped into traffic audit entries. Falls back to the
+    /// environment user name when empty; never contains credentials.
+    /// </summary>
+    [JsonPropertyName("operatorName")]
+    public string? OperatorName { get; set; }
 }
 
 public sealed class GeneralSettings
@@ -190,18 +197,38 @@ public sealed class AiSettings
     public AiPermissionMode PermissionMode { get; set; } = AiPermissionMode.RequestApproval;
 
     [JsonPropertyName("maxToolRounds")]
-    public int MaxToolRounds { get; set; } = 12;
+    public int MaxToolRounds { get; set; } = 48;
 
     /// <summary>Bounded character budget used when preparing a model request.</summary>
     [JsonPropertyName("maxContextCharacters")]
-    public int MaxContextCharacters { get; set; } = 24_000;
+    public int MaxContextCharacters { get; set; } = 120_000;
 
     /// <summary>Number of recent human/assistant messages retained after compaction.</summary>
     [JsonPropertyName("maxRecentMessages")]
     public int MaxRecentMessages { get; set; } = 16;
 
+    /// <summary>
+    /// Bounded character budget for one tool result fed back to the model. Oversized
+    /// results are truncated at the dispatcher exit with an explicit marker so a single
+    /// chatty tool cannot crowd out the rest of the context window.
+    /// </summary>
+    [JsonPropertyName("maxToolResultCharacters")]
+    public int MaxToolResultCharacters { get; set; } = 12_000;
+
+    /// <summary>Wall-clock budget for one AI tool invocation before it is cancelled.</summary>
+    [JsonPropertyName("toolCallTimeoutSeconds")]
+    public int ToolCallTimeoutSeconds { get; set; } = 120;
+
     [JsonPropertyName("memoryEnabled")]
     public bool MemoryEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Active Context Pruning (ACP): the model decides when/what to compress via
+    /// context_compress/decompress/search/status tools instead of silent truncation.
+    /// When enabled it is the sole context manager and legacy turn compaction is skipped.
+    /// </summary>
+    [JsonPropertyName("acpEnabled")]
+    public bool AcpEnabled { get; set; } = true;
 
     /// <summary>Maximum size of one HTTPS artifact cached for an approved Agent download.</summary>
     [JsonPropertyName("maxToolDownloadBytes")]

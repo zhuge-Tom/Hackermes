@@ -13,7 +13,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Selecting_structured_finding_points_binary_editor_at_exact_body_range()
     {
-        var service = new ArchiveWorkbenchFake
+        var service = new WorkbenchServiceFake
         {
             StructuredFindings = [new TrafficFindingItem("High", "body-risk", "Inspect bytes", "Request", "Body", "token", null, null, 17, 5)]
         };
@@ -32,7 +32,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Traffic_workbench_forwards_archive_path_filter_and_reports_counts()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         var model = new TrafficWorkbenchViewModel(service)
         {
             ArchivePath = " captures/session.har ",
@@ -51,7 +51,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Traffic_workbench_uses_injected_picker_without_ui_dependency()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         InspectorFileDialogRequest? saveRequest = null;
         var model = new TrafficWorkbenchViewModel(service)
         {
@@ -73,7 +73,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Cancelled_picker_does_not_call_archive_service()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         var model = new TrafficWorkbenchViewModel(service)
         {
             FileDialogs = new InspectorFileDialogDelegates(
@@ -146,7 +146,7 @@ public sealed class InspectorImportExportViewModelTests
     public async Task Recent_paths_initialize_both_workbenches_and_are_remembered_after_success()
     {
         var recent = new RecentPathsFake("old/archive.har", "old/rules.json");
-        var archive = new ArchiveWorkbenchFake();
+        var archive = new WorkbenchServiceFake();
         var trafficModel = new TrafficWorkbenchViewModel(archive, recent);
         var rules = new RulesWorkbenchFake();
         var rulesModel = new TrafficRulesViewModel(rules, recent);
@@ -168,7 +168,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Binary_editor_exposes_and_discards_pending_draft()
     {
-        var service = new ArchiveWorkbenchFake { DraftStatus = "Pending request: before -> after", DiscardResult = true };
+        var service = new WorkbenchServiceFake { DraftStatus = "Pending request: before -> after", DiscardResult = true };
         var model = new TrafficWorkbenchViewModel(service)
         {
             Selected = new TrafficExchange("packet-1", DateTimeOffset.UtcNow, "POST", "https://example.test/", null, "POST / HTTP/1.1\r\n\r\n", ""),
@@ -185,7 +185,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Resolve_commands_surface_shared_final_state_and_audit_id()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         var model = new TrafficWorkbenchViewModel(service)
         {
             Selected = new TrafficExchange("packet-1", DateTimeOffset.UtcNow, "POST", "https://example.test/", null,
@@ -201,7 +201,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public void Annotation_filters_are_forwarded_as_trimmed_query_values()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         var model = new TrafficWorkbenchViewModel(service);
 
         model.AnnotationTagFilter = " auth ";
@@ -220,7 +220,7 @@ public sealed class InspectorImportExportViewModelTests
     [Fact]
     public async Task Delete_annotation_removes_persisted_value_and_clears_editor()
     {
-        var service = new ArchiveWorkbenchFake();
+        var service = new WorkbenchServiceFake();
         service.Annotations["packet"] = new TrafficAnnotationItem(
             true, "auth,api", "Check token", "InReview", 4);
         var model = new TrafficWorkbenchViewModel(service)
@@ -251,6 +251,8 @@ public sealed class InspectorImportExportViewModelTests
         public Task ExportRulesFileAsync(string path, CancellationToken cancellationToken) { ExportedPath = path; return Task.CompletedTask; }
         public Task<int> ImportRulesFileAsync(string path, bool merge, CancellationToken cancellationToken) { Imported = (path, merge); return Task.FromResult(4); }
         public Task AddRuleAsync(TrafficRuleDraft draft, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task UpdateRuleAsync(TrafficRuleDraft draft, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<TrafficRuleDraft?> GetRuleAsync(string id, CancellationToken cancellationToken) => Task.FromResult<TrafficRuleDraft?>(null);
         public Task SetRuleEnabledAsync(string id, bool enabled, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task RemoveRuleAsync(string id, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task MoveRuleAsync(string id, int targetIndex, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -265,83 +267,5 @@ public sealed class InspectorImportExportViewModelTests
         public string NormalizePath(string path) => "normalized:" + path.Trim();
         public void RememberArchivePath(string path) => RememberedArchive = path;
         public void RememberRulesPath(string path) => RememberedRules = path;
-    }
-
-    private sealed class ArchiveWorkbenchFake : ITrafficWorkbenchService
-    {
-        public IReadOnlyList<TrafficExchange> Exchanges =>
-            [new("packet", DateTimeOffset.UtcNow, "POST", "https://example.test", null, "POST / HTTP/1.1\r\n\r\nbody", "")];
-        public IReadOnlyList<TrafficFindingItem> StructuredFindings { get; init; } = [];
-        public bool IsInterceptEnabled { get; set; }
-        public bool IsResponseInterceptEnabled { get; set; }
-        public event Action? Changed;
-        public (string Path, string? Filter)? Exported { get; private set; }
-        public string? ImportedPath { get; private set; }
-        public string? DraftStatus { get; init; }
-        public bool DiscardResult { get; init; }
-        public (string Id, string Side)? Discarded { get; private set; }
-        public TrafficExchangeFilter? LastQuery { get; private set; }
-        public Dictionary<string, TrafficAnnotationItem> Annotations { get; } = new(StringComparer.Ordinal);
-        public string? DeletedAnnotationId { get; private set; }
-        public TrafficExchangePage Query(TrafficExchangeFilter filter)
-        {
-            LastQuery = filter;
-            return new([], 0, filter.Offset, filter.Limit);
-        }
-        public Task<int> ExportArchiveFileAsync(string path, string? filter, CancellationToken cancellationToken) { Exported = (path, filter); return Task.FromResult(7); }
-        public Task<int> ImportArchiveFileAsync(string path, CancellationToken cancellationToken) { ImportedPath = path; return Task.FromResult(3); }
-        public Task<int> ExportSignedAuditFileAsync(string path, string? packetId, int limit, CancellationToken cancellationToken) => Task.FromResult(2);
-        public Task<TrafficAuditVerificationItem> VerifySignedAuditFileAsync(string path, string? expectedKeyId, CancellationToken cancellationToken) =>
-            Task.FromResult(new TrafficAuditVerificationItem(true, expectedKeyId ?? "test-key", 2, DateTimeOffset.UtcNow, null));
-        public Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));
-        public Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(string exchangeId, string side, string rawPacket, CancellationToken cancellationToken) => Task.FromResult(StructuredFindings);
-        public Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(new TrafficOperationResult(true, "ok"));
-        public Task ContinueAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task DropAsync(string exchangeId, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task FulfillAsync(string exchangeId, string response, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<string> CreateRepeaterAsync(string exchangeId, CancellationToken cancellationToken) => Task.FromResult("draft");
-        public Task<string> EditBinaryBodyAsync(string exchangeId, string side, string kind, long offset, long count, string data, string encoding, CancellationToken cancellationToken) => Task.FromResult("ok");
-        public Task<string> ReadBinaryBodyAsync(string exchangeId, string side, long offset, int count, string encoding, CancellationToken cancellationToken) => Task.FromResult("");
-        public Task<TrafficBinaryBodyInfo> GetBinaryBodyInfoAsync(string exchangeId, string side, CancellationToken cancellationToken) =>
-            Task.FromResult(new TrafficBinaryBodyInfo(0, new string('0', 64), null, null));
-        public Task<string?> GetBinaryDraftStatusAsync(string exchangeId, string side, CancellationToken cancellationToken) => Task.FromResult(DraftStatus);
-        public Task<bool> DiscardBinaryDraftAsync(string exchangeId, string side, CancellationToken cancellationToken) { Discarded = (exchangeId, side); return Task.FromResult(DiscardResult); }
-        public Task<TrafficPacketCommitResult> ResolveContinueAsync(string exchangeId, string request, CancellationToken cancellationToken) => Task.FromResult(Commit("Continue", exchangeId, "request"));
-        public Task<TrafficPacketCommitResult> ResolveDropAsync(string exchangeId, CancellationToken cancellationToken) => Task.FromResult(Commit("Drop", exchangeId, "request"));
-        public Task<TrafficPacketCommitResult> ResolveFulfillAsync(string exchangeId, string response, CancellationToken cancellationToken) => Task.FromResult(Commit("Fulfill", exchangeId, "response"));
-        public Task<TrafficPacketCommitResult> ResolveDiscardAsync(string exchangeId, string side, CancellationToken cancellationToken)
-        {
-            Discarded = (exchangeId, side);
-            return Task.FromResult(DiscardResult ? Commit("Discard", exchangeId, side) :
-                new TrafficPacketCommitResult(false, "Discard", exchangeId, side, "Paused", "0 B", "0 B", "audit-test", "not_found", "not found"));
-        }
-        public IReadOnlyList<TrafficAuditItem> GetAudit(string exchangeId, int limit = 100) => [];
-        public TrafficHistoryOverview GetHistoryOverview() => new(0, 0, 0, null, null, 5000, 256L * 1024 * 1024, 30, true, []);
-        public string PreviewHistoryCleanup() => "No entries would be removed.";
-        public Task<TrafficHistoryOverview> UpdateHistoryPolicyAsync(int maxEntries, long maxBytes, int retentionDays, bool autoPrune, CancellationToken cancellationToken) =>
-            Task.FromResult(new TrafficHistoryOverview(0, 0, 0, null, null, maxEntries, maxBytes, retentionDays, autoPrune, []));
-        public Task<TrafficHistoryOverview> SetHistorySiteQuotaAsync(string hostPattern, int maxEntries, long maxBytes, CancellationToken cancellationToken) =>
-            Task.FromResult(new TrafficHistoryOverview(0, 0, 0, null, null, 5000, 256L * 1024 * 1024, 30, true,
-                [new TrafficHistorySiteQuotaItem(hostPattern, maxEntries, maxBytes)]));
-        public Task<TrafficHistoryOverview> RemoveHistorySiteQuotaAsync(string hostPattern, CancellationToken cancellationToken) =>
-            Task.FromResult(GetHistoryOverview());
-        public Task<string> CleanupTrafficHistoryAsync(CancellationToken cancellationToken) => Task.FromResult("No entries removed.");
-        public Task ClearTrafficHistoryAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        public IReadOnlyList<TrafficParameterItem> ReadParameters(string rawPacket) => [];
-        public string SetParameter(string rawPacket, string location, string name, int occurrence, string value) => rawPacket;
-        public TrafficAnnotationItem? GetAnnotation(string exchangeId) => Annotations.GetValueOrDefault(exchangeId);
-        public Task<TrafficAnnotationItem> SaveAnnotationAsync(string exchangeId, bool starred, string tags, string note, string status, CancellationToken cancellationToken)
-        {
-            var saved = new TrafficAnnotationItem(starred, tags, note, status, 1);
-            Annotations[exchangeId] = saved;
-            return Task.FromResult(saved);
-        }
-        public Task<bool> DeleteAnnotationAsync(string exchangeId, CancellationToken cancellationToken)
-        {
-            DeletedAnnotationId = exchangeId;
-            return Task.FromResult(Annotations.Remove(exchangeId));
-        }
-        private static TrafficPacketCommitResult Commit(string operation, string id, string side) =>
-            new(true, operation, id, side, "Continued", "0 B", "0 B", "audit-test", null, "ok");
     }
 }

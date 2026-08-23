@@ -95,8 +95,8 @@ internal static class TrafficAiToolRegistrar
                 statusCode = new { type = "integer", minimum = 100, maximum = 999 },
                 resourceType = new { type = "string", maxLength = 64 },
                 onlyIntercepted = new { type = "boolean" },
-                offset = new { type = "integer", minimum = 0, maximum = PacketQueryLimits.MaximumOffset },
-                limit = new { type = "integer", minimum = 1, maximum = PacketQueryLimits.MaximumPageSize }
+                offset = new { type = "integer", minimum = 0, description = "Page start index." },
+                limit = new { type = "integer", minimum = 1, maximum = PacketQueryLimits.MaximumPageSize, description = "Page size; advance offset to walk the full result set." }
             },
             additionalProperties = false
         });
@@ -257,11 +257,14 @@ internal static class TrafficAiToolRegistrar
             type = "object", properties = new
             {
                 format = new { type = "string", @enum = new[] { "hackermesJson", "har" } },
-                filter = new { type = "string" }
+                filter = new { type = "string", maxLength = 512, description = "Substring matched against packet URL or method." },
+                offset = new { type = "integer", minimum = 0, description = "Entry index of the first packet in this batch." },
+                limit = new { type = "integer", minimum = 1, maximum = PacketArchiveContent.MaximumEntries, description = "Maximum packets in this batch; walk offset until you have collected total entries." }
             }, required = new[] { "format" }, additionalProperties = false
         });
         registry.Register(new AiToolDefinition("packet_archive_export",
-            $"Export up to {PacketArchiveContent.MaximumEntries} filtered packets as bounded JSON/HAR content. " +
+            $"Export filtered packets as bounded JSON/HAR content in batches of up to {PacketArchiveContent.MaximumEntries} " +
+            $"entries (offset/limit paging; response carries total so you can fetch further batches until you have all of them). " +
             "No filesystem path is accepted. Bulk packet data may contain secrets and requires explicit confirmation.",
             exportSchema, AiToolRisk.Dangerous, async (invocation, ct) =>
             {
@@ -269,9 +272,16 @@ internal static class TrafficAiToolRegistrar
                 {
                     var args = invocation.Arguments;
                     var formatText = Required(args, "format");
-                    var entries = await archive.ExportArchiveAsync(Optional(args, "filter", null!), ct).ConfigureAwait(false);
-                    var content = PacketArchiveContent.Serialize(entries, PacketArchiveContent.ParseFormat(formatText));
-                    return ToolResult.Ok(JsonSerializer.Serialize(new { format = formatText, count = entries.Count, content }));
+                    var format = PacketArchiveContent.ParseFormat(formatText);
+                    var offset = args.TryGetProperty("offset", out var rawOffset) ? rawOffset.GetInt32() : 0;
+                    var limit = args.TryGetProperty("limit", out var rawLimit)
+                        ? rawLimit.GetInt32() : PacketArchiveContent.MaximumEntries;
+                    var page = await archive.ExportArchivePageAsync(
+                        new PacketArchiveExchangeQuery(OptionalValue(args, "filter"), offset, limit), ct).ConfigureAwait(false);
+                    var content = PacketArchiveContent.Serialize(page.Entries, format);
+                    return ToolResult.Ok(JsonSerializer.Serialize(
+                        new { format = formatText, count = page.Entries.Count, total = page.Total, offset, content },
+                        CommitJsonOptions));
                 }
                 catch (Exception ex) when (ex is ArgumentException or System.IO.InvalidDataException)
                 {
@@ -313,7 +323,7 @@ internal static class TrafficAiToolRegistrar
             type = "object", properties = new
             {
                 id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
-                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie" } },
+                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie", "multipart" } },
                 name = new { type = "string", minLength = 1, maxLength = HttpPacketParameters.MaximumNameLength },
                 occurrence = new { type = "integer", minimum = 0 },
                 value = new { type = "string", maxLength = HttpPacketParameters.MaximumValueLength }
@@ -327,7 +337,7 @@ internal static class TrafficAiToolRegistrar
                 {
                     var args = invocation.Arguments;
                     if (!Enum.TryParse<HttpParameterLocation>(Required(args, "location"), true, out var location))
-                        return ToolResult.Fail("Parameter location must be query, form, json, header or cookie.");
+                        return ToolResult.Fail("Parameter location must be query, form, json, header, cookie or multipart.");
                     var outcome = await PacketOperationExecutor.ExecuteAsync(packets, new PacketParameterSetIntent(
                         Required(args, "id"), Required(args, "side"), location, Required(args, "name"),
                         args.GetProperty("occurrence").GetInt32(), Required(args, "value")), ct).ConfigureAwait(false);
@@ -393,7 +403,8 @@ internal static class TrafficAiToolRegistrar
             type = "object", properties = new
             {
                 id = new { type = "string" }, side = new { type = "string", @enum = new[] { "request", "response" } },
-                offset = new { type = "integer", minimum = 0 }, count = new { type = "integer", minimum = 1, maximum = PacketBodyChunker.MaximumChunkSize },
+                offset = new { type = "integer", minimum = 0, description = "Byte offset to read from." },
+                count = new { type = "integer", minimum = 1, maximum = PacketBodyChunker.MaximumChunkSize, description = "Bytes to load in this chunk; walk offsets for large bodies." },
                 encoding = new { type = "string", @enum = new[] { "base64", "safeText" } }
             }, required = new[] { "id", "side", "offset" }, additionalProperties = false
         });
@@ -435,10 +446,11 @@ internal static class TrafficAiToolRegistrar
                 id = new { type = "string" }, leftId = new { type = "string" }, rightId = new { type = "string" },
                 side = new { type = "string", @enum = new[] { "request", "response" } },
                 filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
-                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie" } },
+                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie", "multipart" } },
                 name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" },
                 mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } },
-                packetId = new { type = "string" }, limit = new { type = "integer", minimum = 1, maximum = 500 }
+                packetId = new { type = "string" },
+                limit = new { type = "integer", minimum = 1, maximum = 500, description = "Maximum audit entries returned." }
             },
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false

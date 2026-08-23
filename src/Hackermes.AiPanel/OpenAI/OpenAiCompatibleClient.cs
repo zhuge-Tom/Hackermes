@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -16,9 +17,27 @@ namespace Hackermes.AiPanel.OpenAI;
 /// <summary>Dependency-free OpenAI-compatible chat/completions SSE client.</summary>
 public sealed class OpenAiCompatibleClient : IOpenAiChatClient
 {
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
     private readonly HttpClient _http;
+    private readonly int _maxRetries;
+    private readonly Func<int, TimeSpan> _backoff;
 
-    public OpenAiCompatibleClient(HttpClient http) => _http = http;
+    public OpenAiCompatibleClient(HttpClient http)
+        : this(http, maxRetries: 2, backoff: DefaultBackoff)
+    {
+    }
+
+    /// <summary>Retries transient request failures (429/5xx/connection errors) before any stream content is consumed.</summary>
+    public OpenAiCompatibleClient(HttpClient http, int maxRetries, Func<int, TimeSpan>? backoff)
+    {
+        _http = http;
+        if (maxRetries is < 0 or > 5)
+            throw new ArgumentOutOfRangeException(nameof(maxRetries), "Retry count must be between 0 and 5.");
+        _maxRetries = maxRetries;
+        _backoff = backoff ?? DefaultBackoff;
+    }
+
+    private static TimeSpan DefaultBackoff(int attempt) => TimeSpan.FromSeconds(attempt == 0 ? 1 : 3);
 
     public Uri Endpoint { get; set; } = new("https://api.openai.com/v1/chat/completions");
     public string? ApiKey { get; set; }
@@ -116,65 +135,129 @@ public sealed class OpenAiCompatibleClient : IOpenAiChatClient
             stream_options = new { include_usage = true }
         };
 
-        using var message = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        var attempt = 0;
+        HttpResponseMessage? response = null;
+        try
+        {
+            while (true)
+            {
+                response?.Dispose();
+                response = null;
+                using var message = CreateRequest(body);
+                try
+                {
+                    response = await _http.SendAsync(
+                        message, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                }
+                catch (HttpRequestException) when (attempt < _maxRetries && !ct.IsCancellationRequested)
+                {
+                    attempt++;
+                    await Task.Delay(_backoff(attempt - 1), ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode && IsRetryableStatus(response.StatusCode) &&
+                    attempt < _maxRetries && !ct.IsCancellationRequested)
+                {
+                    attempt++;
+                    var delay = ResolveDelay(response, attempt);
+                    response.Dispose();
+                    response = null;
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                    throw await CreateHttpErrorAsync(response, ct).ConfigureAwait(false);
+                break;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var reader = new StreamReader(stream);
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                if (line is null) break;
+                if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
+                var data = line[5..].Trim();
+                if (data.Length == 0 || data == "[DONE]") continue;
+
+                using var document = JsonDocument.Parse(data);
+                var root = document.RootElement;
+                if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                    yield return new ChatStreamDelta(null, null, null, ReadUsage(usage));
+                if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) continue;
+                var choice = choices[0];
+                var finish = choice.TryGetProperty("finish_reason", out var f) && f.ValueKind == JsonValueKind.String
+                    ? f.GetString() : null;
+                if (!choice.TryGetProperty("delta", out var delta))
+                {
+                    if (finish is not null) yield return new ChatStreamDelta(null, null, finish);
+                    continue;
+                }
+
+                var content = delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String
+                    ? c.GetString() : null;
+                if (delta.TryGetProperty("tool_calls", out var calls))
+                {
+                    foreach (var call in calls.EnumerateArray())
+                    {
+                        var index = call.TryGetProperty("index", out var i) ? i.GetInt32() : 0;
+                        var id = call.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
+                        string? name = null, arguments = null;
+                        if (call.TryGetProperty("function", out var function))
+                        {
+                            if (function.TryGetProperty("name", out var n)) name = n.GetString();
+                            if (function.TryGetProperty("arguments", out var a)) arguments = a.GetString();
+                        }
+                        yield return new ChatStreamDelta(content, new ToolCallDelta(index, id, name, arguments), finish);
+                        content = null;
+                    }
+                }
+                else if (content is not null || finish is not null)
+                {
+                    yield return new ChatStreamDelta(content, null, finish);
+                }
+            }
+        }
+        finally { response?.Dispose(); }
+    }
+
+    private HttpRequestMessage CreateRequest(object body)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Post, Endpoint)
         {
             Content = JsonContent.Create(body, options: JsonOptions)
         };
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         if (!string.IsNullOrWhiteSpace(ApiKey))
             message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-
-        using var response = await _http.SendAsync(
-            message, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var reader = new StreamReader(stream);
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-            if (line is null) break;
-            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
-            var data = line[5..].Trim();
-            if (data.Length == 0 || data == "[DONE]") continue;
-
-            using var document = JsonDocument.Parse(data);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) continue;
-            var choice = choices[0];
-            var finish = choice.TryGetProperty("finish_reason", out var f) && f.ValueKind == JsonValueKind.String
-                ? f.GetString() : null;
-            if (!choice.TryGetProperty("delta", out var delta))
-            {
-                if (finish is not null) yield return new ChatStreamDelta(null, null, finish);
-                continue;
-            }
-
-            var content = delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String
-                ? c.GetString() : null;
-            if (delta.TryGetProperty("tool_calls", out var calls))
-            {
-                foreach (var call in calls.EnumerateArray())
-                {
-                    var index = call.TryGetProperty("index", out var i) ? i.GetInt32() : 0;
-                    var id = call.TryGetProperty("id", out var idValue) ? idValue.GetString() : null;
-                    string? name = null, arguments = null;
-                    if (call.TryGetProperty("function", out var function))
-                    {
-                        if (function.TryGetProperty("name", out var n)) name = n.GetString();
-                        if (function.TryGetProperty("arguments", out var a)) arguments = a.GetString();
-                    }
-                    yield return new ChatStreamDelta(content, new ToolCallDelta(index, id, name, arguments), finish);
-                    content = null;
-                }
-            }
-            else if (content is not null || finish is not null)
-            {
-                yield return new ChatStreamDelta(content, null, finish);
-            }
-        }
+        return message;
     }
+
+    private static bool IsRetryableStatus(HttpStatusCode status) =>
+        status is HttpStatusCode.TooManyRequests
+            or HttpStatusCode.InternalServerError
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout;
+
+    private TimeSpan ResolveDelay(HttpResponseMessage response, int attempt)
+    {
+        var delay = _backoff(attempt - 1);
+        if (response.Headers.RetryAfter?.Delta is { } hint && hint > delay)
+            return hint > MaxRetryDelay ? MaxRetryDelay : hint;
+        return delay;
+    }
+
+    private static StreamUsage ReadUsage(JsonElement usage) => new(
+        usage.TryGetProperty("prompt_tokens", out var prompt) && prompt.ValueKind == JsonValueKind.Number
+            ? prompt.GetInt32() : 0,
+        usage.TryGetProperty("completion_tokens", out var completion) && completion.ValueKind == JsonValueKind.Number
+            ? completion.GetInt32() : 0,
+        usage.TryGetProperty("total_tokens", out var total) && total.ValueKind == JsonValueKind.Number
+            ? total.GetInt32() : null);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

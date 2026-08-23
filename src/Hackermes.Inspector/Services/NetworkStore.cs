@@ -25,6 +25,7 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
 
     private readonly IAppLogger _logger;
     private readonly Dictionary<string, NetworkEntry> _byRequestId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ICdpSession> _sessionsByPage = new(StringComparer.Ordinal);
     private readonly List<PendingInitiator> _pendingInitiators = [];
     private readonly Dictionary<string, List<IDisposable>> _subscriptionsByPage = new(StringComparer.Ordinal);
     private readonly object _gate = new();
@@ -67,9 +68,37 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
         return entry?.SecurityMetadata ?? NetworkSecurityMetadata.Empty;
     }
 
-    public void Clear()
+    /// <summary>
+    /// 懒加载一条请求的响应体(Burp 风格详情用)。只在用户点开该条时调用,
+    /// 避免 getResponseBody 对全量记录产生放大流量。
+    /// </summary>
+    public async System.Threading.Tasks.Task<string> LoadResponseBodyAsync(NetworkEntry entry)
     {
-        UiThreadBridge.Post(() =>
+        ICdpSession? session;
+        lock (_gate) _sessionsByPage.TryGetValue(entry.PageId, out session);
+        if (session is null || !session.IsAlive)
+            throw new InvalidOperationException("页面会话已关闭，无法读取响应体。");
+
+        var responseJson = await session.SendAsync("Network.getResponseBody",
+            System.Text.Json.JsonSerializer.Serialize(new { requestId = entry.RequestId }))
+            .ConfigureAwait(true);
+        var body = CdpJson.TryGetString(responseJson, "body") ?? string.Empty;
+        var base64 = string.Equals(CdpJson.TryGetString(responseJson, "base64Encoded"), "true", StringComparison.OrdinalIgnoreCase);
+        if (!base64) return body;
+
+        try
+        {
+            var bytes = Convert.FromBase64String(body);
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+        catch (FormatException)
+        {
+            return "(二进制响应体无法以文本显示)";
+        }
+    }
+
+    public void Clear()
+    {        UiThreadBridge.Post(() =>
         {
             lock (_gate)
             {
@@ -105,6 +134,7 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
                 if (_subscriptionsByPage.Remove(session.PageId, out var previous))
                     foreach (var subscription in previous) subscription.Dispose();
                 _subscriptionsByPage[session.PageId] = subscriptions;
+                _sessionsByPage[session.PageId] = session;
             }
 
             _logger.Info($"已接入页面网络流: {session.PageId}");
@@ -131,6 +161,11 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
             Url = url,
             ResourceType = CdpJson.TryGetString(e.ParametersJson, "type") ?? string.Empty
         };
+
+        // Burp 风格详情的数据源:请求行之外还要有头部块与可选的请求体。
+        if (CdpJson.TryGetElement(e.ParametersJson, "request", "headers") is { } requestHeaders)
+            entry.RequestHeadersJson = requestHeaders.ToString();
+        entry.RequestBody = CdpJson.TryGetString(e.ParametersJson, "request", "postData");
 
         // CDP 自己的 initiator 多数只有 URL,拿不到具体栈帧;Agent 的记录更有用。
         TryApplyPendingInitiator(entry);
@@ -165,6 +200,7 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
         {
             if (_subscriptionsByPage.Remove(pageId, out var subscriptions))
                 foreach (var subscription in subscriptions) subscription.Dispose();
+            _sessionsByPage.Remove(pageId);
             foreach (var id in _byRequestId.Where(pair => pair.Value.PageId == pageId).Select(pair => pair.Key).ToArray())
                 _byRequestId.Remove(id);
             _pendingInitiators.Clear();
@@ -198,6 +234,8 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
             entry.MimeType = mime;
             entry.IsFailed = status >= 400;
             entry.SecurityMetadata = securityMetadata;
+            if (headers is { ValueKind: System.Text.Json.JsonValueKind.Object } responseHeaders)
+                entry.ResponseHeadersJson = responseHeaders.ToString();
         });
     }
 

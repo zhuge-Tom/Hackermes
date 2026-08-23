@@ -6,23 +6,33 @@ using Avalonia.Media;
 using Hackermes.Assessment;
 using Hackermes.Platform.Registries;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 
 namespace Hackermes.App.Views;
 
 /// <summary>Cross-platform Stage 7C workspace. All mutations go through the shared control plane.</summary>
 public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
 {
+    /// <summary>Sentinel adapter id meaning "run every available assessment tool in sequence".</summary>
+    private const string AllToolsAdapterId = "__all_tools__";
+
     private readonly IAssessmentControlPlane _plane;
     private readonly ComboBox _jobs = new() { MinWidth = 280, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly ListBox _scopes = WorkspaceList();
     private readonly ListBox _plans = WorkspaceList();
     private readonly ListBox _approvals = WorkspaceList();
     private readonly TextBox _scopeName = new() { PlaceholderText = "范围名称" };
-    private readonly TextBox _authorization = new() { PlaceholderText = "授权依据或工单号" };
+    private readonly TextBox _authorization = new() { PlaceholderText = "授权依据或工单号", Text = "工作台人工确认" };
     private readonly TextBox _operator = new() { PlaceholderText = "操作人身份", Text = Environment.UserName };
-    private readonly TextBox _targets = new() { PlaceholderText = "精确目标，多个目标用逗号分隔", Text = "127.0.0.1" };
-    private readonly TextBox _scopeMinutes = new() { PlaceholderText = "有效分钟数", Text = "60" };
+    private readonly TextBox _targets = new() { PlaceholderText = "精确目标，多个用逗号分隔；勾选全部授权时可留空", Text = "127.0.0.1" };
+    private readonly CheckBox _authorizeAll = new()
+    {
+        Content = "全部授权（任意目标均视为已授权，目标可留空）",
+        HorizontalContentAlignment = HorizontalAlignment.Left
+    };
+    private readonly TextBox _scopeMinutes = new() { PlaceholderText = "有效分钟数", Text = "1440" };
     private readonly TextBox _planName = new() { PlaceholderText = "计划名称" };
     private readonly ComboBox _adapter = new() { MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly TextBox _stepInput = new()
@@ -33,11 +43,11 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         MinHeight = 88,
         TextWrapping = TextWrapping.Wrap
     };
-    private readonly TextBox _timeoutSeconds = new() { PlaceholderText = "超时秒数", Text = "30" };
+    private readonly TextBox _timeoutSeconds = new() { PlaceholderText = "超时秒数", Text = "300" };
     private readonly TextBox _approvalMinutes = new() { PlaceholderText = "审批有效分钟数", Text = "30" };
     private readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false };
-    private readonly TextBlock _jobEmpty = EmptyText("暂无评估任务。请先在“范围与执行”中完成授权范围、计划与审批。");
+    private readonly TextBlock _jobEmpty = EmptyText("暂无评估任务。在“授权与执行”中填写目标，点击“确认授权并执行”即可开始。");
     private readonly TextBlock _evidenceEmpty = EmptyText("当前任务暂无证据。执行获批计划后，证据将显示在这里。");
     private readonly TextBlock _findingEmpty = EmptyText("当前任务暂无发现。请选择证据后创建发现。");
     private readonly TextBlock _auditEmpty = EmptyText("当前任务暂无审计记录。");
@@ -65,8 +75,17 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         _evidence.SelectionChanged += (_, _) => ShowEvidence();
         _findings.SelectionChanged += (_, _) => ShowFinding();
         _audit.SelectionChanged += (_, _) => ShowAudit();
-        _adapter.ItemsSource = new[] { AuthorizedToolCatalog.SimulationEcho }
-            .Concat(AuthorizedToolCatalog.Describe().Select(value => value.Id)).ToArray();
+        _adapter.ItemsSource = new[]
+            {
+                new ToolOption(AllToolsAdapterId, "全部工具（依次执行所有可用的评估工具）"),
+                new ToolOption(AuthorizedToolCatalog.SimulationEcho,
+                    $"本地模拟回显（{AuthorizedToolCatalog.SimulationEcho}）· 无需外部工具，用于验证流程")
+            }
+            .Concat(AuthorizedToolCatalog.Describe().Select(value => new ToolOption(value.Id,
+                value.Available
+                    ? $"{value.Name}（{value.Id}）· {value.Category}"
+                    : $"{value.Name}（{value.Id}）· 不可用：{value.UnavailableReason}")))
+            .ToArray();
         _adapter.SelectedIndex = 0;
         RefreshAll();
     }
@@ -98,7 +117,7 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         {
             ItemsSource = new[]
             {
-                Tab("范围与执行", BuildLifecycleTab()),
+                Tab("授权与执行", BuildLifecycleTab()),
                 Tab("证据", BuildEvidenceTab()),
                 Tab("发现与复核", BuildFindingTab()),
                 Tab("审计链", BuildAuditTab()),
@@ -114,6 +133,23 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
 
     private Control BuildLifecycleTab()
     {
+        var confirmRun = new Button { Content = "确认授权并执行", FontWeight = FontWeight.SemiBold };
+        confirmRun.Click += async (_, _) => await ConfirmAndRunAsync();
+        var cancel = new Button { Content = "取消当前任务" };
+        cancel.Click += (_, _) => CancelSelectedJob();
+
+        var quickPanel = Section(
+            "授权与执行",
+            "填写范围名称并点击一次按钮，即视为操作者的人工确认：系统自动创建授权范围、生成固定计划、" +
+            "签发一次性审批并立即在独立 ToolHost 中执行，无需逐步确认。授权依据与操作人由系统自动记录。",
+            Labeled("范围名称", _scopeName),
+            _authorizeAll,
+            Labeled("目标", _targets),
+            TwoColumns(Labeled("有效期（分钟）· 默认 1 天", _scopeMinutes), Labeled("单步超时（秒）· 上限 600", _timeoutSeconds)),
+            Labeled("评估工具", _adapter),
+            Labeled("步骤输入", _stepInput),
+            ActionRow(confirmRun, cancel));
+
         var createScope = new Button { Content = "创建授权范围" };
         createScope.Click += (_, _) => CreateScope();
         var revokeScope = new Button { Content = "撤销所选范围" };
@@ -126,28 +162,20 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         revokeApproval.Click += (_, _) => RevokeApproval();
         var run = new Button { Content = "执行所选审批" };
         run.Click += async (_, _) => await RunApprovedPlanAsync();
-        var cancel = new Button { Content = "取消当前任务" };
-        cancel.Click += (_, _) => CancelSelectedJob();
 
+        // Controls are owned by the quick panel above; the advanced view only adds lists,
+        // buttons and its own fields so no control ends up with two visual parents.
         var scopePanel = Section(
             "1  授权范围",
             "明确授权依据、操作人和允许访问的目标。",
             _scopes,
-            Labeled("范围名称", _scopeName),
-            Labeled("授权依据", _authorization),
-            Labeled("操作人", _operator),
-            Labeled("目标", _targets),
-            Labeled("有效期（分钟）", _scopeMinutes),
             ActionRow(createScope, revokeScope));
 
         var planPanel = Section(
             "2  固定计划",
             "计划会绑定范围哈希；范围变化后需重新创建。",
-            _plans,
             Labeled("计划名称", _planName),
-            Labeled("适配器", _adapter),
-            Labeled("步骤输入", _stepInput),
-            Labeled("单步超时（秒）", _timeoutSeconds),
+            _plans,
             createPlan);
 
         var approvalPanel = Section(
@@ -155,35 +183,119 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             "审批票据仅可执行一次，执行前会再次校验范围、计划哈希、目标和超时。",
             _approvals,
             Labeled("审批有效期（分钟）", _approvalMinutes),
-            approve,
-            run,
-            new Separator { Margin = new Thickness(0, 4) },
-            Label("撤销操作"),
-            new TextBlock { Text = "以下操作会使审批或任务停止可用。", TextWrapping = TextWrapping.Wrap, Opacity = 0.72 },
-            ActionRow(revokeApproval, cancel));
+            ActionRow(approve, run, revokeApproval));
 
-        var grid = new Grid
+        var advancedGrid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
             RowDefinitions = new RowDefinitions("Auto,Auto"),
             ColumnSpacing = 12,
-            RowSpacing = 12,
-            Margin = new Thickness(12)
+            RowSpacing = 12
         };
         Grid.SetColumn(scopePanel, 0);
         Grid.SetColumn(planPanel, 1);
         Grid.SetRow(approvalPanel, 1);
         Grid.SetColumnSpan(approvalPanel, 2);
-        grid.Children.Add(scopePanel);
-        grid.Children.Add(planPanel);
-        grid.Children.Add(approvalPanel);
+        advancedGrid.Children.Add(scopePanel);
+        advancedGrid.Children.Add(planPanel);
+        advancedGrid.Children.Add(approvalPanel);
+
+        var advanced = new Expander
+        {
+            Header = "高级：手动分步管理范围 / 计划 / 审批",
+            Content = advancedGrid,
+            IsExpanded = false,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+
+        var root = new StackPanel { Spacing = 0, Margin = new Thickness(12) };
+        root.Children.Add(quickPanel);
+        root.Children.Add(advanced);
         return new ScrollViewer
         {
-            Content = grid,
+            Content = root,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
     }
+
+    private static Grid TwoColumns(Control left, Control right)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 12 };
+        Grid.SetColumn(left, 0);
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(left);
+        grid.Children.Add(right);
+        return grid;
+    }
+
+    /// <summary>One operator confirmation covers scope creation, plan hashing, approval issuance and execution.</summary>
+    private async System.Threading.Tasks.Task ConfirmAndRunAsync()
+    {
+        try
+        {
+            var minutes = PositiveInt(_scopeMinutes.Text, "范围有效分钟数", 1, 10_080);
+            var timeout = PositiveInt(_timeoutSeconds.Text, "超时秒数", 1, 600);
+            var adapterId = SelectedAdapterId();
+            var allTools = string.Equals(adapterId, AllToolsAdapterId, StringComparison.Ordinal);
+
+            var requestedTargets = (_targets.Text ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var scopeTargets = _authorizeAll.IsChecked == true ? ["*"] : requestedTargets;
+            if (scopeTargets.Length == 0) throw new ArgumentException("请填写至少一个目标，或勾选“全部授权”。");
+
+            List<AssessmentStep> steps;
+            var planLabel = allTools ? "全部工具" : adapterId;
+            if (allTools)
+            {
+                // 工具输入必须是具体目标;全部授权只放宽范围校验,不能替代目标本身。
+                var concrete = requestedTargets.FirstOrDefault(value => value != "*")
+                    ?? throw new ArgumentException("全部工具模式需要在目标中填写至少一个具体目标。");
+                steps = BuildAllToolSteps(concrete, timeout);
+                if (steps.Count == 0) throw new InvalidOperationException("当前没有可用的评估工具（本地工具或运行时缺失）。");
+            }
+            else
+            {
+                steps = [new AssessmentStep(adapterId, _stepInput.Text ?? string.Empty, timeout)];
+            }
+
+            var scope = _plane.CreateScope(_scopeName.Text ?? string.Empty, _authorization.Text ?? string.Empty,
+                _operator.Text ?? string.Empty, scopeTargets, DateTimeOffset.UtcNow.AddMinutes(minutes));
+            var actor = scope.OperatorId;
+            var plan = _plane.CreatePlan(scope.Id, $"{scope.Name} · {planLabel}",
+                steps, actor);
+            var approval = _plane.Approve(plan.Id, actor,
+                DateTimeOffset.UtcNow.AddMinutes(Math.Min(minutes, 1_440)));
+            SetStatus($"授权已确认，任务执行中…（{steps.Count} 个步骤）", false);
+            var job = await _plane.StartAsync(plan.Id, approval.Id, actor);
+            RefreshAll();
+            _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == job.Id);
+            var failure = string.IsNullOrWhiteSpace(job.Failure) ? string.Empty : $"：{job.Failure}";
+            SetStatus($"任务结束：{job.Status}{failure}。", job.Status is AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
+        }
+        catch (Exception exception) { SetStatus(exception.Message, true); }
+    }
+
+    /// <summary>One bounded step per locally available recon tool, each pointed at the same concrete target.</summary>
+    private static List<AssessmentStep> BuildAllToolSteps(string target, int timeout)
+    {
+        var steps = new List<AssessmentStep>();
+        foreach (var tool in AuthorizedToolCatalog.Describe().Where(value => value.Available))
+        {
+            var input = tool.Id switch
+            {
+                AuthorizedToolCatalog.NmapQuick or AuthorizedToolCatalog.NmapService =>
+                    JsonSerializer.Serialize(new { target, ports = "80,443,8080" }),
+                AuthorizedToolCatalog.DnsResolve => JsonSerializer.Serialize(new { target }),
+                _ => JsonSerializer.Serialize(new { target, scheme = "http", port = 80 })
+            };
+            steps.Add(new AssessmentStep(tool.Id, input, timeout, ContinueOnError: true));
+        }
+        return steps;
+    }
+
+    private string SelectedAdapterId() =>
+        (_adapter.SelectedItem as ToolOption)?.Id ?? AuthorizedToolCatalog.SimulationEcho;
 
     private Control BuildEvidenceTab()
     {
@@ -305,8 +417,11 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         try
         {
             var minutes = PositiveInt(_scopeMinutes.Text, "范围有效分钟数", 1, 10_080);
+            var requestedTargets = (_targets.Text ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var scopeTargets = _authorizeAll.IsChecked == true ? ["*"] : requestedTargets;
             _plane.CreateScope(_scopeName.Text ?? string.Empty, _authorization.Text ?? string.Empty,
-                _operator.Text ?? string.Empty, (_targets.Text ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                _operator.Text ?? string.Empty, scopeTargets,
                 DateTimeOffset.UtcNow.AddMinutes(minutes));
             RefreshAll();
             SetStatus("授权范围已创建。", false);
@@ -319,9 +434,9 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         try
         {
             var scope = (_scopes.SelectedItem as ScopeItem)?.Value ?? throw new InvalidOperationException("请先选择授权范围。");
-            var timeout = PositiveInt(_timeoutSeconds.Text, "超时秒数", 1, 120);
+            var timeout = PositiveInt(_timeoutSeconds.Text, "超时秒数", 1, 600);
             _plane.CreatePlan(scope.Id, _planName.Text ?? string.Empty,
-                [new AssessmentStep(_adapter.SelectedItem?.ToString() ?? AuthorizedToolCatalog.SimulationEcho, _stepInput.Text ?? string.Empty, timeout)],
+                [new AssessmentStep(SelectedAdapterId(), _stepInput.Text ?? string.Empty, timeout)],
                 _operator.Text ?? string.Empty);
             RefreshAll();
             SetStatus("固定计划已创建并绑定范围哈希。", false);
@@ -603,9 +718,18 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         public override string ToString() => $"{Value.CreatedAt:MM-dd HH:mm} · {Value.Status} · {Case.Scope.Name} / {Case.Plan.Name}";
     }
 
+    private sealed record ToolOption(string Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     private sealed record ScopeItem(AssessmentScope Value)
     {
-        public override string ToString() => $"{Value.Name} · {(Value.Revoked ? "已撤销" : $"有效至 {Value.ExpiresAt:MM-dd HH:mm}")} · {string.Join(',', Value.Targets)}";
+        public override string ToString()
+        {
+            var targets = Value.Targets.Contains("*") ? "全部目标" : string.Join(',', Value.Targets);
+            return $"{Value.Name} · {(Value.Revoked ? "已撤销" : $"有效至 {Value.ExpiresAt:MM-dd HH:mm}")} · {targets}";
+        }
     }
 
     private sealed record PlanItem(AssessmentPlan Value)

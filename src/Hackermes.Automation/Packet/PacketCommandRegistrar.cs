@@ -248,7 +248,7 @@ public static class PacketCommandRegistrar
             return CommandResult.Ok(audit.Entries.Count == 0 ? "No traffic audit entries." : string.Join(Environment.NewLine,
                 audit.Entries.Select(entry => $"{entry.Timestamp:O}\t{entry.Operation}\t{entry.EntryPoint}\t{entry.PacketId}\t{entry.Side}\t" +
                     $"{entry.Before.Length}/{entry.Before.Sha256}->{entry.After.Length}/{entry.After.Sha256}\t{entry.Result}\t{entry.ErrorCode ?? "-"}\t" +
-                    $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}")));
+                    $"rule={entry.RuleId ?? "-"}\taction={entry.RuleAction ?? "-"}\toperator={entry.Operator ?? "-"}")));
         if (outcome is PacketParametersOutcome parameters)
             return CommandResult.Ok(parameters.Parameters.Count == 0 ? "No structured parameters." : string.Join(Environment.NewLine,
                 parameters.Parameters.Select(parameter =>
@@ -293,8 +293,8 @@ public static class PacketCommandRegistrar
     {
         var id = Require(context, 1, "id");
         var side = context.Arg(2) ?? "request";
-        if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json|header|cookie"), true, out var location))
-            throw new ArgumentException("Parameter location must be query, form, json, header or cookie.");
+        if (!Enum.TryParse<HttpParameterLocation>(Require(context, 3, "query|form|json|header|cookie|multipart"), true, out var location))
+            throw new ArgumentException("Parameter location must be query, form, json, header, cookie or multipart.");
         var name = Require(context, 4, "name");
         if (!int.TryParse(Require(context, 5, "occurrence"), out var occurrence))
             throw new ArgumentException("Parameter occurrence must be an integer.");

@@ -31,6 +31,61 @@ public sealed class AssessmentStage7CTests : IDisposable
     public AssessmentStage7CTests() => Directory.CreateDirectory(_root);
 
     [Fact]
+    public void All_authorized_scope_can_omit_name_authorization_reference_and_operator()
+    {
+        var plane = CreatePlane();
+
+        var scope = plane.CreateScope(string.Empty, string.Empty, string.Empty, ["*"],
+            DateTimeOffset.UtcNow.AddMinutes(5));
+
+        Assert.Equal("全部范围", scope.Name);
+        Assert.Equal("系统确认", scope.AuthorizationReference);
+        Assert.Equal("system", scope.OperatorId);
+        Assert.Equal(["*"], scope.Targets);
+        Assert.Contains(plane.AuditForEntity(scope.Id), entry =>
+            entry.Action == "scope.create" && entry.Actor == "system");
+    }
+
+    [Fact]
+    public void Exact_scope_still_requires_a_name_but_not_authorization_reference_or_operator()
+    {
+        var plane = CreatePlane();
+
+        var scope = plane.CreateScope("loopback", string.Empty, string.Empty, ["127.0.0.1"],
+            DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var error = Assert.Throws<ArgumentException>(() => plane.CreateScope(
+            string.Empty, string.Empty, string.Empty, ["127.0.0.1"], DateTimeOffset.UtcNow.AddMinutes(5)));
+
+        Assert.Equal("系统确认", scope.AuthorizationReference);
+        Assert.Equal("system", scope.OperatorId);
+        Assert.Contains("Scope name", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Best_effort_plan_records_a_failed_tool_and_continues_remaining_tools()
+    {
+        var plane = new AssessmentControlPlane(new BestEffortHost(),
+            new TestSettings(Path.Combine(_root, "settings.json")), new NullLogger(), _secrets);
+        var scope = plane.CreateScope(string.Empty, string.Empty, string.Empty, ["*"],
+            DateTimeOffset.UtcNow.AddMinutes(5));
+        var plan = plane.CreatePlan(scope.Id, "全部工具",
+        [
+            new AssessmentStep(AuthorizedToolCatalog.SimulationEcho, "fail", ContinueOnError: true),
+            new AssessmentStep(AuthorizedToolCatalog.SimulationEcho, "pass", ContinueOnError: true)
+        ], "system");
+        var approval = plane.Approve(plan.Id, "system", DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var job = await plane.StartAsync(plan.Id, approval.Id, "system");
+
+        Assert.Equal(AssessmentJobStatus.Completed, job.Status);
+        var evidence = plane.Evidence(job.Id);
+        Assert.Equal(2, evidence.Count);
+        Assert.Contains(evidence, item => item.Content.Contains("warning: expected failure", StringComparison.Ordinal));
+        Assert.Contains(evidence, item => item.Content == "pass");
+    }
+
+    [Fact]
     public async Task Evidence_finding_review_and_reports_share_one_audited_job()
     {
         var plane = CreatePlane();
@@ -372,6 +427,15 @@ public sealed class AssessmentStage7CTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_root, true); } catch { }
+    }
+
+    private sealed class BestEffortHost : IAssessmentExecutionHost
+    {
+        public Task<AssessmentExecutionResult> ExecuteAsync(AssessmentStep step,
+            AssessmentExecutionAuthorization authorization, CancellationToken ct) =>
+            Task.FromResult(step.Input == "fail"
+                ? new AssessmentExecutionResult(false, string.Empty, "expected failure")
+                : new AssessmentExecutionResult(true, step.Input));
     }
 
     private sealed class NullLogger : IAppLogger

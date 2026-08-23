@@ -183,7 +183,8 @@ public sealed class DesktopToolCatalogTests
         Assert.Equal("new-tab", start.ArgumentList[0]);
         Assert.Equal("--startingDirectory", start.ArgumentList[1]);
         Assert.Equal(tool.WorkingDirectory, start.ArgumentList[2]);
-        Assert.EndsWith("powershell.exe", start.ArgumentList[3], System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Path.GetFileName(start.ArgumentList[3]), new[] { "pwsh.exe", "powershell.exe" },
+            System.StringComparer.OrdinalIgnoreCase);
         Assert.Equal("-EncodedCommand", start.ArgumentList[6]);
         Assert.DoesNotContain(";", start.ArgumentList[7], System.StringComparison.Ordinal);
         var decoded = System.Text.Encoding.Unicode.GetString(System.Convert.FromBase64String(start.ArgumentList[7]));

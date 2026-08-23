@@ -154,16 +154,20 @@ Stage 7/7C 当前已形成完整控制面：
   → 证据、Finding、人工复核、连续 HMAC 审计链与报告
 ```
 
-当前 ToolHost 只暴露四个固定 Adapter：
+当前 ToolHost 只暴露八个固定 Adapter（全部只读/受限 recon，另有 `simulation.echo` 模拟器）：
 
 - `recon.nmap.quick`
 - `recon.nmap.service`
 - `recon.dirsearch.quick`
 - `recon.wafw00f.quick`
+- `recon.http.headers`（系统 curl 单次 HEAD）
+- `recon.http.get`（系统 curl 单次 GET：状态 + 响应头 + 有界正文；路径限绝对、无空白/控制字符、≤256 字符）
+- `recon.dns.resolve`（系统 nslookup 解析授权内精确主机名）
+- `recon.httpx.probe`
 
 没有任意命令 Adapter，也未接入口令爆破、漏洞利用、规避或破坏工具。Nmap、Dirsearch 和 Wafw00f 已在 `127.0.0.1` loopback 靶场完成真实 ToolHost 调用验证。
 
-授权评估 AI 工具当前包括：`assessment_scopes`、`assessment_tools`、`assessment_create_scope`、`assessment_create_scope_from_page`、`assessment_create_plan`、`assessment_approve`、`assessment_run`、`assessment_report`、`assessment_evidence`、`assessment_verify_evidence`、`assessment_findings`、`assessment_create_finding`、`assessment_review_finding`、`assessment_verify_audit`。其中浏览器绑定会话必须使用 `assessment_create_scope_from_page`：它不接收目标参数，而是通过精确 `pageId` 读取当前 HTTP(S) 页，拒绝用户信息 URL、未知页与已关闭页，并从 URL 派生 scope host 及回显 scheme/port/origin。派生页面绑定会在策略判断和人工确认前冻结并进入授权指纹，执行前再次核对；确认后导航或 remembered grant 后切换 origin 都不能静默复用旧授权。旧的自由目标入口只保留给没有浏览器上下文的 CLI/兼容调用。
+授权评估 AI 工具当前包括：`assessment_scopes`、`assessment_tools`、`assessment_create_scope`、`assessment_create_scope_from_page`、`assessment_create_plan`、`assessment_approve`、`assessment_run`、`assessment_report`、`assessment_report_export`、`assessment_report_verify`、`assessment_evidence`、`assessment_verify_evidence`、`assessment_findings`、`assessment_create_finding`、`assessment_review_finding`、`assessment_verify_audit`。其中浏览器绑定会话必须使用 `assessment_create_scope_from_page`：它不接收目标参数，而是通过精确 `pageId` 读取当前 HTTP(S) 页，拒绝用户信息 URL、未知页与已关闭页，并从 URL 派生 scope host 及回显 scheme/port/origin。派生页面绑定会在策略判断和人工确认前冻结并进入授权指纹，执行前再次核对；确认后导航或 remembered grant 后切换 origin 都不能静默复用旧授权。旧的自由目标入口只保留给没有浏览器上下文的 CLI/兼容调用。
 
 Assessment 的 `ReadCases` / `ReadCase` 在同一控制面锁内形成 coherent case：原子组合 job、scope、plan、approval、evidence、finding、audit、审计验证与当前可用动作；缺失引用或不一致授权链 fail closed。人工工作区、CLI `assessment cases` 与 AI `assessment_cases` 复用这一读取边界，避免各入口各自拼接出不同时刻的状态。
 
@@ -171,6 +175,7 @@ Assessment 的 `ReadCases` / `ReadCase` 在同一控制面锁内形成 coherent 
 
 - 普通配置由 `ISettingsService` 管理；AI API Key 不写入普通设置文件。
 - Windows 密钥使用当前用户 DPAPI；Linux 预览路径使用用户级 AES-256 密钥库。
+- 签名身份治理：`audit-signing-trust.v1.json` 记录每代 ECDSA 密钥的 keyId/公钥/生命周期状态；文件不存在时验证保持 legacy 指纹钉扎模式，adopt 后切换 allowlist（撤销/未知 keyId 的签名文档被拒），rotate 原子退役旧代并销毁旧私钥，历史文档凭保留公钥继续可离线验签。
 - Traffic 历史、规则、Repeater、Comparer 和标注由各自服务持久化并带有容量/保留约束。
 - Assessment 存储当前版本为 v2，使用临时文件写穿透、上一份有效备份、损坏文件保留与自动恢复。
 - Assessment 审计使用连续 HMAC-SHA256 链，可检测参与者、动作、实体、详情或顺序被篡改；密钥轮换不允许静默破坏旧链。

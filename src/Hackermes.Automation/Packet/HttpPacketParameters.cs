@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Hackermes.Automation.Packet;
 
-public enum HttpParameterLocation { Query, Form, Json, Header, Cookie }
+public enum HttpParameterLocation { Query, Form, Json, Header, Cookie, Multipart }
 
 public sealed record HttpPacketParameter(
     HttpParameterLocation Location,
@@ -27,12 +28,15 @@ public static class HttpPacketParameters
         var result = new List<HttpPacketParameter>();
         if (packet.Kind == HttpPacketKind.Request && packet.Target is not null)
             ReadPairs(GetQuery(packet.Target), HttpParameterLocation.Query, result);
-        var mediaType = packet.HeaderValues("Content-Type").FirstOrDefault()?.Split(';')[0].Trim();
+        var contentType = packet.HeaderValues("Content-Type").FirstOrDefault();
+        var mediaType = contentType?.Split(';')[0].Trim();
         if (mediaType?.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) == true)
             ReadPairs(packet.Body, HttpParameterLocation.Form, result);
         else if (mediaType?.Equals("application/json", StringComparison.OrdinalIgnoreCase) == true ||
                  mediaType?.EndsWith("+json", StringComparison.OrdinalIgnoreCase) == true)
             ReadJson(packet.Body, result);
+        else if (mediaType?.StartsWith("multipart/", StringComparison.OrdinalIgnoreCase) == true)
+            ReadMultipart(packet.Body, contentType, result);
         ReadHeaders(packet, result);
         ReadCookies(packet, result);
         return result;
@@ -57,6 +61,7 @@ public static class HttpPacketParameters
             HttpParameterLocation.Json => SetJson(packet, name, occurrence, value),
             HttpParameterLocation.Header => SetHeader(packet, name, occurrence, value),
             HttpParameterLocation.Cookie => SetCookie(packet, name, occurrence, value),
+            HttpParameterLocation.Multipart => SetMultipart(packet, name, occurrence, value),
             _ => throw new ArgumentOutOfRangeException(nameof(location))
         };
     }
@@ -143,6 +148,27 @@ public static class HttpPacketParameters
     {
         RequireMediaType(packet, "application/x-www-form-urlencoded", HttpParameterLocation.Form);
         return packet with { Body = SetPair(packet.Body, name, occurrence, value, form: true) };
+    }
+
+    private static void ReadMultipart(string body, string? contentType, List<HttpPacketParameter> result)
+    {
+        // The raw-packet path carries the body as a UTF-8 string, so binary parts were already
+        // distorted upstream; they surface as "<binary N bytes>" placeholders and stay read-only here.
+        try
+        {
+            foreach (var part in BoundedMultipartBody.ReadParts(Encoding.UTF8.GetBytes(body), contentType))
+                result.Add(new HttpPacketParameter(HttpParameterLocation.Multipart, part.Name,
+                    part.DisplayValue, part.Occurrence));
+        }
+        catch (InvalidDataException) { }
+    }
+
+    private static HttpPacket SetMultipart(HttpPacket packet, string name, int occurrence, string value)
+    {
+        var contentType = packet.HeaderValues("Content-Type").FirstOrDefault();
+        var body = Encoding.UTF8.GetBytes(packet.Body);
+        var updated = BoundedMultipartBody.SetPartValue(body, contentType, name, occurrence, Encoding.UTF8.GetBytes(value));
+        return packet with { Body = Encoding.UTF8.GetString(updated) };
     }
 
     private static HttpPacket SetJson(HttpPacket packet, string name, int occurrence, string value)

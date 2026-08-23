@@ -20,6 +20,12 @@ public interface ITrafficWorkbenchService
     bool IsInterceptEnabled { get; set; }
     bool IsResponseInterceptEnabled { get; set; }
     event Action? Changed;
+    /// <summary>
+    /// Raised on the UI thread right after the active history policy file switched
+    /// (workspace opened/closed) and the new policy was applied. Consumers can refresh
+    /// history statistics without a manual refresh; the emitted state is already final.
+    /// </summary>
+    event Action? HistoryPolicyChanged;
     Task<TrafficOperationResult> AnalyzeAsync(string exchangeId, string request, CancellationToken cancellationToken);
     Task<IReadOnlyList<TrafficFindingItem>> AnalyzeFindingsAsync(string exchangeId, string side, string rawPacket, CancellationToken cancellationToken);
     Task<TrafficOperationResult> ReplayAsync(string exchangeId, string request, CancellationToken cancellationToken);
@@ -70,12 +76,13 @@ public sealed record TrafficFindingItem(
 }
 public sealed record TrafficAnnotationItem(bool Starred, string Tags, string Note, string Status, int Revision);
 public sealed record TrafficAuditItem(DateTimeOffset Timestamp, string EntryPoint, string Operation, string Side,
-    string Before, string After, string Result, string? ErrorCode, string? RuleId = null, string? RuleAction = null);
+    string Before, string After, string Result, string? ErrorCode, string? RuleId = null, string? RuleAction = null,
+    string? Operator = null);
 public sealed record TrafficAuditVerificationItem(bool Valid, string? KeyId, int EntryCount,
     DateTimeOffset? ExportedAt, string? ErrorCode);
 public sealed record TrafficHistoryOverview(int EntryCount, long EstimatedBytes, long FileBytes,
     DateTimeOffset? Oldest, DateTimeOffset? Newest, int MaxEntries, long MaxBytes, int RetentionDays, bool AutoPrune,
-    IReadOnlyList<TrafficHistorySiteQuotaItem> SiteQuotas);
+    IReadOnlyList<TrafficHistorySiteQuotaItem> SiteQuotas, string? PolicySource = null);
 public sealed record TrafficHistorySiteQuotaItem(string HostPattern, int MaxEntries, long MaxBytes);
 public sealed record TrafficBinaryBodyInfo(long Length, string Sha256, string? ContentType, string? Charset);
 public sealed record TrafficPacketCommitResult(bool Success, string Operation, string PacketId, string Side,
@@ -181,9 +188,11 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         if (!string.IsNullOrWhiteSpace(recentPaths?.LastArchivePath))
             _archivePath = recentPaths.LastArchivePath;
         _service.Changed += OnServiceChanged;
+        _service.HistoryPolicyChanged += OnHistoryPolicyChanged;
         _isInterceptEnabled = service.IsInterceptEnabled;
         _isResponseInterceptEnabled = service.IsResponseInterceptEnabled;
         Refresh();
+        ApplyHistoryOverview(_service.GetHistoryOverview());
     }
 
     public ObservableCollection<TrafficExchange> Visible { get; } = [];
@@ -670,6 +679,13 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         else Dispatcher.UIThread.Post(Refresh);
     }
 
+    private void OnHistoryPolicyChanged()
+    {
+        // Contract: raised on the UI thread after the switch + cleanup, so the overview
+        // already reflects the new policy file and the post-switch pruning.
+        ApplyHistoryOverview(_service.GetHistoryOverview());
+    }
+
     private void Refresh()
     {
         var selectedId = Selected?.Id;
@@ -715,7 +731,8 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
         HistoryRetentionDays = value.RetentionDays.ToString();
         HistoryAutoPrune = value.AutoPrune;
         HistoryStatus = $"{value.EntryCount} entries · estimated {value.EstimatedBytes} B · file {value.FileBytes} B · " +
-                        $"oldest {value.Oldest?.ToLocalTime().ToString("g") ?? "-"} · newest {value.Newest?.ToLocalTime().ToString("g") ?? "-"}" +
+                        $"oldest {value.Oldest?.ToLocalTime().ToString("g") ?? "-"} · newest {value.Newest?.ToLocalTime().ToString("g") ?? "-"} · " +
+                        $"policy {value.PolicySource ?? "global"}" +
                         string.Concat(value.SiteQuotas.Select(quota =>
                             $"{Environment.NewLine}{quota.HostPattern}: {quota.MaxEntries} entries / {quota.MaxBytes} B"));
     }
@@ -805,6 +822,7 @@ public partial class TrafficWorkbenchViewModel : ViewModelBase
     protected override void OnDispose()
     {
         _service.Changed -= OnServiceChanged;
+        _service.HistoryPolicyChanged -= OnHistoryPolicyChanged;
         _operation?.Cancel();
         _operation?.Dispose();
     }

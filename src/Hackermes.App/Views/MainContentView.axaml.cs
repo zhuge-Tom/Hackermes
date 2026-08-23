@@ -48,6 +48,9 @@ public partial class MainContentView : UserControl
             _bottomPanel.TabStripRightContent = _bottomBrowserTools;
         }
 
+        // 窗口变窄时把两侧面板压回预算内,保住中央内容列的最小宽度(见 RegionLayout)。
+        _regionGrid?.SizeChanged += (_, _) => ReclampVisibleSideColumns();
+
         DataContextChanged += OnDataContextChanged;
         DetachedFromVisualTree += (_, _) =>
         {
@@ -180,9 +183,6 @@ public partial class MainContentView : UserControl
         PersistSizes();
     }
 
-    /// <summary>侧边面板最多占窗口宽度的这个比例,防止小窗口下把中间挤没。</summary>
-    private const double MaxSidePanelRatio = 0.30;
-
     /// <summary>底部面板最多占中央区高度的这个比例。</summary>
     private const double MaxBottomPanelRatio = 0.45;
 
@@ -197,9 +197,11 @@ public partial class MainContentView : UserControl
         {
             // 记忆值可能来自更大的窗口(或更早的默认值),必须按当前窗口夹一次,
             // 否则换到小屏上会出现"两侧面板占满、中间只剩一条缝"。
+            // 夹取同时保证中央内容列的最小宽度(RegionLayout),最小窗口下四个
+            // 内容标签才能完整可见。
             var available = _regionGrid.Bounds.Width;
             var applied = available > 0
-                ? Math.Min(remembered, available * MaxSidePanelRatio)
+                ? RegionLayout.ClampSidePanelWidth(available, remembered)
                 : remembered;
 
             definition.MinWidth = Math.Min(160, applied);
@@ -216,6 +218,33 @@ public partial class MainContentView : UserControl
 
         if (splitter is not null)
             splitter.IsVisible = visible;
+    }
+
+    /// <summary>
+    /// 窗口尺寸变化后把展开中的两侧面板压回当前预算。只改列宽,不动记忆值 ——
+    /// 记忆值仍保存用户拖拽/设置给出的期望宽度,恢复大窗口时原样回来。
+    /// </summary>
+    private void ReclampVisibleSideColumns()
+    {
+        if (_regionGrid is null || _regionGrid.Bounds.Width <= 0)
+            return;
+
+        foreach (var (index, splitter) in new[] { (0, _leftSplitter), (4, _rightSplitter) })
+        {
+            if (splitter is null || !splitter.IsVisible)
+                continue;
+
+            var definition = _regionGrid.ColumnDefinitions[index];
+            if (!definition.Width.IsAbsolute || definition.Width.Value <= 1)
+                continue;
+
+            var applied = RegionLayout.ClampSidePanelWidth(_regionGrid.Bounds.Width, definition.Width.Value);
+            if (Math.Abs(applied - definition.Width.Value) < 0.5)
+                continue;
+
+            definition.MinWidth = Math.Min(160, applied);
+            definition.Width = new GridLength(applied, GridUnitType.Pixel);
+        }
     }
 
     private void SetRow(int index, GridSplitter? splitter, bool visible, ref double remembered)
