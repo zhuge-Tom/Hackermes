@@ -6,6 +6,7 @@ using Hackermes.Platform.Models;
 using Hackermes.Platform.Serialization;
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 
@@ -303,6 +304,12 @@ public sealed class SettingsService : ISettingsService
         settings.SecurityTools.WslDistribution = (settings.SecurityTools.WslDistribution ?? string.Empty).Trim();
         settings.SecurityTools.WorkingDirectory = NormalizeRecentPath(settings.SecurityTools.WorkingDirectory) ?? string.Empty;
         settings.SecurityTools.DefaultTimeoutSeconds = Math.Clamp(settings.SecurityTools.DefaultTimeoutSeconds, 10, 120);
+        settings.SecurityTools.RecentToolIds ??= new();
+        settings.SecurityTools.RecentToolIds.RemoveAll(id => string.IsNullOrWhiteSpace(id));
+        // 去重与新到旧的排序由写入侧的归一化函数负责，这里只兜底截断。
+        if (settings.SecurityTools.RecentToolIds.Count > 5)
+            settings.SecurityTools.RecentToolIds =
+                [.. settings.SecurityTools.RecentToolIds.Take(5)];
     }
 
     private static string? NormalizeRecentPath(string? path)

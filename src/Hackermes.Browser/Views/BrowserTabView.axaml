@@ -1,27 +1,38 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Hackermes.Browser.ViewModels"
+             xmlns:services="using:Hackermes.Browser.Services"
              x:Class="Hackermes.Browser.Views.BrowserTabView"
              x:DataType="vm:BrowserTabViewModel">
   <DockPanel LastChildFill="True">
     <Border DockPanel.Dock="Top" Height="36" Padding="6,0" Background="{DynamicResource PanelBackgroundBrush}"
             BorderBrush="{DynamicResource SemiColorBorder}" BorderThickness="0,0,0,1">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,170,Auto,*,Auto,Auto,Auto">
         <Button Grid.Column="0" Content="←" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding BackCommand}" ToolTip.Tip="Back" />
         <Button Grid.Column="1" Content="→" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ForwardCommand}" ToolTip.Tip="Forward" />
         <Button Grid.Column="2" Content="↻" Width="28" Padding="0" Background="Transparent" BorderThickness="0" Command="{Binding ReloadCommand}" ToolTip.Tip="Reload" />
-        <TextBox Grid.Column="3" Margin="6,0" VerticalAlignment="Center" PlaceholderText="Enter URL or search"
+        <ComboBox Grid.Column="3" Margin="6,0,2,0" PlaceholderText="历史记录"
+                  ItemsSource="{Binding History}" SelectedItem="{Binding SelectedHistory, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="services:BrowserHistoryEntry">
+              <TextBlock Text="{Binding DisplayLabel}" TextTrimming="CharacterEllipsis" MaxWidth="420" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <Button Grid.Column="4" Content="清空" Padding="7,2" Background="Transparent" BorderThickness="0"
+                Command="{Binding ClearHistoryCommand}" ToolTip.Tip="清空浏览历史" />
+        <TextBox Grid.Column="5" Margin="6,0" VerticalAlignment="Center" PlaceholderText="Enter URL or search"
                  Text="{Binding AddressText, Mode=TwoWay}">
           <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding NavigateCommand}" /></TextBox.KeyBindings>
         </TextBox>
-        <Button Name="PART_ProxyButton" Grid.Column="4" MinWidth="62" Margin="2,0" Padding="8,2"
+        <Button Name="PART_ProxyButton" Grid.Column="6" MinWidth="62" Margin="2,0" Padding="8,2"
                 Background="Transparent" BorderThickness="0" Click="OnProxyButtonClick"
                 ToolTip.Tip="内部浏览器代理插件（不修改系统代理）" />
-        <Panel Grid.Column="5" Width="8" Height="8" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="CDP connection">
+        <Panel Grid.Column="7" Width="8" Height="8" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="CDP connection">
           <Border CornerRadius="4" Background="#4CAF50" IsVisible="{Binding IsCdpReady}" />
           <Border CornerRadius="4" Background="#757575" IsVisible="{Binding !IsCdpReady}" />
         </Panel>
-        <Button Grid.Column="6" Content="CDP test" Padding="8,2" Command="{Binding SelfTestCommand}" ToolTip.Tip="Verify the CDP request-response channel" />
+        <Button Grid.Column="8" Content="CDP test" Padding="8,2" Command="{Binding SelfTestCommand}" ToolTip.Tip="Verify the CDP request-response channel" />
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" MinHeight="20" Padding="8,2" Background="{DynamicResource PanelBackgroundBrush}"

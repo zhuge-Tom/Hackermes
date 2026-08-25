@@ -15,13 +15,35 @@ public sealed class ToolLaunchService
 {
     public void LaunchGui(string executablePath)
     {
+        var start = CreateGuiStartInfo(executablePath);
+        Directory.CreateDirectory(start.Environment["TEMP"]!);
+        _ = Process.Start(start) ?? throw new InvalidOperationException("工具进程未能启动。");
+    }
+
+    /// <summary>
+    /// GUI 工具必须使用当前用户的临时目录。开发宿主、提权启动器或系统服务可能把
+    /// TEMP/TMP 设为 C:\Windows\Temp；旧版 PyInstaller/Tk 程序虽然能在那里解包，
+    /// 却可能在创建窗口时直接报 Failed to execute script。
+    /// </summary>
+    internal static ProcessStartInfo CreateGuiStartInfo(string executablePath, string? localAppData = null)
+    {
         var executable = RequireFile(executablePath);
-        _ = Process.Start(new ProcessStartInfo
+        var userData = string.IsNullOrWhiteSpace(localAppData)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : localAppData;
+        if (string.IsNullOrWhiteSpace(userData))
+            userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local");
+        var userTemp = Path.GetFullPath(Path.Combine(userData, "Temp"));
+        var start = new ProcessStartInfo
         {
             FileName = executable,
             WorkingDirectory = Path.GetDirectoryName(executable)!,
-            UseShellExecute = true
-        }) ?? throw new InvalidOperationException("工具进程未能启动。");
+            UseShellExecute = false,
+            CreateNoWindow = false
+        };
+        start.Environment["TEMP"] = userTemp;
+        start.Environment["TMP"] = userTemp;
+        return start;
     }
 
     public void OpenDocument(string path)

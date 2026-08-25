@@ -1,9 +1,11 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Hackermes.AiPanel.OpenAI;
+using Hackermes.AiPanel.Runtime;
 using Hackermes.AiPanel.Tools;
 using Hackermes.AiPanel.Agent;
 using Hackermes.Base.Events;
+using Hackermes.Base.Diagnostics;
 using Hackermes.Base.Mvvm;
 using Hackermes.Platform.Events;
 using Hackermes.Platform.Models;
@@ -11,8 +13,8 @@ using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,17 +23,36 @@ namespace Hackermes.AiPanel.ViewModels;
 
 public partial class AiChatLine : ObservableObject
 {
-    public AiChatLine(string role, string content) { Role = role; Content = content; }
+    public AiChatLine(string role, string content, string? displayLabel = null)
+    {
+        Role = role;
+        Content = content;
+        DisplayLabel = displayLabel;
+    }
     public string Role { get; }
     [ObservableProperty] private string _content;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RoleLabel))]
+    private string? _displayLabel;
 
     /// <summary>Localized role label for display ("user"/"assistant" stay internal).</summary>
-    public string RoleLabel => Role switch
-    {
-        "user" => "用户",
-        "assistant" => "助手",
-        _ => Role
-    };
+    public string RoleLabel => !string.IsNullOrWhiteSpace(DisplayLabel)
+        ? DisplayLabel!
+        : Role switch
+        {
+            "user" => "用户",
+            "assistant" => "助手",
+            _ => Role
+        };
+}
+
+/// <summary>
+/// Reasoning-model thinking stream row: visually quieter than prose (dimmer, accent
+/// border) so long chains-of-thought stay readable without competing with answers.
+/// </summary>
+public partial class AiReasoningLine : AiChatLine
+{
+    public AiReasoningLine() : base("assistant", string.Empty, "思考") { }
 }
 
 /// <summary>Status of one Agent tool invocation shown as a compact transcript row.</summary>
@@ -104,6 +125,13 @@ public partial class AgentSessionOption : ObservableObject
     public override string ToString() => Name;
 }
 
+/// <summary>
+/// Chat surface over the headless <see cref="AgentTurnRunner"/>. The runner owns the
+/// turn/step loop, the steering inbox and an append-only event log; this view model only
+/// projects <see cref="AgentSessionLog.Appended"/> events into transcript rows, so output
+/// structure (turns, steps, tool protocol, retries, auto-compaction) is rendered from facts
+/// instead of being interleaved with control flow (deepseek-harness session-event lineage).
+/// </summary>
 public partial class AiChatViewModel : ViewModelBase
 {
     private const string LegacyWelcomeMessage = "你好，我可以结合当前页面帮助定位问题。";
@@ -116,11 +144,24 @@ public partial class AiChatViewModel : ViewModelBase
     private readonly AgentContextCompactor _context;
     private readonly IAgentSessionStore? _sessionStore;
     private readonly AcpContextRegistry? _acpRegistry;
+    private readonly AgentTodoRegistry? _todos;
+    private readonly AgentGoalRegistry _goals;
+    private readonly IAppLogger? _logger;
+    private readonly AcpAutoCompactor _autoCompactor;
+    private readonly AgentEventLogStore? _eventLogStore;
     private AcpContextStore? _acp;
+    private AgentTurnRunner _runner = null!;
     private string _sessionId = Guid.NewGuid().ToString("N");
-    private List<ChatMessage> _history = [];
     private string _summary = string.Empty;
     private CancellationTokenSource? _request;
+    /// <summary>Suppresses token counter accumulation while projecting a restored log.</summary>
+    private bool _restoring;
+
+    /// <summary>Lazily created assistant row receiving stream deltas for the current step.</summary>
+    private AiChatLine? _streamingAssistantLine;
+    private AiChatLine? _streamingReasoningLine;
+    private int _streamingAssistantStep = -1;
+    private readonly Dictionary<string, (AiToolCallLine Line, string Arguments)> _openToolCalls = [];
 
     public AiChatViewModel(
         IOpenAiChatClient client,
@@ -132,7 +173,10 @@ public partial class AiChatViewModel : ViewModelBase
         IAgentMemoryStore memory,
         AgentContextCompactor context,
         IAgentSessionStore? sessions = null,
-        AcpContextRegistry? acpRegistry = null)
+        AcpContextRegistry? acpRegistry = null,
+        IAppLogger? logger = null,
+        AgentTodoRegistry? todos = null,
+        AgentGoalRegistry? goals = null)
     {
         _client = client;
         _tools = tools;
@@ -143,6 +187,25 @@ public partial class AiChatViewModel : ViewModelBase
         _context = context;
         _sessionStore = sessions;
         _acpRegistry = acpRegistry;
+        _todos = todos;
+        _goals = goals ?? new AgentGoalRegistry();
+        // Created lazily per event so runtime toggles of ai.sessionEvents take effect
+        // without an app restart; a write failure surfaces once, then pauses persistence.
+        var settingsDirectory = Path.GetDirectoryName(settings.SettingsFilePath);
+        _eventLogStore = new AgentEventLogStore(() => settingsDirectory ?? AppContext.BaseDirectory, logger);
+        if (!string.IsNullOrEmpty(settingsDirectory))
+            _eventLogStore.WriteFailed += message =>
+                Error = $"会话事件日志写入失败，本会话已暂停持久化（历史消息不受影响）：{message}";
+        _logger = logger?.ForCategory(nameof(AiChatViewModel));
+        _autoCompactor = new AcpAutoCompactor(
+            client, () => Model, () => _acp, () => settings.Load().Ai, _logger,
+            prefixProvider: ProvideCompactionPrefix);
+        if (_todos is not null)
+        {
+            _todos.Changed += OnTodosChanged;
+            OnTodosChanged(_todos.Current);
+        }
+        CreateRunner();
         SubscribeEvent<ActiveContentTabChangedEvent>(eventBus, UpdateActivePage);
         SubscribeEvent<UpdateDockTabTitleEvent>(eventBus, UpdateActivePageTitle);
         RestoreSession();
@@ -150,6 +213,28 @@ public partial class AiChatViewModel : ViewModelBase
 
     public ObservableCollection<AiChatLine> Messages { get; } = [];
     public ObservableCollection<AgentSessionOption> Sessions { get; } = [];
+    public ObservableCollection<string> Todos { get; } = [];
+
+    [ObservableProperty] private string? _todoSummary;
+    public bool HasTodos => Todos.Count > 0;
+
+    private void OnTodosChanged(IReadOnlyList<AgentTodoItem> items)
+    {
+        Todos.Clear();
+        foreach (var item in items)
+        {
+            var glyph = item.Status switch
+            {
+                AgentTodoStatus.Completed => "✔",
+                AgentTodoStatus.InProgress => "◐",
+                _ => "○",
+            };
+            Todos.Add($"{glyph} {item.Content}");
+        }
+        TodoSummary = items.Count == 0 ? null :
+            $"任务清单 · 已完成 {items.Count(item => item.Status == AgentTodoStatus.Completed)} / {items.Count}";
+        OnPropertyChanged(nameof(HasTodos));
+    }
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasActivePage))]
     [NotifyPropertyChangedFor(nameof(ActivePageLabel))]
@@ -166,11 +251,20 @@ public partial class AiChatViewModel : ViewModelBase
 
     [ObservableProperty] private string _input = string.Empty;
     [ObservableProperty] private string _model = "gpt-4.1-mini";
-    [ObservableProperty] private bool _isBusy;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SendButtonLabel))]
+    private bool _isBusy;
     [ObservableProperty] private string? _error;
     [ObservableProperty] private string? _tokenUsage;
     /// <summary>One-line ACP context usage shown next to the token counter.</summary>
     [ObservableProperty] private string? _contextUsage;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPendingInstruction))]
+    private string? _pendingInstructionSummary;
+    [ObservableProperty] private string? _pendingInstructionHint;
+
+    public bool HasPendingInstruction => _runner.PendingInstructionCount > 0;
+    public string SendButtonLabel => IsBusy ? "追加" : "发送";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SessionLabel))]
@@ -207,16 +301,63 @@ public partial class AiChatViewModel : ViewModelBase
         SwitchSession(value);
     }
 
+    /// <summary>
+    /// Main-request prefix replayed in front of summarizer calls (dsh KV-cache alignment):
+    /// identical system prompt and tool list make the auxiliary call share its longest
+    /// prefix with recent traffic instead of invalidating provider caches.
+    /// </summary>
+    private CompactionPrefix? ProvideCompactionPrefix()
+    {
+        var ai = _settings.Load().Ai;
+        var system = AgentContextCompactor.BuildSystemMessage(
+            new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes },
+            _skills.Snapshot(), ai);
+        return new CompactionPrefix(system, AvailableTools());
+    }
+
+    /// <summary>Builds a fresh runner (fresh log, history and steering inbox) for a new chat session.</summary>
+    private void CreateRunner()
+    {
+        if (_runner is not null)
+        {
+            _runner.Log.Appended -= OnAgentEvent;
+            _dispatcher.Audited -= OnToolAudited;
+        }
+        _runner = new AgentTurnRunner(
+            _client,
+            _dispatcher,
+            () => _settings.Load().Ai,
+            () => new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes },
+            () => _skills.Snapshot(),
+            new AgentTurnRunnerOptions
+            {
+                ToolSelector = AvailableTools,
+                AutoCompactor = _autoCompactor,
+                TurnStarting = _todos is null ? null : () => _todos.BeginTurn(),
+                Goals = _goals,
+            },
+            _logger,
+            eventLogProvider: () => _settings.Load().Ai.SessionEventsEnabled ? _eventLogStore : null);
+        _runner.Log.Appended += OnAgentEvent;
+        _dispatcher.Audited += OnToolAudited;
+    }
+
+    private void OnToolAudited(AiToolAuditRecord record) => _runner.AppendAudit(record);
+
     /// <summary>Starts a fresh named chat session; the previous one stays selectable in the session list.</summary>
     [RelayCommand]
     private void NewSession(string? name)
     {
         if (IsBusy) return;
         PersistSession();
-        _history = [];
         _summary = string.Empty;
         ResetAcpStore();
+        _goals.Clear();
+        _todos?.BeginTurn(); // clears the previous checklist
+        CreateRunner();
         Messages.Clear();
+        Todos.Clear();
+        TodoSummary = null;
         Error = null;
         TokenUsage = null;
         SessionPromptTokens = 0;
@@ -260,12 +401,41 @@ public partial class AiChatViewModel : ViewModelBase
     {
         PersistSession();
         _sessionId = target.Id;
-        _history = [];
         _summary = string.Empty;
         ResetAcpStore();
+        _goals.Clear();
+        _todos?.BeginTurn();
+        CreateRunner();
         Messages.Clear();
+        Todos.Clear();
+        TodoSummary = null;
         Error = null;
-        RestoreCurrentSession();
+        if (!TryRestoreFromEventLog()) RestoreCurrentSession();
+    }
+
+    /// <summary>
+    /// Rebuilds transcript and model state from the persisted event log (resume, dsh
+    /// log-as-truth lineage). Returns false when persistence is disabled or absent.
+    /// </summary>
+    private bool TryRestoreFromEventLog()
+    {
+        if (_eventLogStore is null || !_settings.Load().Ai.SessionEventsEnabled) return false;
+        if (!_eventLogStore.Exists(_sessionId)) return false;
+        var events = _eventLogStore.Load(_sessionId);
+        if (events.Count == 0) return false;
+
+        EnsureAcpStore(_settings.Load().Ai);
+        _runner.Strategy = _acp is { } store
+            ? new AcpContextStrategy(store)
+            : new CompactorContextStrategy(_context);
+        _runner.Replay(events);
+        _restoring = true;
+        try
+        {
+            foreach (var @event in events) OnAgentEvent(@event);
+        }
+        finally { _restoring = false; }
+        return true;
     }
 
     /// <summary>Cumulative prompt/completion tokens reported by the provider for this session.</summary>
@@ -290,124 +460,283 @@ public partial class AiChatViewModel : ViewModelBase
         ActivePageTitle = string.IsNullOrWhiteSpace(message.Title) ? ActivePageId : message.Title.Trim();
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SendAsync()
     {
         var text = Input.Trim();
-        if (text.Length == 0 || IsBusy) return;
+        if (text.Length == 0) return;
         Input = string.Empty;
+        if (IsBusy)
+        {
+            _runner.EnqueueInstruction(text);
+            RefreshPendingInstructionState();
+            return;
+        }
         Error = null;
-        Messages.Add(new AiChatLine("user", text));
-        _history.Add(new ChatMessage("user", text));
-        EnsureAcpStore(_settings.Load().Ai)?.AppendUser(text);
-        var answer = new AiChatLine("assistant", string.Empty);
-        Messages.Add(answer);
+        EnsureAcpStore(_settings.Load().Ai);
+        // Exactly one context manager runs per session: ACP owns request assembly when
+        // enabled; otherwise the legacy compactor strategy is used.
+        _runner.Strategy = _acp is { } store
+            ? new AcpContextStrategy(store)
+            : new CompactorContextStrategy(_context);
         IsBusy = true;
         _request = new CancellationTokenSource();
 
         try
         {
-            var pageId = ActivePageId;
-            await RunToolLoopAsync(_history, answer, pageId, _request.Token).ConfigureAwait(true);
-            // A turn that only invoked tools streams no prose; drop the leftover empty bubble.
-            if (answer.Content.Length == 0) Messages.Remove(answer);
+            await _runner.RunTurnAsync(text, Model, ActivePageId, _sessionId, _request.Token)
+                .ConfigureAwait(true);
         }
-        catch (OperationCanceledException) { answer.Content += "\n（已停止）"; }
-        catch (Exception ex) { Error = ex.Message; answer.Content = "请求失败。"; }
+        catch (Exception ex)
+        {
+            // Defensive: RunTurnAsync reports its own failures via TurnEnd events.
+            _logger?.Error("AI request failed.", ex);
+            Error = ex.Message;
+        }
         finally
         {
             PersistMemory();
             PersistSession();
             _request.Dispose(); _request = null; IsBusy = false;
+            RefreshPendingInstructionState();
         }
     }
 
     [RelayCommand]
     private void Stop() => _request?.Cancel();
 
-    private async Task RunToolLoopAsync(
-        List<ChatMessage> history, AiChatLine answer, string? pageId, CancellationToken ct)
+    [RelayCommand]
+    private void PrioritizePendingInstruction()
     {
-        var aiSettings = _settings.Load().Ai;
-        var acp = EnsureAcpStore(aiSettings);
-        var maxToolRounds = Math.Clamp(aiSettings.MaxToolRounds, 1, 256);
-        for (var round = 0; round < maxToolRounds; round++)
-        {
-            var content = new StringBuilder();
-            var calls = new Dictionary<int, ToolCallBuilder>();
-            // Session summary is per chat session; operator notes stay global across sessions.
-            var memory = new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes };
-            // ACP owns request assembly when active; the legacy compactor is bypassed so
-            // exactly one context manager runs per session (opencode-acp rule).
-            var messages = acp is not null
-                ? acp.BuildRequest(memory, _skills.Snapshot(), aiSettings)
-                : _context.BuildRequest(_history, memory, _skills.Snapshot(), aiSettings);
-            ContextUsage = acp?.UsageLine(aiSettings.MaxContextCharacters);
-            var request = new OpenAiChatRequest(Model, messages, AvailableTools());
+        if (_runner.PromoteLatestInstruction()) RefreshPendingInstructionState();
+    }
 
-            await foreach (var delta in _client.StreamChatAsync(request, ct).ConfigureAwait(true))
-            {
-                if (delta.Content is { } text)
+    [RelayCommand]
+    private void CancelPendingInstruction()
+    {
+        if (_runner.DropNextInstruction()) RefreshPendingInstructionState();
+    }
+
+    private void RefreshPendingInstructionState()
+    {
+        var count = _runner.PendingInstructionCount;
+        if (count == 0)
+        {
+            PendingInstructionSummary = null;
+            PendingInstructionHint = null;
+        }
+        else
+        {
+            PendingInstructionSummary = _runner.PeekNextInstruction();
+            PendingInstructionHint = _runner.IsNextInstructionPriority()
+                ? $"优先指示 · 将在当前协议安全收尾后转向（共 {count} 条）"
+                : $"已排队 · 将在下一阶段执行（共 {count} 条）";
+        }
+        OnPropertyChanged(nameof(HasPendingInstruction));
+    }
+
+    #region Transcript projection from agent events
+
+    private void OnAgentEvent(AgentSessionEvent evt)
+    {
+        switch (evt.Data)
+        {
+            case UserMessageReceived user:
+                CloseStreamingAssistant();
+                Messages.Add(new AiChatLine("user", user.Text,
+                    user.Injected ? "上下文注入"
+                        : user.Steered ? (user.Priority ? "追加指示 · 优先" : "追加指示")
+                        : null));
+                break;
+
+            case AssistantDelta delta:
+                SealReasoningLine();
+                EnsureStreamingAssistant(evt.Step).Content += delta.Text;
+                break;
+
+            case ReasoningDelta reasoning:
+                // Reasoning-model thinking stream: its own dimmed row, never model history.
+                if (_streamingReasoningLine is null)
                 {
-                    content.Append(text);
-                    answer.Content += text;
+                    _streamingReasoningLine = new AiReasoningLine();
+                    Messages.Add(_streamingReasoningLine);
                 }
-                if (delta.Usage is { } usage)
+                _streamingReasoningLine.Content += reasoning.Text;
+                break;
+
+            case AssistantReply reply:
+                if (reply.HasToolCalls)
                 {
-                    SessionPromptTokens += usage.PromptTokens;
-                    SessionCompletionTokens += usage.CompletionTokens;
+                    // Preamble text (if any) stays as its own dimmed stage line ahead of the tool rows.
+                    CloseStreamingAssistant();
+                    break;
+                }
+                var finalLine = _streamingAssistantLine ?? EnsureStreamingAssistant(evt.Step);
+                finalLine.Content = reply.Content.Length == 0 ? "（模型未返回内容）" : reply.Content;
+                finalLine.DisplayLabel = reply.IsFinalReport ? "执行完成报告" : $"阶段 {evt.Step}";
+                CloseStreamingAssistant();
+                break;
+
+            case ToolCallRequested call:
+                CloseStreamingAssistant();
+                var toolLine = new AiToolCallLine(call.Name, SummarizeArguments(call.ArgumentsJson));
+                _openToolCalls[call.CallId] = (toolLine, call.ArgumentsJson);
+                Messages.Add(toolLine);
+                break;
+
+            case ToolCallCompleted completed:
+                if (_openToolCalls.Remove(completed.CallId, out var entry))
+                    entry.Line.Complete(completed.Success,
+                        FormatToolDetail(completed.Name, entry.Arguments, completed.Content));
+                break;
+
+            case UsageRecorded usage:
+                if (!_restoring)
+                {
+                    SessionPromptTokens += usage.Usage.PromptTokens;
+                    SessionCompletionTokens += usage.Usage.CompletionTokens;
                     TokenUsage = $"↑{SessionPromptTokens} ↓{SessionCompletionTokens} tokens";
                 }
-                if (delta.ToolCall is { } part)
+                break;
+
+            case RequestRetried retry:
+                CloseStreamingAssistant();
+                Messages.Add(new AiChatLine("assistant",
+                    $"请求暂时失败，正在重试（{retry.Attempt}/{retry.MaxAttempts}）：{Shorten(retry.Error, 120)}", "重试"));
+                break;
+
+            case ContextCompacted compacted:
+                CloseStreamingAssistant();
+                var compactedText =
+                    $"已{(compacted.Automatic ? "自动" : string.Empty)}压缩 {compacted.Range}，活动上下文约减少 " +
+                    $"{AcpContextStore.FormatSize(compacted.ReclaimedChars)} 字符；可用 context_search 检索归档内容。";
+                if (!string.IsNullOrEmpty(compacted.Warning)) compactedText += "\n⚠️ " + compacted.Warning;
+                Messages.Add(new AiChatLine("assistant", compactedText, "自动压缩"));
+                break;
+
+            case TurnEnded ended:
+                CloseStreamingAssistant();
+                _openToolCalls.Clear();
+                switch (ended.Reason)
                 {
-                    if (!calls.TryGetValue(part.Index, out var call))
-                        calls[part.Index] = call = new ToolCallBuilder();
-                    if (!string.IsNullOrEmpty(part.Id)) call.Id = part.Id;
-                    if (!string.IsNullOrEmpty(part.Name)) call.Name.Append(part.Name);
-                    if (!string.IsNullOrEmpty(part.Arguments)) call.Arguments.Append(part.Arguments);
+                    case AgentTurnEndReason.Aborted:
+                        Messages.Add(new AiChatLine("assistant", "任务已停止。", "已停止"));
+                        break;
+                    case AgentTurnEndReason.Error:
+                        if (!string.IsNullOrEmpty(ended.Detail)) Error = ended.Detail;
+                        Messages.Add(new AiChatLine("assistant", "请求失败。", "执行失败"));
+                        break;
+                    case AgentTurnEndReason.MaxRounds:
+                        if (Messages.Count > 0 && Messages[^1].Role == "assistant")
+                            Messages[^1].DisplayLabel = "执行结束";
+                        break;
+                    case AgentTurnEndReason.LengthCapped:
+                        Messages.Add(new AiChatLine("assistant",
+                            "已达到模型单次回复长度上限，本段回答被截断；可让模型继续输出或拆分任务。", "长度截断"));
+                        break;
                 }
-            }
-
-            if (calls.Count == 0)
-            {
-                if (answer.Content.Length == 0) answer.Content = "（模型未返回内容）";
-                history.Add(new ChatMessage("assistant", content.ToString()));
-                acp?.AppendAssistant(content.ToString());
-                return;
-            }
-
-            var toolCalls = calls.OrderBy(pair => pair.Key).Select(pair => pair.Value.Build(pair.Key)).ToArray();
-            history.Add(new ChatMessage("assistant", content.Length == 0 ? null : content.ToString(), ToolCalls: toolCalls));
-            acp?.AppendAssistantToolCalls(content.Length == 0 ? null : content.ToString(), toolCalls);
-
-            foreach (var call in toolCalls)
-            {
-                // Keep the streaming assistant reply pinned to the bottom of the transcript;
-                // tool rows stack above it in execution order (OpenCode-style grouping).
-                var toolLine = new AiToolCallLine(call.Name, SummarizeArguments(call.Arguments));
-                var answerIndex = Messages.IndexOf(answer);
-                if (answerIndex >= 0) Messages.Insert(answerIndex, toolLine); else Messages.Add(toolLine);
-                ToolResult result;
-                try
-                {
-                    using var args = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.Arguments) ? "{}" : call.Arguments);
-                    result = await _dispatcher.InvokeAsync(new ToolInvocation(
-                        call.Name, args.RootElement.Clone(), pageId, _sessionId), ct).ConfigureAwait(true);
-                }
-                catch (JsonException ex)
-                {
-                    result = ToolResult.Fail("工具参数不是有效 JSON: " + ex.Message);
-                }
-
-                history.Add(new ChatMessage("tool", result.Content, ToolCallId: call.Id));
-                acp?.AppendToolResult(call.Id, result.Content, call.Name);
-                toolLine.Complete(result.Success, FormatToolDetail(call.Name, call.Arguments, result.Content));
-            }
+                if (ended.Reason is AgentTurnEndReason.Completed or AgentTurnEndReason.LengthCapped)
+                    MaybeAutoNameSession();
+                break;
         }
-
-        answer.Content += $"\n\n（已达到 {maxToolRounds} 轮工具调用上限）";
-        history.Add(new ChatMessage("assistant", answer.Content));
     }
+
+    private AiChatLine EnsureStreamingAssistant(int step)
+    {
+        if (_streamingAssistantLine is null || _streamingAssistantStep != step)
+        {
+            _streamingAssistantLine = new AiChatLine("assistant", string.Empty, $"阶段 {step}");
+            _streamingAssistantStep = step;
+            Messages.Add(_streamingAssistantLine);
+        }
+        return _streamingAssistantLine;
+    }
+
+    private void CloseStreamingAssistant()
+    {
+        _streamingAssistantLine = null;
+        _streamingAssistantStep = -1;
+        SealReasoningLine();
+    }
+
+    private void SealReasoningLine()
+    {
+        if (_streamingReasoningLine is null) return;
+        if (_streamingReasoningLine.Content.Length == 0)
+            _streamingReasoningLine.Content = "（无思考内容）";
+        _streamingReasoningLine = null;
+    }
+
+    /// <summary>
+    /// Names a default-named session after its first completed turn (dsh session-title
+    /// lineage): an immediate truncation gives instant feedback, then a small LLM call
+    /// refines the title in the background; failures silently keep the truncation.
+    /// </summary>
+    private void MaybeAutoNameSession()
+    {
+        if (!_settings.Load().Ai.AutoSessionNaming) return;
+        if (Sessions.FirstOrDefault(option => option.Id == _sessionId) is not { } option) return;
+        if (!option.Name.StartsWith("新会话", StringComparison.Ordinal)) return;
+        var firstUser = _runner.History.FirstOrDefault(message => message.Role == "user")?.Content;
+        if (string.IsNullOrWhiteSpace(firstUser)) return;
+
+        RenameSession(_sessionId, Shorten(firstUser.Trim(), 18));
+
+        var model = Model;
+        var client = _client;
+        _ = Task.Run(async () =>
+        {
+            var suggested = await AgentSessionTitleMaker.SuggestAsync(client, model, firstUser)
+                .ConfigureAwait(true);
+            if (string.IsNullOrWhiteSpace(suggested)) return;
+            // Only refine while the session still carries the truncation name.
+            if (Sessions.FirstOrDefault(option => option.Id == _sessionId)?.Name == Shorten(firstUser.Trim(), 18))
+                RenameSession(_sessionId, suggested);
+        });
+    }
+
+    /// <summary>
+    /// Forks a persisted session into a fresh id with its full event stream — history,
+    /// compaction blocks and audits resume intact while the source stays untouched.
+    /// </summary>
+    public bool ForkSession(string sourceSessionId)
+    {
+        if (IsBusy || string.IsNullOrWhiteSpace(sourceSessionId)) return false;
+        if (_eventLogStore is null || !_settings.Load().Ai.SessionEventsEnabled)
+        {
+            Error = "分叉需要开启会话事件持久化（ai.sessionEvents）。";
+            return false;
+        }
+        if (!_eventLogStore.Exists(sourceSessionId))
+        {
+            Error = "该会话没有可分叉的事件记录。";
+            return false;
+        }
+        PersistSession();
+        var forkId = Guid.NewGuid().ToString("N");
+        if (!_eventLogStore.Fork(sourceSessionId, forkId))
+        {
+            Error = "会话分叉失败：事件流复制出错。";
+            return false;
+        }
+        var source = Sessions.FirstOrDefault(option => option.Id == sourceSessionId);
+        var option = new AgentSessionOption(forkId, $"{source?.Name ?? "会话"} · 分叉", DateTimeOffset.Now);
+        AddSessionOption(option);
+        SetSelectedSessionSilently(option);
+        SwitchSession(option);
+        return true;
+    }
+
+    /// <summary>Markdown transcript of the live session's durable log (UI-agnostic builder).</summary>
+    public string BuildTranscriptMarkdown() => AgentTranscriptExporter.BuildMarkdown(
+        SelectedSession?.Name ?? SessionLabel,
+        DateTimeOffset.Now,
+        _runner.Log.Snapshot());
+
+    /// <summary>Export is meaningful once the session has any durable events.</summary>
+    public bool HasTranscript => _runner.Log.Count > 0;
+
+    #endregion
 
     private IReadOnlyList<AiToolDefinition> AvailableTools()
     {
@@ -450,7 +779,7 @@ public partial class AiChatViewModel : ViewModelBase
         {
             _sessionId = current.Id;
             _summary = current.Summary;
-            RestoreMessages(current.RecentMessages, settings);
+            if (!TryRestoreFromEventLog()) RestoreMessages(current.RecentMessages, settings);
             return;
         }
 
@@ -494,11 +823,12 @@ public partial class AiChatViewModel : ViewModelBase
 
     private void RestoreMessages(IEnumerable<AgentMemoryMessage> messages, AiSettings settings)
     {
+        var restored = new List<ChatMessage>();
         foreach (var message in messages
                      .Where(message => !string.Equals(message.Content, LegacyWelcomeMessage, StringComparison.Ordinal))
                      .TakeLast(settings.MaxRecentMessages))
         {
-            _history.Add(new ChatMessage(message.Role, message.Content));
+            restored.Add(new ChatMessage(message.Role, message.Content));
             Messages.Add(new AiChatLine(message.Role, message.Content));
             if (_acp is { } store)
             {
@@ -506,6 +836,7 @@ public partial class AiChatViewModel : ViewModelBase
                 else if (message.Role == "assistant") store.AppendAssistant(message.Content);
             }
         }
+        _runner.SeedHistory(restored);
     }
 
     /// <summary>
@@ -517,9 +848,15 @@ public partial class AiChatViewModel : ViewModelBase
         if (!settings.AcpEnabled || _acpRegistry is null) return null;
         if (_acp is null)
         {
+            // Token budgeting swaps the store's unit estimator; everything downstream
+            // (nudges, GC, auto-compaction, usage line) reads the same consistent unit.
+            var budget = AcpContextStore.EffectiveBudget(settings);
+            var estimate = settings.MaxContextTokens > 0
+                ? (Func<string, int>)(content => AgentTokenMeter.EstimateTokens(content) + 24)
+                : content => (content?.Length ?? 0) + AcpContextStore.LegacyEntryOverheadChars;
             _acp = new AcpContextStore(() => AgentContextCompactor.BuildSystemMessage(
                 new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes },
-                _skills.Snapshot(), _settings.Load().Ai), settings.MaxContextCharacters);
+                _skills.Snapshot(), _settings.Load().Ai), budget, estimate);
         }
         _acpRegistry.Current = _acp;
         return _acp;
@@ -535,7 +872,7 @@ public partial class AiChatViewModel : ViewModelBase
     {
         var settings = _settings.Load().Ai;
         if (!settings.MemoryEnabled) return;
-        if (_acp is null) _summary = _context.CompactCompletedTurns(_history, _summary, settings);
+        if (_acp is null) _summary = _context.CompactCompletedTurns(_runner.History, _summary, settings);
         var recent = RecentForPersistence(settings);
         _memory.SaveConversation(_summary, recent);
     }
@@ -548,7 +885,7 @@ public partial class AiChatViewModel : ViewModelBase
         {
             var settings = _settings.Load().Ai;
             // ACP active: it owns context management, so legacy turn compaction is skipped.
-            if (_acp is null) _summary = _context.CompactCompletedTurns(_history, _summary, settings);
+            if (_acp is null) _summary = _context.CompactCompletedTurns(_runner.History, _summary, settings);
             var recent = RecentForPersistence(settings);
             var document = _sessionStore.Load();
             var entry = document.Sessions.FirstOrDefault(value => string.Equals(value.Id, _sessionId, StringComparison.Ordinal));
@@ -573,8 +910,7 @@ public partial class AiChatViewModel : ViewModelBase
     }
 
     private AgentMemoryMessage[] RecentForPersistence(AiSettings settings) =>
-        _history.Where(message => message.Role is "user" or "assistant")
-            .Where(message => message.ToolCalls is null || message.ToolCalls.Count == 0)
+        _runner.History.Where(message => message.Role is "user" or "assistant")
             .Select(message => new AgentMemoryMessage { Role = message.Role, Content = message.Content ?? string.Empty })
             .Where(message => message.Content.Length > 0)
             .TakeLast(settings.MaxRecentMessages).ToArray();
@@ -652,13 +988,11 @@ public partial class AiChatViewModel : ViewModelBase
         return flat.Length > max ? flat[..max] + "…" : flat;
     }
 
-    private sealed class ToolCallBuilder
+    protected override void OnDispose()
     {
-        public string? Id { get; set; }
-        public StringBuilder Name { get; } = new();
-        public StringBuilder Arguments { get; } = new();
-
-        public AssistantToolCall Build(int index) => new(
-            Id ?? $"call_{index}_{Guid.NewGuid():N}", Name.ToString(), Arguments.ToString());
+        _runner.Log.Appended -= OnAgentEvent;
+        _dispatcher.Audited -= OnToolAudited;
+        if (_todos is not null) _todos.Changed -= OnTodosChanged;
+        base.OnDispose();
     }
 }

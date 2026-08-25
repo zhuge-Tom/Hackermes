@@ -53,6 +53,17 @@ public sealed class SecurityToolsSettings
     [JsonPropertyName("defaultTimeoutSeconds")]
     public int DefaultTimeoutSeconds { get; set; } = 120;
 
+    /// <summary>
+    /// 左栏「安全工具」最近启动的工具 id，按新到旧排列、最多保留 5 个。
+    /// 仅用于界面置顶排序，不承载任何执行语义；未知 id 由界面渲染时自然忽略。
+    /// </summary>
+    [JsonPropertyName("recentToolIds")]
+    public List<string> RecentToolIds { get; set; } = new();
+
+    /// <summary>安全工具分类的展开状态；未记录的普通分类默认展开，未接入工具默认收起。</summary>
+    [JsonPropertyName("toolCategoryExpansion")]
+    public Dictionary<string, bool> ToolCategoryExpansion { get; set; } = new();
+
 }
 
 /// <summary>Non-sensitive traffic UI state. Packet and rule contents are never stored here.</summary>
@@ -219,6 +230,59 @@ public sealed class AiSettings
     [JsonPropertyName("toolCallTimeoutSeconds")]
     public int ToolCallTimeoutSeconds { get; set; } = 120;
 
+    /// <summary>
+    /// Bounded parallel pool for consecutive read-only tool calls (deepseek-harness
+    /// maxParallelToolCalls lineage). 1 keeps strictly sequential execution; read-only tools
+    /// never trigger confirmation dialogs, so pooling them cannot stack approval modals.
+    /// </summary>
+    [JsonPropertyName("maxParallelReadOnlyTools")]
+    public int MaxParallelReadOnlyTools { get; set; } = 1;
+
+    /// <summary>
+    /// Automatic ACP context compaction trigger as a ratio of MaxContextCharacters
+    /// (deepseek-harness compaction-basic thresholdRatio). 0 disables auto-compaction and
+    /// keeps the model-driven nudge/GC ladder only.
+    /// </summary>
+    [JsonPropertyName("autoCompactRatio")]
+    public double AutoCompactRatio { get; set; } = 0.8;
+
+    /// <summary>
+    /// Persists the full agent session event log (messages, tool protocol, compaction blocks,
+    /// approval audits) to the application data directory so sessions resume with complete
+    /// fidelity. Unlike agent-sessions.json this INCLUDES tool arguments/results — opt-in to
+    /// preserve the redaction guarantees documented for the memory store.
+    /// </summary>
+    [JsonPropertyName("sessionEvents")]
+    public bool SessionEventsEnabled { get; set; }
+
+    /// <summary>
+    /// Context budget measured in estimated tokens (CJK≈1/char, other≈4 chars/token).
+    /// When greater than zero it replaces the character-based <see cref="MaxContextCharacters"/>
+    /// across ACP nudges, GC, auto-compaction and the usage line; 0 keeps legacy behaviour.
+    /// </summary>
+    [JsonPropertyName("maxContextTokens")]
+    public int MaxContextTokens { get; set; }
+
+    /// <summary>
+    /// Per-model overrides for automatic compaction (dsh modelPolicies lineage): the first
+    /// entry whose ModelFragment occurs in the routed model name wins over AutoCompactRatio.
+    /// Ratio follows the same clamp/disable rules (0 disables auto-compaction for that model).
+    /// </summary>
+    [JsonPropertyName("compactionModelPolicies")]
+    public List<CompactionModelPolicy> CompactionModelPolicies { get; set; } = new();
+    /// <summary>Automatically rename default-named sessions after their first completed turn.</summary>
+    [JsonPropertyName("autoSessionNaming")]
+    public bool AutoSessionNaming { get; set; } = true;
+
+    /// <summary>
+    /// Trust remote MCP servers' annotations.readOnlyHint when classifying their tools.
+    /// Off (default): every remote tool stays Mutating — remote self-declaration can never
+    /// widen the auto-execution surface. On: hinted tools become ReadOnly (join the parallel
+    /// pool, skip per-call confirmations under RequestApproval).
+    /// </summary>
+    [JsonPropertyName("trustMcpReadOnlyHint")]
+    public bool TrustMcpReadOnlyHint { get; set; }
+
     [JsonPropertyName("memoryEnabled")]
     public bool MemoryEnabled { get; set; } = true;
 
@@ -236,6 +300,16 @@ public sealed class AiSettings
 
     [JsonPropertyName("mcpServers")]
     public List<McpServerSettings> McpServers { get; set; } = new();
+}
+
+/// <summary>Per-model automatic-compaction override.</summary>
+public sealed class CompactionModelPolicy
+{
+    [JsonPropertyName("modelFragment")]
+    public string ModelFragment { get; set; } = string.Empty;
+
+    [JsonPropertyName("ratio")]
+    public double Ratio { get; set; } = 0.8;
 }
 
 /// <summary>

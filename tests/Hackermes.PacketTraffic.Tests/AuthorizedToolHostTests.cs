@@ -24,6 +24,35 @@ public sealed class ToolHostSerialCollection;
 public sealed class AuthorizedToolHostTests
 {
     [Fact]
+    public void Nmap_service_is_unavailable_when_its_version_detection_runtime_is_incomplete()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-nmap-runtime-" + Guid.NewGuid().ToString("N"));
+        var nmap = Path.Combine(root, "nmap.exe");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(nmap, string.Empty);
+        var oldNmap = Environment.GetEnvironmentVariable("HACKERMES_NMAP_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_NMAP_PATH", nmap);
+
+            var tools = AuthorizedToolCatalog.Describe();
+
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.NmapQuick).Available);
+            var service = tools.Single(tool => tool.Id == AuthorizedToolCatalog.NmapService);
+            Assert.False(service.Available);
+            Assert.Contains("nselib", service.UnavailableReason, StringComparison.OrdinalIgnoreCase);
+            Assert.Throws<FileNotFoundException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.NmapService,
+                    "{\"target\":\"127.0.0.1\",\"ports\":\"80\"}"), ["127.0.0.1"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_NMAP_PATH", oldNmap);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Catalog_UsesBundledPythonToolsWithoutExternalDrivePaths()
     {
         var root = Path.Combine(Path.GetTempPath(), "hackermes-toolhost-bundle-" + Guid.NewGuid().ToString("N"));

@@ -13,7 +13,11 @@ using System.Threading.Tasks;
 
 namespace Hackermes.Assessment;
 
-public enum AssessmentJobStatus { Draft, AwaitingApproval, Queued, Running, Completed, Failed, Cancelled, Revoked }
+public enum AssessmentJobStatus
+{
+    Draft, AwaitingApproval, Queued, Running, Completed, Failed, Cancelled, Revoked,
+    CompletedWithWarnings
+}
 
 public enum AssessmentFindingStatus { Unreviewed, InReview, Confirmed, FalsePositive, Resolved, AcceptedRisk }
 
@@ -252,7 +256,8 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         lock (_gate)
         {
             var job = _document.Jobs.Find(value => value.Id == jobId);
-            if (job is null || job.Status is AssessmentJobStatus.Completed or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled) return false;
+            if (job is null || job.Status is AssessmentJobStatus.Completed or AssessmentJobStatus.CompletedWithWarnings or
+                AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled) return false;
             if (_running.Remove(jobId, out var cancellation)) cancellation.Cancel();
             ReplaceJobUnsafe(job with { Status = AssessmentJobStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, CancellationReason = Limit(reason, 240) });
             AuditUnsafe(actor, "job.cancel", jobId, Limit(reason, 240)); SaveUnsafe(); return true;
@@ -402,6 +407,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
             lock (_gate) { ReplaceJobUnsafe(job = job with { Status = AssessmentJobStatus.Running, StartedAt = DateTimeOffset.UtcNow }); AuditUnsafe(job.RequestedBy, "job.start", job.Id, plan.Id); SaveUnsafe(); }
             var scope = Scope(plan.ScopeId) ?? throw new InvalidOperationException("Scope not found.");
             var approval = _document.Approvals.Single(value => value.Id == job.ApprovalId);
+            var completedWithWarnings = false;
             for (var index = 0; index < plan.Steps.Count; index++)
             {
                 var step = plan.Steps[index];
@@ -418,6 +424,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
                             throw new InvalidOperationException(result.Error ?? "ToolHost execution failed.");
                         AddEvidence(job.Id, step.AdapterId,
                             $"warning: {result.Error ?? "ToolHost execution failed."}\n{result.Output}".TrimEnd());
+                        completedWithWarnings = true;
                         continue;
                     }
                     AddEvidence(job.Id, step.AdapterId, result.Output);
@@ -425,14 +432,19 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
                 catch (OperationCanceledException) when (step.ContinueOnError && !cancellation.IsCancellationRequested)
                 {
                     AddEvidence(job.Id, step.AdapterId, "warning: tool execution timed out; remaining tools will continue.");
+                    completedWithWarnings = true;
                 }
                 catch (Exception exception) when (step.ContinueOnError)
                 {
                     AddEvidence(job.Id, step.AdapterId,
                         $"warning: {Limit(exception.Message, 500)}; remaining tools will continue.");
+                    completedWithWarnings = true;
                 }
             }
-            lock (_gate) { ReplaceJobUnsafe(job = job with { Status = AssessmentJobStatus.Completed, FinishedAt = DateTimeOffset.UtcNow }); AuditUnsafe(job.RequestedBy, "job.complete", job.Id, "ok"); SaveUnsafe(); }
+            var finalStatus = completedWithWarnings
+                ? AssessmentJobStatus.CompletedWithWarnings
+                : AssessmentJobStatus.Completed;
+            lock (_gate) { ReplaceJobUnsafe(job = job with { Status = finalStatus, FinishedAt = DateTimeOffset.UtcNow }); AuditUnsafe(job.RequestedBy, "job.complete", job.Id, completedWithWarnings ? "warnings" : "ok"); SaveUnsafe(); }
         }
         catch (OperationCanceledException)
         {
@@ -474,7 +486,8 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
             !string.Equals(approval.PlanId, plan.Id, StringComparison.Ordinal))
             throw new InvalidDataException($"Assessment job {job.Id} has an inconsistent authorization chain.");
         var actions = new AssessmentCaseAvailableActions(
-            job.Status is not (AssessmentJobStatus.Completed or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled),
+            job.Status is not (AssessmentJobStatus.Completed or AssessmentJobStatus.CompletedWithWarnings or
+                AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled),
             !scope.Revoked,
             !approval.Revoked && approval.ConsumedAt is null,
             hasEvidence,

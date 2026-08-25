@@ -29,6 +29,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
     private readonly WebViewCreationCoordinator _coordinator;
     private readonly PageAgentInjector _agentInjector;
     private readonly BrowserPageContextService _pageContexts;
+    private readonly IBrowserHistoryStore _history;
     private readonly ISettingsService _settings;
     private readonly IAppLogger _logger;
     private readonly List<string> _openPageIds = [];
@@ -40,6 +41,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         WebViewCreationCoordinator coordinator,
         PageAgentInjector agentInjector,
         BrowserPageContextService pageContexts,
+        IBrowserHistoryStore history,
         ISettingsService settings,
         IAppLogger logger)
     {
@@ -48,6 +50,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
         _coordinator = coordinator;
         _agentInjector = agentInjector;
         _pageContexts = pageContexts;
+        _history = history;
         _settings = settings;
         _logger = logger.ForCategory(nameof(BrowserTabManager));
 
@@ -73,7 +76,7 @@ public sealed class BrowserTabManager : IBrowserTabManager
 
         var pageId = "page-" + Guid.NewGuid().ToString("N")[..8];
 
-        var viewModel = new BrowserTabViewModel(pageId, target);
+        var viewModel = new BrowserTabViewModel(pageId, target, _history);
         var view = new BrowserTabView(viewModel, _eventBus, _registry, _coordinator, _agentInjector, _settings, _logger);
         _pageContexts.Track(viewModel);
 

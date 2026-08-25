@@ -14,21 +14,47 @@ namespace Hackermes.PacketTraffic.Tests;
 public sealed class AiToolDispatcherHardeningTests
 {
     [Fact]
-    public async Task Oversized_success_result_is_truncated_with_explicit_marker()
+    public async Task Oversized_success_result_keeps_head_and_tail_with_explicit_markers()
     {
         var dispatcher = CreateDispatcher(
             "packet_query",
             AiToolRisk.ReadOnly,
-            (_, _) => ValueTask.FromResult(ToolResult.Ok(new string('x', 500))),
+            (_, _) => ValueTask.FromResult(ToolResult.Ok(
+                "HEAD-" + new string('x', 500) + "-TAIL")),
             maxToolResultCharacters: 256);
 
         var result = await dispatcher.InvokeAsync(Invocation("packet_query", "{}"));
 
         Assert.True(result.Success);
-        Assert.StartsWith(new string('x', 256), result.Content, StringComparison.Ordinal);
+        Assert.StartsWith("HEAD-", result.Content, StringComparison.Ordinal);
+        // Head + elision marker + retained tail + paging notice, in that order.
+        Assert.Contains("HEAD-", result.Content, StringComparison.Ordinal);
+        Assert.Contains("-TAIL", result.Content, StringComparison.Ordinal);
+        Assert.Contains("已省略", result.Content, StringComparison.Ordinal);
         Assert.Contains("已截断", result.Content, StringComparison.Ordinal);
-        Assert.Contains("500", result.Content, StringComparison.Ordinal);
-        Assert.True(result.Content.Length < 500, "Truncation must not keep the full payload.");
+        Assert.Contains("/ 510 字符", result.Content, StringComparison.Ordinal); // original payload size
+        Assert.True(result.Content.IndexOf("中间已省略", StringComparison.Ordinal) <
+                    result.Content.IndexOf("-TAIL", StringComparison.Ordinal));
+        // The middle filler must actually be gone, not merely wrapped.
+        Assert.DoesNotContain(new string('x', 300), result.Content, StringComparison.Ordinal);
+        Assert.True(result.Content.Length < 620, "Truncation must not keep the full payload.");
+    }
+
+    [Fact]
+    public async Task Oversized_failure_result_is_truncated_too()
+    {
+        var dispatcher = CreateDispatcher(
+            "packet_show",
+            AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(ToolResult.Fail(new string('y', 800))),
+            maxToolResultCharacters: 256);
+
+        var result = await dispatcher.InvokeAsync(Invocation("packet_show", "{}"));
+
+        Assert.False(result.Success);
+        Assert.StartsWith(new string('y', 64), result.Content, StringComparison.Ordinal);
+        Assert.Contains("已截断", result.Content, StringComparison.Ordinal);
+        Assert.True(result.Content.Length < 800, "Truncation must not keep the full payload.");
     }
 
     [Fact]

@@ -57,6 +57,12 @@ public sealed class AiBrowserToolLoopIntegrationTests
         Assert.Equal(3, session.Calls.Count(call => call.Method == "Input.dispatchMouseEvent"));
         Assert.All(session.Calls, call => Assert.Equal(pageId, call.PageId));
 
+        Assert.Collection(viewModel.Messages,
+            line => Assert.Equal("user", line.Role),
+            line => Assert.Equal("阶段：准备点击", line.Content.Trim()),
+            line => Assert.IsType<AiToolCallLine>(line),
+            line => Assert.Equal("final: submit button clicked", line.Content));
+
         var followUp = client.Requests[1];
         var assistantCall = Assert.Single(followUp.Messages, message => message.ToolCalls is { Count: > 0 });
         var call = Assert.Single(assistantCall.ToolCalls!);
@@ -66,6 +72,41 @@ public sealed class AiBrowserToolLoopIntegrationTests
         Assert.Equal("call-click", toolResult.ToolCallId);
         Assert.Contains("#submit", toolResult.Content, StringComparison.Ordinal);
         Assert.False(string.IsNullOrWhiteSpace(toolResult.Content));
+    }
+
+    [Fact]
+    public async Task Instruction_submitted_while_busy_is_applied_at_the_next_safe_round()
+    {
+        var probeInvocations = 0;
+        var tools = new AiToolRegistry();
+        tools.Register(new AiToolDefinition("probe", "probe", JsonSerializer.SerializeToElement(new { }),
+            AiToolRisk.ReadOnly, (_, _) =>
+            {
+                Interlocked.Increment(ref probeInvocations);
+                return ValueTask.FromResult(ToolResult.Ok("probe-complete"));
+            }));
+        var client = new SteeringChatClient();
+        using var viewModel = new AiChatViewModel(
+            client, tools,
+            new AiToolDispatcher(tools, new DefaultToolPolicyGate(), new RecordingConfirmation()),
+            new EventBus(), new TestSettings(), new EmptySkillStore(),
+            new InMemoryAgentMemoryStore(), new AgentContextCompactor());
+        viewModel.Input = "start the task";
+
+        var running = viewModel.SendCommand.ExecuteAsync(null);
+        await client.FirstRequestObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        viewModel.Input = "prioritize checking the login form";
+        await viewModel.SendCommand.ExecuteAsync(null);
+        viewModel.PrioritizePendingInstructionCommand.Execute(null);
+        client.ReleaseFirstResponse.TrySetResult();
+        await running.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, client.Requests.Count);
+        Assert.Contains(client.Requests[1].Messages,
+            message => message.Role == "user" && message.Content == "prioritize checking the login form");
+        Assert.Contains(viewModel.Messages,
+            line => line.Role == "user" && line.Content == "prioritize checking the login form");
+        Assert.Equal(0, probeInvocations);
     }
 
     private static CommandRegistry CreateCommands(ICdpSessionRegistry sessions)
@@ -95,6 +136,7 @@ public sealed class AiBrowserToolLoopIntegrationTests
 
             if (Requests.Count == 1)
             {
+                yield return new ChatStreamDelta("阶段：准备点击\n", null, null);
                 yield return new ChatStreamDelta(
                     null,
                     new ToolCallDelta(0, "call-click", "page_click", "{\"arguments\":\"#submit\"}"),
@@ -104,6 +146,30 @@ public sealed class AiBrowserToolLoopIntegrationTests
             }
 
             yield return new ChatStreamDelta("final: submit button clicked", null, "stop");
+        }
+    }
+
+    private sealed class SteeringChatClient : IOpenAiChatClient
+    {
+        public List<OpenAiChatRequest> Requests { get; } = [];
+        public TaskCompletionSource FirstRequestObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstResponse { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async IAsyncEnumerable<ChatStreamDelta> StreamChatAsync(
+            OpenAiChatRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (Requests.Count == 1)
+            {
+                FirstRequestObserved.TrySetResult();
+                await ReleaseFirstResponse.Task.WaitAsync(ct);
+                yield return new ChatStreamDelta(null,
+                    new ToolCallDelta(0, "call-probe", "probe", "{}"), "tool_calls");
+                yield break;
+            }
+
+            yield return new ChatStreamDelta("steered report", null, "stop");
         }
     }
 

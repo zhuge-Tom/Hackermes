@@ -27,7 +27,8 @@ public sealed record ChatStreamDelta(
     string? Content,
     ToolCallDelta? ToolCall,
     string? FinishReason,
-    StreamUsage? Usage = null);
+    StreamUsage? Usage = null,
+    string? Reasoning = null);
 
 public interface IOpenAiChatClient
 {

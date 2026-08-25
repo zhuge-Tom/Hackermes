@@ -34,7 +34,11 @@ public sealed class AvaloniaToolConfirmationService : IToolConfirmationService
         CancellationToken ct)
     {
         if (ct.IsCancellationRequested || completion.Task.IsCompleted) return null;
-        var remember = new CheckBox { Content = "本会话记住此类操作" };
+        var remember = new CheckBox
+        {
+            Content = "本会话内，同一页面和工具不再重复询问",
+            IsChecked = true
+        };
         var approve = new Button { Content = "允许", MinWidth = 80 };
         var reject = new Button { Content = "拒绝", MinWidth = 80 };
         var buttons = new StackPanel

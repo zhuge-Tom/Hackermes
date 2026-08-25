@@ -28,6 +28,7 @@ public sealed class BrowserModule : IModule
         services.AddSingleton<BrowserPageContextService>();
         services.AddSingleton<IPageContextQueryService>(sp =>
             sp.GetRequiredService<BrowserPageContextService>());
+        services.AddSingleton<IBrowserHistoryStore, BrowserHistoryStore>();
         services.AddSingleton<IBrowserTabManager, BrowserTabManager>();
     }
 

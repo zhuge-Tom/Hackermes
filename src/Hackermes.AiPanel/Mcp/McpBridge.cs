@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 namespace Hackermes.AiPanel.Mcp;
 
 public sealed record McpServerDescriptor(string Id, string DisplayName, string Transport, string Endpoint);
-public sealed record McpToolDescriptor(string ServerId, string Name, string Description, JsonElement InputSchema);
+public sealed record McpToolDescriptor(string ServerId, string Name, string Description, JsonElement InputSchema, bool ReadOnlyHint = false);
 public sealed record McpStdioServer(string Id, string Command, IReadOnlyList<string> Arguments);
 
 public interface IMcpBridge : IAsyncDisposable
@@ -53,7 +53,13 @@ public sealed class StdioMcpBridge : IMcpBridge
                 var description = tool.TryGetProperty("description", out var desc) ? desc.GetString() ?? string.Empty : string.Empty;
                 var schema = tool.TryGetProperty("inputSchema", out var input)
                     ? input.Clone() : JsonSerializer.SerializeToElement(new { type = "object" });
-                yield return new McpToolDescriptor(serverId, name, description, schema);
+                // MCP annotations (spec 2025): readOnlyHint lets read-only remote tools join
+                // the parallel pool and skip confirmations under the shared policy gate.
+                var readOnly = tool.TryGetProperty("annotations", out var annotations)
+                    && annotations.ValueKind == JsonValueKind.Object
+                    && annotations.TryGetProperty("readOnlyHint", out var hint)
+                    && hint.ValueKind == JsonValueKind.True;
+                yield return new McpToolDescriptor(serverId, name, description, schema, readOnly);
             }
         }
     }

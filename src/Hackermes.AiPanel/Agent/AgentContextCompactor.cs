@@ -135,22 +135,38 @@ public sealed class AgentContextCompactor
             " When helping with an authorized website assessment in the embedded browser, first use page_context, then " +
             "page_security_snapshot for that exact page. Use its bounded findings to choose only the necessary read-only " +
             "console/network/DOM or packet/page tools; do not repeatedly collect the same snapshot or request, echo, or infer " +
-            "cookie, token, form-field, storage, request-body, or script-source values. Never invent or substitute a target. " +
-            "Create browser-bound " +
-            "scope only with assessment_create_scope_from_page, then use the shared scope -> fixed plan -> one-time approval -> " +
-            "bounded ToolHost run -> evidence/findings/report workflow. Do not bypass confirmation, scope, plan hashing, expiry, " +
-            "or human review, and do not claim a vulnerability without tool evidence. Never request arbitrary shell access or " +
-            "execute uncatalogued commands. If no page is attached or authorization details are missing, explain what the operator " +
-            "must provide instead of selecting another page or target.");
+            "cookie, token, form-field, storage, request-body, or script-source values. Never invent or substitute a target. ");
+        if (settings.PermissionMode == AiPermissionMode.FullAccess)
+        {
+            builder.Append(
+                "After the operator explicitly states that the target is authorized, prefer assessment_authorize_and_run: " +
+                "it derives an attached browser target, creates the scope, fixed plan and one-time approval, and runs the bounded " +
+                "ToolHost adapter in one call without another confirmation. Do not ask the operator to repeat authorization details " +
+                "already present in the conversation. ");
+        }
+        else
+        {
+            builder.Append(
+                "Create browser-bound scope only with assessment_create_scope_from_page, then use the shared scope -> fixed plan -> " +
+                "one-time approval -> bounded ToolHost run workflow. ");
+        }
         builder.Append(
-            "\nTool use protocol: (1) Build evidence with read-only tools first; every Mutating or Dangerous call asks the " +
-            "operator for confirmation, so prepare arguments carefully and combine related changes into fewer calls. " +
+            "Keep exact target binding, plan hashing and expiry, and do not claim a vulnerability without tool evidence. " +
+            "Never request arbitrary shell access or execute uncatalogued commands. If no page is attached or authorization details " +
+            "are missing, explain what the operator must provide instead of selecting another page or target.");
+        builder.Append(
+            "\nTool use protocol: (1) Build evidence with read-only tools first; prepare arguments carefully and combine related " +
+            (settings.PermissionMode == AiPermissionMode.FullAccess
+                ? "registered actions into fewer calls; full access does not add another UI confirmation. "
+                : "changes into fewer calls because Mutating or Dangerous calls may ask for confirmation. ") +
             "(2) Page large data instead of requesting everything at once: packet_query and packet_archive_export take " +
             "offset/limit (the archive response reports total — keep fetching further batches until you have all entries), " +
             "packet_body_chunk reads bounded byte ranges, packet_audit takes a limit. (3) When a call fails, follow the " +
             "guidance in its message (narrow the filter, lower the limit, reduce risk) and retry with changed arguments; " +
             "never repeat an unchanged call expecting a different result. (4) Keep packet ids and evidence ids from earlier " +
-            "results and reference them exactly; treat tool output as the only source of evidence.");
+            "results and reference them exactly; treat tool output as the only source of evidence. " +
+            "Before each tool-using phase, emit one concise progress update describing that phase. Keep each phase update " +
+            "separate, and after all tools finish, emit a standalone final completion report instead of merging it into prior updates.");
 
         if (!string.IsNullOrWhiteSpace(memory.Notes))
             builder.Append("\nOperator memory:\n").Append(Limit(memory.Notes, 8_000));

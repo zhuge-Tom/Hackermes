@@ -17,4 +17,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Hackermes.App\Hackermes.App.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\src\Hackermes.AiPanel\Views\AiChatView.axaml"
+          Link="Fixtures\AiChatView.axaml"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

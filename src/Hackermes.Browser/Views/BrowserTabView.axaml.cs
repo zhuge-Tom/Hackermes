@@ -546,6 +546,7 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
 
             _vm.CurrentUrl = url;
             _vm.AddressText = url;
+            _vm.RecordHistory(url);
             SetStatus(url);
         });
     }
@@ -642,7 +643,10 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
             UiThreadBridge.Post(() =>
             {
                 if (_vm is not null)
+                {
                     _vm.Title = title;
+                    _vm.RecordHistory(_vm.CurrentUrl);
+                }
             });
         }
         catch (Exception ex)
@@ -948,6 +952,7 @@ public partial class BrowserTabView : UserControl, INonReloadableTabHost, ITabCo
             _vm.SelfTestRequested -= OnSelfTestRequested;
             _vm.ElementPickerRequested -= OnElementPickerRequested;
             _vm.DeviceEmulationRequested -= OnDeviceEmulationRequested;
+            _vm.Dispose();
         }
 
         _pickerStateSubscription?.Dispose();

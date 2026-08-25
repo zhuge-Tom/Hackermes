@@ -34,7 +34,8 @@ public sealed class AgentToolUseProtocolTests
         Assert.Contains("Tool use protocol", system);
         Assert.Contains("offset/limit", system);
         Assert.Contains("never repeat an unchanged call", system);
-        Assert.Contains("asks the operator for confirmation", system);
+        Assert.Contains("may ask for confirmation", system);
+        Assert.Contains("standalone final completion report", system);
     }
 
     [Fact]

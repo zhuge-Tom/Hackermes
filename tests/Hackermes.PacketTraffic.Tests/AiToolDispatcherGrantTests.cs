@@ -38,7 +38,7 @@ public sealed class AiToolDispatcherGrantTests
     }
 
     [Fact]
-    public async Task Remembered_grant_does_not_apply_to_changed_arguments()
+    public async Task Remembered_grant_covers_changed_arguments_for_the_same_tool_and_page()
     {
         var confirmation = new RememberingConfirmation();
         var dispatcher = CreateDispatcher(confirmation);
@@ -46,7 +46,24 @@ public sealed class AiToolDispatcherGrantTests
         await dispatcher.InvokeAsync(Invocation("page-one", """{"selector":"#save","value":"secret-one"}"""));
         await dispatcher.InvokeAsync(Invocation("page-one", """{"selector":"#save","value":"secret-two"}"""));
 
-        Assert.Equal(2, confirmation.Count);
+        Assert.Equal(1, confirmation.Count);
+    }
+
+    [Fact]
+    public async Task Full_access_never_opens_confirmation_for_mutating_tools()
+    {
+        var confirmation = new RememberingConfirmation();
+        var registry = new AiToolRegistry();
+        registry.Register(new AiToolDefinition("page_type", "type", JsonSerializer.SerializeToElement(new { }),
+            AiToolRisk.Mutating, (_, _) => ValueTask.FromResult(ToolResult.Ok())));
+        var policy = new DefaultToolPolicyGate();
+        policy.SetMode(Hackermes.Platform.Models.AiPermissionMode.FullAccess);
+        var dispatcher = new AiToolDispatcher(registry, policy, confirmation);
+
+        await dispatcher.InvokeAsync(Invocation("page-one", """{"selector":"#one"}"""));
+        await dispatcher.InvokeAsync(Invocation("page-two", """{"selector":"#two"}"""));
+
+        Assert.Equal(0, confirmation.Count);
     }
 
     [Fact]

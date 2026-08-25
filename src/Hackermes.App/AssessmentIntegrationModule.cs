@@ -3,6 +3,7 @@ using Hackermes.Assessment;
 using Hackermes.Automation.Commands;
 using Hackermes.Automation.Packet;
 using Hackermes.Base;
+using Hackermes.Base.Events;
 using Hackermes.App.Views;
 using Hackermes.Platform.Registries;
 using Hackermes.Platform.Services;
@@ -36,6 +37,7 @@ public sealed class AssessmentIntegrationModule : IModule
                 serviceProvider.GetRequiredService<IAssessmentReportSigningKey>(),
                 serviceProvider.GetRequiredService<IAssessmentReportTrustPolicy>()));
         services.AddSingleton<ToolLaunchService>();
+        services.AddSingleton<ToolCatalogService>();
     }
 
     public void Initialize(IServiceProvider serviceProvider)
@@ -43,21 +45,22 @@ public sealed class AssessmentIntegrationModule : IModule
         var plane = serviceProvider.GetRequiredService<IAssessmentControlPlane>();
         var settings = serviceProvider.GetRequiredService<ISettingsService>();
         var launcher = serviceProvider.GetRequiredService<ToolLaunchService>();
+        var catalog = serviceProvider.GetRequiredService<ToolCatalogService>();
+        var eventBus = serviceProvider.GetRequiredService<IEventBus>();
         var reports = serviceProvider.GetRequiredService<IAssessmentReportExportService>();
         RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane, reports);
         RegisterAgent(serviceProvider.GetRequiredService<IAiToolRegistry>(), plane,
             serviceProvider.GetRequiredService<IPageContextQueryService>(), reports);
-        AuthorizedToolsView? toolsView = null;
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
             Region = DockPosition.Left, TabId = "security-tools", Title = "安全工具",
             IconKey = "SemiIconFolder", IsClosable = false, Order = 0,
-            HeaderActionCommand = new ActionCommand(() => OpenSecurityToolsSettings(settings, () => toolsView?.RefreshCatalog())),
+            HeaderActionCommand = new ActionCommand(() => OpenSecurityToolsSettings(settings, catalog)),
             HeaderActionToolTip = "安全工具配置",
             CreateTab = () => new DockTabItemViewModel
             {
                 Id = "security-tools", Title = "安全工具",
-                Content = toolsView = new AuthorizedToolsView(settings, launcher)
+                Content = new AuthorizedToolsView(settings, launcher, catalog, eventBus)
             }
         });
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
@@ -72,10 +75,9 @@ public sealed class AssessmentIntegrationModule : IModule
         });
     }
 
-    private static void OpenSecurityToolsSettings(ISettingsService settings, Action refresh)
+    private static void OpenSecurityToolsSettings(ISettingsService settings, ToolCatalogService catalog)
     {
-        var dialog = new SecurityToolsSettingsWindow(settings);
-        dialog.Closed += (_, _) => refresh();
+        var dialog = new SecurityToolsSettingsWindow(settings, catalog);
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
             _ = dialog.ShowDialog(owner);
         else
@@ -220,6 +222,22 @@ public sealed class AssessmentIntegrationModule : IModule
                 (call, _) => ValueTask.FromResult(CreateScopeFromPage(plane, pageContexts, call)),
                 (call, _) => ValueTask.FromResult(PrepareScopeFromPage(pageContexts, call))));
         }
+        registry.Register(new AiToolDefinition("assessment_authorize_and_run",
+            "Create the exact scope, fixed plan and one-time approval, then run one bounded adapter in a single call. " +
+            "When a browser page is attached, target is derived from that page; otherwise target is required.", Schema(new
+            {
+                name = new { type = "string" }, authorization = new { type = "string" },
+                operatorId = new { type = "string" }, target = new { type = "string" },
+                adapterId = new { type = "string" },
+                input = new { type = "string", description = "Structured adapter input; target is normalized to the authorized page/target." },
+                scopeMinutes = new { type = "integer" }, timeoutSeconds = new { type = "integer" }
+            }), AiToolRisk.Dangerous,
+            (call, token) => AuthorizeAndRunAsync(plane, pageContexts, call, token),
+            pageContexts is null
+                ? null
+                : (call, _) => ValueTask.FromResult(string.IsNullOrWhiteSpace(call.PageId)
+                    ? call
+                    : PrepareScopeFromPage(pageContexts, call))));
         registry.Register(new AiToolDefinition("assessment_create_plan", "Create a bounded plan using a registered ToolHost adapter.", Schema(new { scopeId = new { type = "string" }, name = new { type = "string" }, adapterId = new { type = "string" }, input = new { type = "string", description = "Structured JSON; arbitrary commands are rejected." }, timeoutSeconds = new { type = "integer" } }), AiToolRisk.Mutating,
             (call, _) => ValueTask.FromResult(CreatePlan(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_approve", "Request an approval grant for an unchanged assessment plan.", Schema(new { planId = new { type = "string" }, operatorId = new { type = "string" }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
@@ -341,6 +359,73 @@ public sealed class AssessmentIntegrationModule : IModule
     }
 
     private sealed record BrowserScopeBinding(string PageId, string Origin, string Target, string Scheme, int Port);
+
+    private static async ValueTask<ToolResult> AuthorizeAndRunAsync(IAssessmentControlPlane plane,
+        IPageContextQueryService? pageContexts, ToolInvocation call, System.Threading.CancellationToken ct)
+    {
+        try
+        {
+            string target;
+            if (!string.IsNullOrWhiteSpace(call.PageId))
+            {
+                if (pageContexts is null || !call.Arguments.TryGetProperty(PageBindingArgument, out var bindingJson))
+                    return ToolResult.Fail("The browser target could not be bound for this run.");
+                var frozen = bindingJson.Deserialize<BrowserScopeBinding>() ??
+                    throw new InvalidOperationException("The frozen browser target is invalid.");
+                var currentPage = pageContexts.Read(call.PageId) ??
+                    throw new InvalidOperationException("The attached browser page is unavailable or has been closed.");
+                if (ReadPageBinding(currentPage) != frozen)
+                    return ToolResult.Fail("The attached page navigated before execution. Retry once on the intended page.");
+                target = frozen.Target;
+            }
+            else
+            {
+                target = Text(call.Arguments, "target").Trim();
+                if (target.Length == 0)
+                    return ToolResult.Fail("Provide one exact target when no browser page is attached.");
+            }
+
+            var adapterId = Text(call.Arguments, "adapterId");
+            var timeout = Math.Clamp(Number(call.Arguments, "timeoutSeconds", 120), 1, 600);
+            var step = new AssessmentStep(adapterId,
+                BindAuthorizedTarget(adapterId, Text(call.Arguments, "input"), target), timeout);
+            // Validate availability, structured input and exact target before persisting any lifecycle records.
+            step = AuthorizedToolCatalog.NormalizeStep(step, [target]);
+            var scopeMinutes = Math.Clamp(Number(call.Arguments, "scopeMinutes", 1_440), 1, 10_080);
+            var actor = Text(call.Arguments, "operatorId") is { Length: > 0 } requestedActor
+                ? requestedActor
+                : "agent";
+            var name = Text(call.Arguments, "name") is { Length: > 0 } requestedName
+                ? requestedName
+                : target;
+            var scope = plane.CreateScope(name, Text(call.Arguments, "authorization"), actor, [target],
+                DateTimeOffset.UtcNow.AddMinutes(scopeMinutes));
+            var plan = plane.CreatePlan(scope.Id, $"{name} · {adapterId}", [step], actor);
+            var approval = plane.Approve(plan.Id, actor,
+                DateTimeOffset.UtcNow.AddMinutes(Math.Min(scopeMinutes, 1_440)));
+            var job = await plane.StartAsync(plan.Id, approval.Id, actor, ct).ConfigureAwait(false);
+            return ToolResult.Ok(JsonSerializer.Serialize(new { Scope = scope, Plan = plan, Approval = approval, Job = job }));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return ToolResult.Fail(exception.Message);
+        }
+    }
+
+    private static string BindAuthorizedTarget(string adapterId, string input, string target)
+    {
+        if (adapterId == AuthorizedToolCatalog.SimulationEcho) return input;
+        using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(input) ? "{}" : input);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Adapter input must be a JSON object.");
+        var normalized = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+            if (!string.Equals(property.Name, "target", StringComparison.Ordinal))
+                normalized[property.Name] = property.Value.Clone();
+        normalized["target"] = JsonSerializer.SerializeToElement(target);
+        return JsonSerializer.Serialize(normalized);
+    }
+
     private static ToolResult CreatePlan(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreatePlan(Text(args, "scopeId"), Text(args, "name"), [new AssessmentStep(Text(args, "adapterId"), Text(args, "input"), Number(args, "timeoutSeconds", 30))], "agent"));
     private static ToolResult Approve(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.Approve(Text(args, "planId"), Text(args, "operatorId"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 30))));
     private static async ValueTask<ToolResult> RunAsync(IAssessmentControlPlane plane, JsonElement args, System.Threading.CancellationToken ct) { try { var job = await plane.StartAsync(Text(args, "planId"), Text(args, "approvalId"), Text(args, "operatorId"), ct).ConfigureAwait(false); return ToolResult.Ok(JsonSerializer.Serialize(job)); } catch (Exception ex) { return ToolResult.Fail(ex.Message); } }

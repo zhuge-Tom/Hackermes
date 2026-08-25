@@ -199,6 +199,15 @@ public sealed class OpenAiCompatibleClient : IOpenAiChatClient
 
                 var content = delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String
                     ? c.GetString() : null;
+                // Reasoning-model thinking stream (DeepSeek-R1 style): emitted as standalone
+                // deltas so it can be rendered live but never enters model history.
+                var reasoning =
+                    (delta.TryGetProperty("reasoning_content", out var rc) && rc.ValueKind == JsonValueKind.String
+                        ? rc.GetString() : null) ??
+                    (delta.TryGetProperty("reasoning", out var r) && r.ValueKind == JsonValueKind.String
+                        ? r.GetString() : null);
+                if (!string.IsNullOrEmpty(reasoning))
+                    yield return new ChatStreamDelta(null, null, finish, Reasoning: reasoning);
                 if (delta.TryGetProperty("tool_calls", out var calls))
                 {
                     foreach (var call in calls.EnumerateArray())

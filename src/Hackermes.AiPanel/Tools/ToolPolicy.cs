@@ -1,9 +1,7 @@
-using System;
-using System.Buffers;
+﻿using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -79,6 +77,19 @@ public interface IToolConfirmationService
         ToolInvocation invocation, string reason, CancellationToken ct);
 }
 
+/// <summary>
+/// One durable approval-audit fact: who (session/page/scope) asked for what, and how the
+/// policy/operated decided. Emitted by the dispatcher and appended to the agent session log
+/// so approval history survives restarts instead of living only in session grants.
+/// </summary>
+public sealed record AiToolAuditRecord(
+    DateTimeOffset Time,
+    string Tool,
+    string? SessionId,
+    string? PageId,
+    string Decision,
+    string Reason);
+
 /// <summary>Safe headless default. A UI confirmation service replaces this at application composition time.</summary>
 public sealed class RejectingToolConfirmationService : IToolConfirmationService
 {
@@ -100,12 +111,16 @@ public sealed class AiToolDispatcher
     private readonly IAiToolRegistry _registry;
     private readonly IToolPolicyGate _policy;
     private readonly IToolConfirmationService _confirmation;
+    private readonly IAgentSpillStore? _spill;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _sessionGrantLifetime;
     private readonly TimeSpan _toolCallTimeout;
     private readonly int _maxToolResultCharacters;
     private readonly ConcurrentDictionary<SessionGrantKey, DateTimeOffset> _sessionGrants = new();
-    private readonly ConcurrentDictionary<SessionGrantKey, byte> _recentReadOnlyCalls = new();
+    private readonly ConcurrentDictionary<ReadonlyCallKey, byte> _recentReadOnlyCalls = new();
+
+    /// <summary>Raised for every approval-relevant decision (confirmations, denials, session grants).</summary>
+    public event Action<AiToolAuditRecord>? Audited;
 
     public AiToolDispatcher(IAiToolRegistry registry, IToolPolicyGate policy, IToolConfirmationService confirmation)
         : this(registry, policy, confirmation, TimeProvider.System, DefaultSessionGrantLifetime)
@@ -131,10 +146,25 @@ public sealed class AiToolDispatcher
         TimeSpan sessionGrantLifetime,
         int maxToolResultCharacters,
         TimeSpan toolCallTimeout)
+        : this(registry, policy, confirmation, timeProvider, sessionGrantLifetime,
+              maxToolResultCharacters, toolCallTimeout, spillStore: null)
+    {
+    }
+
+    public AiToolDispatcher(
+        IAiToolRegistry registry,
+        IToolPolicyGate policy,
+        IToolConfirmationService confirmation,
+        TimeProvider timeProvider,
+        TimeSpan sessionGrantLifetime,
+        int maxToolResultCharacters,
+        TimeSpan toolCallTimeout,
+        IAgentSpillStore? spillStore)
     {
         _registry = registry;
         _policy = policy;
         _confirmation = confirmation;
+        _spill = spillStore;
         _timeProvider = timeProvider;
         if (sessionGrantLifetime <= TimeSpan.Zero || sessionGrantLifetime > TimeSpan.FromHours(24))
             throw new ArgumentOutOfRangeException(nameof(sessionGrantLifetime),
@@ -162,7 +192,7 @@ public sealed class AiToolDispatcher
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
-                return Limit(ToolResult.Fail($"{invocation.ToolName} 参数准备失败: {exception.Message}"));
+                return Limit(ToolResult.Fail($"{invocation.ToolName} 参数准备失败: {exception.Message}"), invocation);
             }
         }
 
@@ -178,20 +208,33 @@ public sealed class AiToolDispatcher
             : await _policy.EvaluateAsync(tool, invocation, ct).ConfigureAwait(false);
 
         if (decision.Kind == ToolPolicyDecisionKind.Deny)
+        {
+            Audit(invocation, "Denied", decision.Reason ?? "操作被策略拒绝。");
             return ToolResult.Fail(
                 (decision.Reason ?? "操作被策略拒绝。") +
                 " 不要尝试绕过或用变体参数重试；如确属授权评估必需，请向操作者说明目的，由操作者调整权限模式或手动执行。");
+        }
 
         if (decision.Kind == ToolPolicyDecisionKind.RequireConfirmation)
         {
             var answer = await _confirmation.ConfirmAsync(
                 invocation, decision.Reason ?? "Confirmation required.", ct).ConfigureAwait(false);
             if (!answer.Approved)
+            {
+                Audit(invocation, "RejectedByOperator", decision.Reason ?? "Confirmation required.");
                 return ToolResult.Fail(
                     "操作者未批准该操作。可先降低风险（缩小范围、改为只读查询）后重新请求，" +
                     "或向操作者解释该步骤对当前评估的必要性；不要在未获批准时重复发起同一操作。");
+            }
             if (answer.RememberForSession && grantKey is { } approvedKey)
+            {
                 _sessionGrants[approvedKey] = _timeProvider.GetUtcNow() + _sessionGrantLifetime;
+                Audit(invocation, "ApprovedWithSessionGrant", decision.Reason ?? string.Empty);
+            }
+            else
+            {
+                Audit(invocation, "ApprovedOnce", decision.Reason ?? string.Empty);
+            }
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -212,8 +255,20 @@ public sealed class AiToolDispatcher
         {
             result = ToolResult.Fail($"{invocation.ToolName} 执行失败: {ex.Message}");
         }
+
+        // Declared-output contract (dsh INVALID_TOOL_OUTPUT): a schema-declaring tool that
+        // returns non-conforming JSON fails here so the model self-corrects immediately
+        // instead of building evidence on malformed output.
+        if (result.Success && tool.OutputSchema is { } outputSchema)
+        {
+            var violation = ToolOutputValidator.Validate(result.Content, outputSchema);
+            if (violation is not null)
+                result = ToolResult.Fail(
+                    $"[{ToolOutputValidator.InvalidOutputCode}] 工具 '{invocation.ToolName}' 的输出不符合其声明模式：{violation}" +
+                    " 请修正参数后重试，或改用其他工具获取该信息。");
+        }
         // Annotate after limiting: the hint must survive truncation of oversized results.
-        return AnnotateDuplicateReadOnlyCall(tool, invocation, Limit(result));
+        return AnnotateDuplicateReadOnlyCall(tool, invocation, Limit(result, invocation));
     }
 
     /// <summary>
@@ -226,26 +281,91 @@ public sealed class AiToolDispatcher
         if (tool.Risk != AiToolRisk.ReadOnly || string.IsNullOrEmpty(invocation.SessionId))
             return result;
 
-        var key = CreateGrantKey(invocation, tool.Name);
-        if (key is null) return result;
-        var repeated = !_recentReadOnlyCalls.TryAdd(key.GetValueOrDefault(), 0);
+        var key = new ReadonlyCallKey(
+            invocation.SessionId!, tool.Name, invocation.PageId ?? string.Empty,
+            invocation.Arguments.GetRawText());
+        var repeated = !_recentReadOnlyCalls.TryAdd(key, 0);
         if (_recentReadOnlyCalls.Count > MaximumTrackedReadonlyCalls) _recentReadOnlyCalls.Clear();
         return repeated ? result with { Content = result.Content + DuplicateCallHint } : result;
     }
 
     /// <summary>
-    /// Single exit funnel so one chatty tool cannot crowd the shared context window;
-    /// the model sees an explicit marker and can page through bounded reads instead.
+    /// Single exit funnel so one chatty tool cannot crowd the shared context window.
+    /// Two-stage policy (dsh spill-policy + tool-result-pruner lineage): beyond the spill
+    /// threshold the full text is stored off-context and the model gets a head/tail preview
+    /// with a <c>read_spill</c> locator; otherwise the middle is elided with explicit markers.
+    /// Evidence lives in both the opening summary and the closing totals/errors, so the tail
+    /// is always retained. The paging notice length is reserved inside the budget.
     /// </summary>
-    private ToolResult Limit(ToolResult result)
+    private ToolResult Limit(ToolResult result, ToolInvocation invocation)
     {
-        if (result.Content.Length <= _maxToolResultCharacters) return result;
+        var length = result.Content.Length;
+        if (length <= _maxToolResultCharacters) return result;
+
+        if (_spill is { } spill && length > DefaultSpillThresholdCharacters &&
+            invocation.SessionId is { Length: > 0 })
+        {
+            try
+            {
+                var locator = spill.Save(invocation.SessionId, invocation.ToolName, result.Content);
+                var head = result.Content[..Math.Min(DefaultSpillPreviewHeadCharacters, length)];
+                var tailStart = Math.Max(head.Length, length - DefaultSpillPreviewTailCharacters);
+                var tail = result.Content[tailStart..];
+                return result with
+                {
+                    Content = head +
+                        $"\n\n[…完整结果共 {length:N0} 字符已外存：{locator}。" +
+                        " 用 read_spill 工具按 offset/limit 分页读取，不要一次读完。]\n\n" +
+                        tail +
+                        "\n…[已截断：完整内容见上方 locator。]"
+                };
+            }
+            catch (IOException)
+            {
+                // Storage failed: fall through to destructive truncation (best-effort spill).
+            }
+        }
+
+        var notice =
+            $"\n…[已截断：仅保留首尾片段 / {length} 字符。" +
+            " 请改用分页、chunk 或过滤参数获取剩余部分，不要凭空补全被截断的内容。]";
+        var tailKeep = Math.Clamp(_maxToolResultCharacters / 6, 64, 4_096);
+        var headKeep = Math.Max(64, _maxToolResultCharacters - tailKeep - notice.Length - 32);
+        if (headKeep + tailKeep >= length)
+        {
+            // Degenerate budgets: fall back to a plain head cut so output still shrinks.
+            return result with
+            {
+                Content = result.Content[..Math.Max(1, _maxToolResultCharacters - notice.Length)] + notice
+            };
+        }
+        var omitted = length - headKeep - tailKeep;
         return result with
         {
-            Content = result.Content[.._maxToolResultCharacters] +
-                $"\n…[已截断：仅保留前 {_maxToolResultCharacters} / {result.Content.Length} 字符。" +
-                " 请改用分页、chunk 或过滤参数获取剩余部分，不要凭空补全被截断的内容。]"
+            Content = result.Content[..headKeep] +
+                $"\n\n[…中间已省略约 {omitted:N0} 字符…]\n\n" +
+                result.Content[^tailKeep..] + notice
         };
+    }
+
+    /// <summary>Above this size a successful result is spilled instead of destructively truncated.</summary>
+    public const int DefaultSpillThresholdCharacters = 24_000;
+    public const int DefaultSpillPreviewHeadCharacters = 4_000;
+    public const int DefaultSpillPreviewTailCharacters = 1_000;
+
+    /// <summary>Contained fan-out: audit listeners must never break tool execution.</summary>
+    private void Audit(ToolInvocation invocation, string decision, string reason)
+    {
+        var handlers = Audited;
+        if (handlers is null) return;
+        var record = new AiToolAuditRecord(
+            _timeProvider.GetUtcNow(), invocation.ToolName, invocation.SessionId,
+            invocation.PageId, decision, reason);
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try { ((Action<AiToolAuditRecord>)handler)(record); }
+            catch { /* listener failures never propagate */ }
+        }
     }
 
     public void ClearSessionGrants(string sessionId)
@@ -262,90 +382,35 @@ public sealed class AiToolDispatcher
             sessionId,
             toolName,
             invocation.PageId ?? string.Empty,
-            ComputeArgumentsFingerprint(invocation.Arguments));
+            AuthorizationScope(invocation.Arguments));
     }
 
-    private static string ComputeArgumentsFingerprint(JsonElement arguments)
+    private static string AuthorizationScope(JsonElement arguments)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer))
+        if (arguments.ValueKind != JsonValueKind.Object) return string.Empty;
+        if (arguments.TryGetProperty("__hackermesPageBinding", out var binding) &&
+            binding.ValueKind == JsonValueKind.Object)
         {
-            WriteCanonicalJson(writer, arguments);
+            if (binding.TryGetProperty("Target", out var target) && target.ValueKind == JsonValueKind.String)
+                return target.GetString()?.Trim().ToLowerInvariant() ?? string.Empty;
+            if (binding.TryGetProperty("Origin", out var origin) && origin.ValueKind == JsonValueKind.String)
+                return origin.GetString()?.Trim().ToLowerInvariant() ?? string.Empty;
         }
-
-        return Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan));
-    }
-
-    private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement element)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-            {
-                writer.WriteStartObject();
-                var properties = new List<JsonProperty>();
-                foreach (var property in element.EnumerateObject()) properties.Add(property);
-                properties.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
-                foreach (var property in properties)
-                {
-                    writer.WritePropertyName(property.Name);
-                    WriteCanonicalJson(writer, property.Value);
-                }
-                writer.WriteEndObject();
-                break;
-            }
-            case JsonValueKind.Array:
-                writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray()) WriteCanonicalJson(writer, item);
-                writer.WriteEndArray();
-                break;
-            case JsonValueKind.String:
-                writer.WriteStringValue(element.GetString());
-                break;
-            case JsonValueKind.Number:
-                WriteCanonicalNumber(writer, element);
-                break;
-            case JsonValueKind.True:
-                writer.WriteBooleanValue(true);
-                break;
-            case JsonValueKind.False:
-                writer.WriteBooleanValue(false);
-                break;
-            case JsonValueKind.Null:
-            case JsonValueKind.Undefined:
-                writer.WriteNullValue();
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(element), element.ValueKind, "Unsupported JSON value kind.");
-        }
-    }
-
-    private static void WriteCanonicalNumber(Utf8JsonWriter writer, JsonElement element)
-    {
-        if (element.TryGetInt64(out var signed))
-        {
-            writer.WriteNumberValue(signed);
-            return;
-        }
-
-        if (element.TryGetUInt64(out var unsigned))
-        {
-            writer.WriteNumberValue(unsigned);
-            return;
-        }
-
-        if (element.TryGetDecimal(out var decimalValue))
-        {
-            writer.WriteRawValue(decimalValue.ToString("G29", CultureInfo.InvariantCulture));
-            return;
-        }
-
-        writer.WriteRawValue(element.GetDouble().ToString("R", CultureInfo.InvariantCulture));
+        return arguments.TryGetProperty("target", out var explicitTarget) &&
+               explicitTarget.ValueKind == JsonValueKind.String
+            ? explicitTarget.GetString()?.Trim().ToLowerInvariant() ?? string.Empty
+            : string.Empty;
     }
 
     private readonly record struct SessionGrantKey(
         string Session,
         string Tool,
         string PageId,
-        string ArgumentsFingerprint);
+        string AuthorizationScope);
+
+    private readonly record struct ReadonlyCallKey(
+        string Session,
+        string Tool,
+        string PageId,
+        string ArgumentsJson);
 }

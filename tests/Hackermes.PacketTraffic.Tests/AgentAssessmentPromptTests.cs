@@ -24,4 +24,20 @@ public sealed class AgentAssessmentPromptTests
         Assert.DoesNotContain("assessment_create_scope ", system, StringComparison.Ordinal);
         Assert.True(system.Length < 4_000, $"System safety guidance unexpectedly grew to {system.Length} characters.");
     }
+
+    [Fact]
+    public void Full_access_prompt_prefers_one_call_assessment_without_repeated_confirmation()
+    {
+        var messages = new AgentContextCompactor().BuildRequest(
+            [], new AgentMemoryDocument(), [], new AiSettings
+            {
+                MaxContextCharacters = 24_000,
+                PermissionMode = AiPermissionMode.FullAccess
+            });
+
+        var system = Assert.Single(messages).Content ?? string.Empty;
+        Assert.Contains("assessment_authorize_and_run", system, StringComparison.Ordinal);
+        Assert.Contains("without another confirmation", system, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("every Mutating or Dangerous call asks", system, StringComparison.OrdinalIgnoreCase);
+    }
 }

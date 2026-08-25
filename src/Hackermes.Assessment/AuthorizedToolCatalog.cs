@@ -41,7 +41,7 @@ public static class AuthorizedToolCatalog
         return
         [
             Descriptor(NmapQuick, "信息收集 / 网络", "Nmap 快速端口", "TCP connect；精确主机，最多 64 个端口。", nmap),
-            Descriptor(NmapService, "信息收集 / 网络", "Nmap 基础服务", "在限定端口上进行轻量服务版本识别。", nmap),
+            NmapServiceDescriptor(nmap),
             Descriptor(DirsearchQuick, "信息收集 / Web", "Dirsearch 常见路径", "低并发、非递归，使用随工具提供的小型字典。",
                 File.Exists(dirsearch) && File.Exists(python) && File.Exists(wordlist) ? python : string.Empty),
             Descriptor(Wafw00fQuick, "Web 检测", "Wafw00f 基础识别", "精确 Web 目标、固定超时和有界输出的 WAF 识别。",
@@ -84,6 +84,8 @@ public static class AuthorizedToolCatalog
         {
             var ports = NormalizePorts(RequiredText(root, "ports", 512));
             var executable = RequireFile(NmapPath(), "Nmap");
+            if (step.AdapterId == NmapService)
+                _ = RequireFile(NmapServiceRuntimePath(executable), "Nmap nselib/lpeg-utility.lua");
             var arguments = new List<string> { "-sT", "-Pn", "-n", "--reason", "--max-retries", "1", "--host-timeout", timeout.ToString(CultureInfo.InvariantCulture) + "s" };
             if (step.AdapterId == NmapService) arguments.AddRange(["-sV", "--version-light"]);
             arguments.AddRange(["-p", ports, target, "-oN", "-"]);
@@ -205,6 +207,18 @@ public static class AuthorizedToolCatalog
 
     private static AuthorizedToolDescriptor Descriptor(string id, string category, string name, string description, string path) =>
         File.Exists(path) ? new(id, category, name, description, true) : new(id, category, name, description, false, "本地工具或运行时不存在");
+    private static AuthorizedToolDescriptor NmapServiceDescriptor(string nmap)
+    {
+        if (!File.Exists(nmap))
+            return new(NmapService, "信息收集 / 网络", "Nmap 基础服务", "在限定端口上进行轻量服务版本识别。",
+                false, "本地工具或运行时不存在");
+        return File.Exists(NmapServiceRuntimePath(nmap))
+            ? new(NmapService, "信息收集 / 网络", "Nmap 基础服务", "在限定端口上进行轻量服务版本识别。", true)
+            : new(NmapService, "信息收集 / 网络", "Nmap 基础服务", "在限定端口上进行轻量服务版本识别。",
+                false, "Nmap 版本识别运行时不完整：缺少 nselib/lpeg-utility.lua");
+    }
+    private static string NmapServiceRuntimePath(string nmap) =>
+        Path.Combine(Path.GetDirectoryName(nmap) ?? string.Empty, "nselib", "lpeg-utility.lua");
     private static string BundledRoot() => Environment.GetEnvironmentVariable("HACKERMES_BUNDLED_TOOLS_ROOT") ?? Path.Combine(AppContext.BaseDirectory, "tools");
     private static string Bundled(params string[] parts) => Path.Combine([BundledRoot(), .. parts]);
     private static string NmapPath() => Environment.GetEnvironmentVariable("HACKERMES_NMAP_PATH") ?? Bundled("recon.nmap.terminal", "nmap.exe");

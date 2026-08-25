@@ -1,5 +1,6 @@
 using Hackermes.Assessment;
 using Hackermes.App;
+using Hackermes.App.Views;
 using Hackermes.AiPanel.Tools;
 using Hackermes.Automation.Commands;
 using Hackermes.Automation.Execution;
@@ -29,6 +30,17 @@ public sealed class AssessmentStage7CTests : IDisposable
     private readonly MemorySecrets _secrets = new();
 
     public AssessmentStage7CTests() => Directory.CreateDirectory(_root);
+
+    [Fact]
+    public void Unrestricted_scope_can_be_created_without_entering_a_domain()
+    {
+        var selection = AssessmentWorkspaceView.PrepareQuickAuthorization(true, string.Empty);
+
+        Assert.Equal(["*"], selection.ScopeTargets);
+        Assert.Empty(selection.ExecutionEndpoints);
+        Assert.Throws<ArgumentException>(() =>
+            AssessmentWorkspaceView.PrepareQuickAuthorization(false, string.Empty));
+    }
 
     [Fact]
     public void All_authorized_scope_can_omit_name_authorization_reference_and_operator()
@@ -62,6 +74,19 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.Contains("Scope name", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("https://Example.COM:8443/path?q=1", "example.com", "https", 8443)]
+    [InlineData("example.com", "example.com", "http", 80)]
+    public void Quick_run_target_accepts_a_domain_or_url_without_falling_back_to_loopback(
+        string input, string target, string scheme, int port)
+    {
+        var endpoint = AssessmentWorkspaceView.AssessmentTargetEndpoint.Parse(input);
+
+        Assert.Equal(target, endpoint.Target);
+        Assert.Equal(scheme, endpoint.Scheme);
+        Assert.Equal(port, endpoint.Port);
+    }
+
     [Fact]
     public async Task Best_effort_plan_records_a_failed_tool_and_continues_remaining_tools()
     {
@@ -78,7 +103,7 @@ public sealed class AssessmentStage7CTests : IDisposable
 
         var job = await plane.StartAsync(plan.Id, approval.Id, "system");
 
-        Assert.Equal(AssessmentJobStatus.Completed, job.Status);
+        Assert.Equal(AssessmentJobStatus.CompletedWithWarnings, job.Status);
         var evidence = plane.Evidence(job.Id);
         Assert.Equal(2, evidence.Count);
         Assert.Contains(evidence, item => item.Content.Contains("warning: expected failure", StringComparison.Ordinal));
@@ -301,6 +326,58 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.True(report.Success);
         Assert.Contains("agent-finding", report.Content);
         Assert.True((await InvokeAgent(registry, "assessment_verify_audit", new { })).Success);
+    }
+
+    [Fact]
+    public async Task Agent_can_authorize_and_run_an_attached_page_in_one_tool_call()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        var pages = new MutablePageContexts(new PageContextObservation(
+            "page-selected", "https://Example.COM:8443/path?q=1", "Selected", true, true));
+        AssessmentIntegrationModule.RegisterAgent(registry, plane, pages);
+        var confirmation = new RecordingConfirmation();
+        var policy = new DefaultToolPolicyGate();
+        policy.SetMode(AiPermissionMode.FullAccess);
+        var dispatcher = new AiToolDispatcher(registry, policy, confirmation);
+
+        var result = await dispatcher.InvokeAsync(new ToolInvocation("assessment_authorize_and_run",
+            JsonSerializer.SerializeToElement(new
+            {
+                name = "one-click", authorization = "operator-confirmed", operatorId = "operator",
+                adapterId = AuthorizedToolCatalog.SimulationEcho, input = "one-call-evidence",
+                scopeMinutes = 60, timeoutSeconds = 10
+            }), "page-selected", "assessment-test"));
+
+        Assert.True(result.Success, result.Content);
+        Assert.Equal(0, confirmation.Count);
+        Assert.Equal(["example.com"], Assert.Single(plane.Scopes).Targets);
+        Assert.Equal(AssessmentJobStatus.Completed, Assert.Single(plane.Jobs).Status);
+        Assert.Equal("one-call-evidence", Assert.Single(plane.Evidence(Assert.Single(plane.Jobs).Id)).Content);
+    }
+
+    [Fact]
+    public async Task Agent_can_authorize_and_run_an_explicit_target_without_a_browser_page()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        AssessmentIntegrationModule.RegisterAgent(registry, plane);
+        var policy = new DefaultToolPolicyGate();
+        policy.SetMode(AiPermissionMode.FullAccess);
+        var confirmation = new RecordingConfirmation();
+        var dispatcher = new AiToolDispatcher(registry, policy, confirmation);
+
+        var result = await dispatcher.InvokeAsync(new ToolInvocation("assessment_authorize_and_run",
+            JsonSerializer.SerializeToElement(new
+            {
+                target = "127.0.0.1", authorization = "operator-confirmed",
+                adapterId = AuthorizedToolCatalog.SimulationEcho, input = "explicit-target-evidence"
+            }), null, "assessment-test"));
+
+        Assert.True(result.Success, result.Content);
+        Assert.Equal(0, confirmation.Count);
+        Assert.Equal(["127.0.0.1"], Assert.Single(plane.Scopes).Targets);
+        Assert.Equal("explicit-target-evidence", Assert.Single(plane.Evidence(Assert.Single(plane.Jobs).Id)).Content);
     }
 
     [Fact]

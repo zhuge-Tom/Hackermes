@@ -26,10 +26,10 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     private readonly TextBox _scopeName = new() { PlaceholderText = "范围名称" };
     private readonly TextBox _authorization = new() { PlaceholderText = "授权依据或工单号", Text = "工作台人工确认" };
     private readonly TextBox _operator = new() { PlaceholderText = "操作人身份", Text = Environment.UserName };
-    private readonly TextBox _targets = new() { PlaceholderText = "精确目标，多个用逗号分隔；勾选全部授权时可留空", Text = "127.0.0.1" };
+    private readonly TextBox _targets = new() { PlaceholderText = "本次执行目标（域名或 URL）" };
     private readonly CheckBox _authorizeAll = new()
     {
-        Content = "全部授权（任意目标均视为已授权，目标可留空）",
+        Content = "全部授权范围（不限制域名；目标可留空，仅创建无限制范围）",
         HorizontalContentAlignment = HorizontalAlignment.Left
     };
     private readonly TextBox _scopeMinutes = new() { PlaceholderText = "有效分钟数", Text = "1440" };
@@ -87,6 +87,13 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
                     : $"{value.Name}（{value.Id}）· 不可用：{value.UnavailableReason}")))
             .ToArray();
         _adapter.SelectedIndex = 0;
+        _authorizeAll.PropertyChanged += (_, change) =>
+        {
+            if (change.Property == Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty)
+                _targets.PlaceholderText = _authorizeAll.IsChecked == true
+                    ? "本次执行目标（可留空；留空只创建无限制授权范围）"
+                    : "本次执行目标（域名或 URL）";
+        };
         RefreshAll();
     }
 
@@ -239,17 +246,26 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             var adapterId = SelectedAdapterId();
             var allTools = string.Equals(adapterId, AllToolsAdapterId, StringComparison.Ordinal);
 
-            var requestedTargets = (_targets.Text ?? string.Empty)
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var scopeTargets = _authorizeAll.IsChecked == true ? ["*"] : requestedTargets;
-            if (scopeTargets.Length == 0) throw new ArgumentException("请填写至少一个目标，或勾选“全部授权”。");
+            var selection = PrepareQuickAuthorization(_authorizeAll.IsChecked == true, _targets.Text);
+            var requestedEndpoints = selection.ExecutionEndpoints.ToArray();
+            var scopeTargets = selection.ScopeTargets.ToArray();
+
+            if (requestedEndpoints.Length == 0)
+            {
+                var unrestricted = _plane.CreateScope(_scopeName.Text ?? string.Empty,
+                    _authorization.Text ?? string.Empty, _operator.Text ?? string.Empty,
+                    scopeTargets, DateTimeOffset.UtcNow.AddMinutes(minutes));
+                RefreshAll();
+                SetStatus($"无限制授权范围已创建：{unrestricted.Name}。未填写本次执行目标，因此没有启动工具。", false);
+                return;
+            }
 
             List<AssessmentStep> steps;
             var planLabel = allTools ? "全部工具" : adapterId;
             if (allTools)
             {
                 // 工具输入必须是具体目标;全部授权只放宽范围校验,不能替代目标本身。
-                var concrete = requestedTargets.FirstOrDefault(value => value != "*")
+                var concrete = requestedEndpoints.FirstOrDefault(value => value.Target != "*")
                     ?? throw new ArgumentException("全部工具模式需要在目标中填写至少一个具体目标。");
                 steps = BuildAllToolSteps(concrete, timeout);
                 if (steps.Count == 0) throw new InvalidOperationException("当前没有可用的评估工具（本地工具或运行时缺失）。");
@@ -271,13 +287,32 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             RefreshAll();
             _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == job.Id);
             var failure = string.IsNullOrWhiteSpace(job.Failure) ? string.Empty : $"：{job.Failure}";
-            SetStatus($"任务结束：{job.Status}{failure}。", job.Status is AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
+            SetStatus($"任务结束：{job.Status}{failure}。",
+                job.Status is AssessmentJobStatus.CompletedWithWarnings or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
         }
         catch (Exception exception) { SetStatus(exception.Message, true); }
     }
 
+    internal sealed record QuickAuthorizationSelection(
+        IReadOnlyList<string> ScopeTargets,
+        IReadOnlyList<AssessmentTargetEndpoint> ExecutionEndpoints);
+
+    internal static QuickAuthorizationSelection PrepareQuickAuthorization(bool authorizeAll, string? targetsText)
+    {
+        var endpoints = (targetsText ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(AssessmentTargetEndpoint.Parse)
+            .ToArray();
+        var scopeTargets = authorizeAll
+            ? new[] { "*" }
+            : endpoints.Select(value => value.Target).Distinct(StringComparer.Ordinal).ToArray();
+        if (scopeTargets.Length == 0)
+            throw new ArgumentException("请填写至少一个目标，或勾选“全部授权范围”。");
+        return new QuickAuthorizationSelection(scopeTargets, endpoints);
+    }
+
     /// <summary>One bounded step per locally available recon tool, each pointed at the same concrete target.</summary>
-    private static List<AssessmentStep> BuildAllToolSteps(string target, int timeout)
+    private static List<AssessmentStep> BuildAllToolSteps(AssessmentTargetEndpoint endpoint, int timeout)
     {
         var steps = new List<AssessmentStep>();
         foreach (var tool in AuthorizedToolCatalog.Describe().Where(value => value.Available))
@@ -285,13 +320,31 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             var input = tool.Id switch
             {
                 AuthorizedToolCatalog.NmapQuick or AuthorizedToolCatalog.NmapService =>
-                    JsonSerializer.Serialize(new { target, ports = "80,443,8080" }),
-                AuthorizedToolCatalog.DnsResolve => JsonSerializer.Serialize(new { target }),
-                _ => JsonSerializer.Serialize(new { target, scheme = "http", port = 80 })
+                    JsonSerializer.Serialize(new { target = endpoint.Target, ports = "80,443,8080" }),
+                AuthorizedToolCatalog.DnsResolve => JsonSerializer.Serialize(new { target = endpoint.Target }),
+                _ => JsonSerializer.Serialize(new { target = endpoint.Target, scheme = endpoint.Scheme, port = endpoint.Port })
             };
             steps.Add(new AssessmentStep(tool.Id, input, timeout, ContinueOnError: true));
         }
         return steps;
+    }
+
+    internal sealed record AssessmentTargetEndpoint(string Target, string Scheme, int Port)
+    {
+        public static AssessmentTargetEndpoint Parse(string value)
+        {
+            var candidate = value.Trim();
+            if (candidate.Length == 0) throw new ArgumentException("执行目标不能为空。");
+            var withScheme = candidate.Contains("://", StringComparison.Ordinal)
+                ? candidate
+                : "http://" + candidate;
+            if (!Uri.TryCreate(withScheme, UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(uri.IdnHost) ||
+                !string.IsNullOrEmpty(uri.UserInfo))
+                throw new ArgumentException($"目标不是有效的 HTTP(S) 域名或 URL：{value}");
+            var target = uri.IdnHost.TrimEnd('.').ToLowerInvariant();
+            return new AssessmentTargetEndpoint(target, uri.Scheme, uri.Port);
+        }
     }
 
     private string SelectedAdapterId() =>
@@ -466,7 +519,8 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             var job = await _plane.StartAsync(approval.PlanId, approval.Id, _operator.Text ?? string.Empty);
             RefreshAll();
             _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == job.Id);
-            SetStatus($"任务结束：{job.Status}。", job.Status is AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
+            SetStatus($"任务结束：{job.Status}。",
+                job.Status is AssessmentJobStatus.CompletedWithWarnings or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
         }
         catch (Exception exception) { SetStatus(exception.Message, true); }
     }

@@ -1,8 +1,10 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Hackermes.Base.Mvvm;
+using Hackermes.Browser.Services;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Hackermes.Browser.ViewModels;
 
@@ -11,12 +13,21 @@ public sealed record BrowserDeviceProfile(string Name, int Width, int Height, do
 
 public partial class BrowserTabViewModel : ViewModelBase
 {
-    public BrowserTabViewModel(string pageId, string initialUrl)
+    private readonly IBrowserHistoryStore? _historyStore;
+
+    public BrowserTabViewModel(string pageId, string initialUrl, IBrowserHistoryStore? historyStore = null)
     {
         PageId = pageId;
         _addressText = initialUrl;
         _currentUrl = initialUrl;
         _selectedDeviceProfile = DeviceProfiles[0];
+        _historyStore = historyStore;
+        RefreshHistory();
+        if (_historyStore is not null)
+        {
+            _historyStore.Changed += RefreshHistory;
+            TrackDisposable(new DelegateDisposable(() => _historyStore.Changed -= RefreshHistory));
+        }
     }
 
     /// <summary>页面标识,同时是 CDP 会话在注册表中的键。</summary>
@@ -64,6 +75,11 @@ public partial class BrowserTabViewModel : ViewModelBase
 
     [ObservableProperty]
     private BrowserDeviceProfile _selectedDeviceProfile;
+
+    public ObservableCollection<BrowserHistoryEntry> History { get; } = [];
+
+    [ObservableProperty]
+    private BrowserHistoryEntry? _selectedHistory;
 
     public IReadOnlyList<BrowserDeviceProfile> DeviceProfiles { get; } =
     [
@@ -114,6 +130,19 @@ public partial class BrowserTabViewModel : ViewModelBase
 
     [RelayCommand]
     private void SelfTest() => SelfTestRequested?.Invoke();
+
+    [RelayCommand]
+    private void ClearHistory() => _historyStore?.Clear();
+
+    partial void OnSelectedHistoryChanged(BrowserHistoryEntry? value)
+    {
+        if (value is null) return;
+        AddressText = value.Url;
+        NavigateRequested?.Invoke(value.Url);
+        SelectedHistory = null;
+    }
+
+    public void RecordHistory(string url) => _historyStore?.Record(url, Title);
 
     [RelayCommand]
     private void ToggleElementPicker()
@@ -167,5 +196,18 @@ public partial class BrowserTabViewModel : ViewModelBase
         return looksLikeHost
             ? "https://" + text
             : "https://www.bing.com/search?q=" + Uri.EscapeDataString(text);
+    }
+
+    private void RefreshHistory()
+    {
+        History.Clear();
+        if (_historyStore is null) return;
+        foreach (var entry in _historyStore.Entries) History.Add(entry);
+    }
+
+    private sealed class DelegateDisposable(Action dispose) : IDisposable
+    {
+        private Action? _dispose = dispose;
+        public void Dispose() => System.Threading.Interlocked.Exchange(ref _dispose, null)?.Invoke();
     }
 }

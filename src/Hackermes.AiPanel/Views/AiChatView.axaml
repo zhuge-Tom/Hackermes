@@ -1,26 +1,13 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Hackermes.AiPanel.ViewModels"
              x:Class="Hackermes.AiPanel.Views.AiChatView"
              x:DataType="vm:AiChatViewModel">
   <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" Margin="12">
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
-      <TextBlock VerticalAlignment="Center" Text="模型" FontSize="12" Opacity="0.65" Margin="0,0,8,0" />
-      <Border Grid.Column="1" Padding="11,7"
-              Background="{DynamicResource SemiColorFill0}"
-              BorderBrush="{DynamicResource SemiColorBorder}"
-              BorderThickness="1" CornerRadius="6">
-        <TextBlock Text="{Binding Model}" FontSize="12" FontWeight="Medium"
-                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-      </Border>
-      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" Spacing="6">
-        <Button Padding="12,6" Content="新会话" Click="NewSession" />
-        <Button Padding="12,6" Content="设置" Click="OpenSettings" />
-      </StackPanel>
-    </Grid>
-    <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="0,0,0,10" IsVisible="{Binding HasSessions}">
-      <TextBlock VerticalAlignment="Center" Text="会话" FontSize="12" Opacity="0.65" Margin="0,0,8,0" />
-      <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+    <!-- Header: session picker is the primary control (full width); actions are uniform
+         32px icon buttons tucked right. No stretchy text buttons, no dead space. -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,0,0,8">
+      <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
                 ItemsSource="{Binding Sessions}"
                 SelectedItem="{Binding SelectedSession, Mode=TwoWay}">
         <ComboBox.ItemTemplate>
@@ -32,13 +19,33 @@
               <Grid.ContextMenu>
                 <ContextMenu>
                   <MenuItem Header="重命名" Click="RenameSessionClick" />
+                  <MenuItem Header="分叉此会话" Click="ForkSessionClick" />
                 </ContextMenu>
               </Grid.ContextMenu>
             </Grid>
           </DataTemplate>
         </ComboBox.ItemTemplate>
       </ComboBox>
+      <Button Grid.Column="1" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
+              Content="＋" FontSize="15" ToolTip.Tip="新建会话" Click="NewSession" />
+      <Button Grid.Column="2" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
+              Content="⇩" FontSize="14" ToolTip.Tip="导出会话转录" Click="ExportTranscript"
+              IsEnabled="{Binding HasTranscript}" />
+      <Button Grid.Column="3" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
+              Content="⚙" FontSize="14" ToolTip.Tip="设置" Click="OpenSettings" />
     </Grid>
+    <!-- Model badge: quiet metadata bar spanning the full row, with a live indicator dot. -->
+    <Border Grid.Row="1" Padding="9,4" Margin="0,0,0,10"
+            Background="{DynamicResource SemiColorFill0}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="1" CornerRadius="6">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <Ellipse Width="6" Height="6" Fill="{DynamicResource SemiColorSuccess}"
+                 VerticalAlignment="Center" />
+        <TextBlock Text="{Binding Model}" FontSize="11" Opacity="0.78"
+                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+      </StackPanel>
+    </Border>
     <Grid Grid.Row="2" Margin="0,0,0,10">
       <Border Padding="11,9"
               Background="{DynamicResource SemiColorFill0}"
@@ -95,23 +102,27 @@
                      TextAlignment="Center" MaxWidth="300" />
         </StackPanel>
       </Border>
-      <ScrollViewer>
+      <ScrollViewer Name="PART_TranscriptScroll">
         <ItemsControl ItemsSource="{Binding Messages}">
           <ItemsControl.DataTemplates>
-            <!-- Plain conversation turn: user / assistant prose. -->
-            <DataTemplate x:DataType="vm:AiChatLine">
-              <Border Padding="12,10" Margin="0,0,0,8"
+            <!-- Reasoning-model thinking rows: quieter visual weight than prose, with a
+                 left accent bar, so long chains-of-thought stay scannable. Must precede
+                 the base AiChatLine template (first assignable template wins). -->
+            <DataTemplate x:DataType="vm:AiReasoningLine">
+              <Border Margin="0,0,0,6" Padding="12,8" BorderThickness="2,1,1,1"
+                      CornerRadius="7" Opacity="0.88"
                       Background="{DynamicResource SemiColorFill0}"
-                      BorderBrush="{DynamicResource SemiColorBorder}"
-                      BorderThickness="1" CornerRadius="8">
-                <StackPanel Spacing="6">
-                  <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.62" Text="{Binding RoleLabel}" />
-                  <SelectableTextBlock FontSize="13" LineHeight="20"
+                      BorderBrush="{DynamicResource SemiColorPrimary}">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="💭 思考过程" FontSize="10.5" FontWeight="SemiBold" Opacity="0.55" />
+                  <SelectableTextBlock FontSize="11.5" LineHeight="17" Opacity="0.78"
                                        TextWrapping="Wrap" Text="{Binding Content}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
-            <!-- Agent tool call: compact collapsed row; details expand on demand. -->
+            <!-- Keep the derived tool template before the AiChatLine base template.
+                 Avalonia selects the first assignable template, so reversing these renders
+                 a tool call as an empty plain message card. -->
             <DataTemplate x:DataType="vm:AiToolCallLine">
               <Border Margin="0,0,0,6"
                       Background="{DynamicResource SemiColorFill0}"
@@ -143,29 +154,80 @@
                 </Expander>
               </Border>
             </DataTemplate>
+            <!-- Plain conversation turn: user / assistant prose. -->
+            <DataTemplate x:DataType="vm:AiChatLine">
+              <Border Padding="12,10" Margin="0,0,0,8"
+                      Background="{DynamicResource SemiColorFill0}"
+                      BorderBrush="{DynamicResource SemiColorBorder}"
+                      BorderThickness="1" CornerRadius="8">
+                <StackPanel Spacing="6">
+                  <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.62" Text="{Binding RoleLabel}" />
+                  <SelectableTextBlock FontSize="13" LineHeight="20"
+                                       TextWrapping="Wrap" Text="{Binding Content}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
           </ItemsControl.DataTemplates>
         </ItemsControl>
       </ScrollViewer>
     </Grid>
     <StackPanel Grid.Row="4" Margin="0,8,0,0" Spacing="2">
+        <Expander Margin="0,0,0,6" Padding="10,6"
+                Background="{DynamicResource SemiColorFill0}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                CornerRadius="7"
+                IsVisible="{Binding HasTodos}">
+        <Expander.Header>
+          <TextBlock FontSize="11" FontWeight="SemiBold" Opacity="0.72">
+            <Run Text="☑ " /><Run Text="{Binding TodoSummary, Mode=OneWay}" />
+          </TextBlock>
+        </Expander.Header>
+        <ItemsControl ItemsSource="{Binding Todos}" Margin="2,4,2,6">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="x:String">
+              <TextBlock Text="{Binding}" FontSize="12" LineHeight="18" TextWrapping="Wrap" Opacity="0.85" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Expander>
+      <Border Padding="11,9" Margin="0,0,0,6"
+              Background="{DynamicResource SemiColorFill0}"
+              BorderBrush="{DynamicResource SemiColorPrimary}"
+              BorderThickness="1" CornerRadius="7"
+              IsVisible="{Binding HasPendingInstruction}">
+        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+          <TextBlock Text="{Binding PendingInstructionHint}" FontSize="11" FontWeight="SemiBold"
+                     Foreground="{DynamicResource SemiColorPrimary}" />
+          <TextBlock Grid.Row="1" Text="{Binding PendingInstructionSummary}" Margin="0,4,12,0"
+                     FontSize="12" TextWrapping="Wrap" MaxHeight="42" TextTrimming="CharacterEllipsis" />
+          <StackPanel Grid.Column="1" Grid.RowSpan="2" Orientation="Horizontal" Spacing="6"
+                      VerticalAlignment="Center">
+            <Button Content="优先执行" Padding="9,4" Command="{Binding PrioritizePendingInstructionCommand}" />
+            <Button Content="取消" Padding="9,4" Command="{Binding CancelPendingInstructionCommand}" />
+          </StackPanel>
+        </Grid>
+      </Border>
       <Border Padding="10,8"
               Background="{DynamicResource SemiColorFill0}" CornerRadius="6"
               IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
         <TextBlock Foreground="{DynamicResource SemiColorDanger}" TextWrapping="Wrap" Text="{Binding Error}" />
       </Border>
-      <TextBlock HorizontalAlignment="Right" FontSize="11" Opacity="0.65"
-                 Text="{Binding TokenUsage}"
-                 IsVisible="{Binding TokenUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-      <TextBlock HorizontalAlignment="Right" FontSize="11" Opacity="0.65"
-                 Text="{Binding ContextUsage}"
-                 IsVisible="{Binding ContextUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="14">
+        <TextBlock FontSize="11" Opacity="0.65"
+                   Text="{Binding TokenUsage}"
+                   IsVisible="{Binding TokenUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <TextBlock FontSize="11" Opacity="0.65"
+                   Text="{Binding ContextUsage}"
+                   IsVisible="{Binding ContextUsage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
     </StackPanel>
     <Grid Grid.Row="5" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
-      <TextBox AcceptsReturn="True" MinHeight="76" MaxHeight="180" Padding="12,10" TextWrapping="Wrap"
-               Text="{Binding Input, Mode=TwoWay}" PlaceholderText="描述你想检查的页面问题…" />
+      <TextBox Name="PART_PromptInput" AcceptsReturn="True" MinHeight="76" MaxHeight="180" Padding="12,10" TextWrapping="Wrap"
+               VerticalContentAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto"
+               Text="{Binding Input, Mode=TwoWay}" PlaceholderText="输入指示；Enter 发送，Ctrl+Enter 换行" />
       <StackPanel Grid.Column="1" Width="72" Margin="8,0,0,0" Spacing="6">
-        <Button Content="发送" Padding="14,8" HorizontalContentAlignment="Center"
-                Command="{Binding SendCommand}" IsEnabled="{Binding !IsBusy}" />
+        <Button Content="{Binding SendButtonLabel}" Padding="14,8" HorizontalContentAlignment="Center"
+                Command="{Binding SendCommand}" />
         <Button Content="停止" Padding="14,8" HorizontalContentAlignment="Center"
                 Command="{Binding StopCommand}" IsVisible="{Binding IsBusy}" />
       </StackPanel>

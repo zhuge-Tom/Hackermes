@@ -39,7 +39,10 @@ public sealed class McpToolAdapter(IMcpBridge bridge, IAiToolRegistry registry, 
                     continue;
                 }
                 registry.Register(new AiToolDefinition(
-                    safeName, $"[{serverId}] {tool.Description}", tool.InputSchema, AiToolRisk.Mutating,
+                    safeName, $"[{serverId}] {tool.Description}", tool.InputSchema,
+                    settings.TrustMcpReadOnlyHint && tool.ReadOnlyHint
+                        ? AiToolRisk.ReadOnly
+                        : AiToolRisk.Mutating,
                     (invocation, token) => bridge.InvokeAsync(serverId,
                         invocation with { ToolName = remoteName }, token)));
             }

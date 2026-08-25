@@ -1,4 +1,4 @@
-using Hackermes.AiPanel.OpenAI;
+﻿using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Tools;
 using Hackermes.Platform.Models;
 using System;
@@ -61,22 +61,43 @@ public sealed class AcpContextStore
     private readonly List<AcpEntry> _active = [];
     private readonly List<AcpBlock> _blocks = [];
     private readonly object _gate = new();
+    /// <summary>Unit provider: raw chars (+overhead) by default, estimated tokens when token budgeting is on.</summary>
+    private readonly Func<string, int> _estimate;
     private int _nextRef;
     private int _buildCount;
     private bool _gcRan;
     private int _budgetChars;
 
-    /// <param name="initialBudget">Character budget used for protection zones before the first BuildRequest.</param>
-    public AcpContextStore(Func<string> systemMessageFactory, int initialBudget = 120_000)
+    /// <param name="initialBudget">Budget used for protection zones before the first BuildRequest, in the active unit.</param>
+    /// <param name="estimate">Optional unit override; when provided (token metering) entry sizes and budgets are tokens.</param>
+    public AcpContextStore(Func<string> systemMessageFactory, int initialBudget = 120_000, Func<string, int>? estimate = null)
     {
         _systemMessageFactory = systemMessageFactory;
+        _estimate = estimate ?? (content => (content?.Length ?? 0) + LegacyEntryOverheadChars);
         _budgetChars = Math.Max(1_000, initialBudget);
     }
+
+    /// <summary>Budget for this request in the store's active unit (tokens override characters).</summary>
+    public static int EffectiveBudget(AiSettings settings) =>
+        settings.MaxContextTokens > 0
+            ? Math.Max(1_000, settings.MaxContextTokens)
+            : Math.Max(1_000, settings.MaxContextCharacters);
+
+    /// <summary>Default per-entry overhead in the legacy character unit (kept for tests/diagnostics).</summary>
+    public const int LegacyEntryOverheadChars = 200;
+
+    /// <summary>
+    /// Prices content in this store's active unit (tokens or characters). The shrink guard
+    /// and the auto-compactor route every size comparison through here so mixed-unit
+    /// summaries can never slip past (or falsely fail) the guard.
+    /// </summary>
+    public int EstimateContent(string content) => _estimate(content ?? string.Empty);
 
     public int BlockCount { get { lock (_gate) return _blocks.Count; } }
     public long ActiveChars { get { lock (_gate) return _active.Sum(entry => (long)entry.Chars); } }
 
     /// <summary>Compact usage line for the chat status bar, e.g. "上下文 38%（45.6K / 120K 字符 · 块 2）".</summary>
+    /// <summary>Unit label for the status bar (tokens when token budgeting is active).</summary>
     public string UsageLine(int budget)
     {
         lock (_gate)
@@ -96,7 +117,7 @@ public sealed class AcpContextStore
     {
         // 工具输出是最值得压缩的内容,但刚产生的输出属于当前工作集 —— 由保护窗口兜底。
         var entry = Append(new ChatMessage("tool", content, ToolCallId: toolCallId));
-        entry.Chars = Estimate(content);
+        entry.Chars = _estimate(content);
         entry.ToolName = toolName;
     }
 
@@ -111,7 +132,7 @@ public sealed class AcpContextStore
             {
                 Ref = $"m{++_nextRef:D5}",
                 Message = message,
-                Chars = Estimate(message.Content) + (message.ToolCalls is { Count: > 0 } ? 400 : 0)
+                Chars = _estimate(message.Content ?? string.Empty) + (message.ToolCalls is { Count: > 0 } ? 400 : 0)
             };
             _active.Add(entry);
             return entry;
@@ -140,7 +161,7 @@ public sealed class AcpContextStore
             _buildCount++;
         }
 
-        var budget = Math.Max(1_000, settings.MaxContextCharacters);
+        var budget = EffectiveBudget(settings);
         _budgetChars = budget;
         var system = _systemMessageFactory() + "\n" + PhilosophyLine;
         var nudge = BuildNudge(chars, budget, snapshot);
@@ -366,6 +387,13 @@ public sealed class AcpContextStore
             if ((summary ?? string.Empty).Trim().Length == 0)
                 return (false, "summary 不能为空——它是解压前唯一的检索来源。");
 
+            // Hard shrink guard (dsh invariant): a replacement must be strictly cheaper than
+            // the range it shadows, otherwise compression reclaims nothing and can loop forever.
+            // Priced through the store's own estimator so token-budgeted stores compare tokens.
+            if (EstimateContent((summary ?? string.Empty).Trim()) >= consumed.Sum(entry => (long)entry.Chars))
+                return (false, "摘要不小于原区间（收缩守卫）：压缩无法回收空间。请提供更精炼的自包含摘要，" +
+                               "或改用 context_decompress / context_search 查看已有内容。");
+
             string warning = QualityGateWarning(consumed, summary);
 
             if (consumed.All(entry => entry.BlockId is null))
@@ -436,7 +464,7 @@ public sealed class AcpContextStore
         {
             Ref = NextMarkerRef(),
             Message = new ChatMessage("user", markerText),
-            Chars = Estimate(markerText),
+            Chars = _estimate(markerText),
             BlockId = block.Id
         };
         var insertAt = Math.Max(_active.IndexOf(consumed[0]), 0);
@@ -555,7 +583,7 @@ public sealed class AcpContextStore
     /// </summary>
     private void GcIfNeeded(AiSettings settings)
     {
-        var budget = Math.Max(1_000, settings.MaxContextCharacters);
+        var budget = EffectiveBudget(settings);
         _budgetChars = budget;
         lock (_gate)
         {
@@ -563,12 +591,28 @@ public sealed class AcpContextStore
             while (_active.Sum(entry => (long)entry.Chars) > budget &&
                    _active.Count > ProtectedRecentEntries + 1)
             {
-                var victimIndex = _active.FindIndex(entry => !IsLoadBearing(entry));
-                if (victimIndex < 0) victimIndex = 0;
-                var victim = _active[victimIndex];
-                if (victim.BlockId is { } id && FindBlock(id) is { } owner) owner.Active = false;
-                _active.RemoveAt(victimIndex);
-                dropped.Add(victim);
+                var snapshot = _active.ToArray();
+                var removableEnd = snapshot.Length - ProtectedRecentEntries - 2;
+                var segments = PartitionSegments(snapshot)
+                    .Where(segment => segment.End <= removableEnd)
+                    .ToList();
+                if (segments.Count == 0) break;
+
+                // A tool-call assistant message and all of its results form one protocol unit.
+                // Removing entries one at a time can leave a role=tool message without its
+                // preceding tool_calls message, which strict OpenAI-compatible APIs reject.
+                var victimSegmentIndex = segments.FindIndex(segment =>
+                    snapshot.Skip(segment.Start).Take(segment.End - segment.Start + 1)
+                        .All(entry => !IsLoadBearing(entry)));
+                var victimSegment = segments[victimSegmentIndex >= 0 ? victimSegmentIndex : 0];
+
+                var victims = snapshot[victimSegment.Start..(victimSegment.End + 1)];
+                foreach (var victim in victims)
+                {
+                    if (victim.BlockId is { } id && FindBlock(id) is { } owner) owner.Active = false;
+                    _active.Remove(victim);
+                    dropped.Add(victim);
+                }
                 _gcRan = true;
             }
             if (dropped.Count > 0) CreateTombstone(dropped);
@@ -614,7 +658,7 @@ public sealed class AcpContextStore
         return _active.FindIndex(entry => entry.Ref.StartsWith(prefix, StringComparison.Ordinal));
     }
 
-    private static int Estimate(string? content) => (content?.Length ?? 0) + 200;
+    private int Estimate(string? content) => _estimate(content ?? string.Empty);
 
     private static string Shorten(string value, int max)
     {

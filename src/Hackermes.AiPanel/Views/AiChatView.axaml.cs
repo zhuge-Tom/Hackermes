@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Tools;
@@ -25,6 +26,38 @@ public partial class AiChatView : UserControl
     {
         _settings = settings; _secrets = secrets; _client = client; _policy = policy; _skills = skills; _memory = memory;
         InitializeComponent();
+    }
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        // The TextBox class handler consumes Enter (AcceptsReturn) during BUBBLING, so an
+        // XAML KeyDown instance handler never fires. Tunneling intercepts the key BEFORE
+        // the TextBox sees it, letting us own the Enter/Ctrl+Enter contract.
+        if (this.FindControl<TextBox>("PART_PromptInput") is { } prompt)
+            prompt.AddHandler(InputElement.KeyDownEvent, OnPromptKeyDown, RoutingStrategies.Tunnel);
+    }
+
+    private void OnPromptKeyDown(object? sender, KeyEventArgs e)
+    {
+        // Some IMEs/platforms deliver Ctrl+Enter (and occasionally plain Enter) as LineFeed.
+        var key = e.Key == Key.LineFeed ? Key.Enter : e.Key;
+        if (key != Key.Enter || sender is not TextBox input) return;
+        e.Handled = true;
+
+        if ((e.KeyModifiers & KeyModifiers.Control) != 0 || (e.KeyModifiers & KeyModifiers.Shift) != 0)
+        {
+            var text = input.Text ?? string.Empty;
+            var start = Math.Clamp(Math.Min(input.SelectionStart, input.SelectionEnd), 0, text.Length);
+            var end = Math.Clamp(Math.Max(input.SelectionStart, input.SelectionEnd), start, text.Length);
+            var newline = Environment.NewLine;
+            input.Text = text[..start] + newline + text[end..];
+            input.CaretIndex = start + newline.Length;
+            return;
+        }
+
+        if (DataContext is AiChatViewModel viewModel && viewModel.SendCommand.CanExecute(null))
+            viewModel.SendCommand.Execute(null);
     }
 
     private async void OpenSettings(object? sender, RoutedEventArgs e)
@@ -54,5 +87,65 @@ public partial class AiChatView : UserControl
         var name = await PromptInputWindow.ShowAsync(owner, "重命名会话", "会话名称", option.Name);
         if (string.IsNullOrWhiteSpace(name)) return;
         viewModel.RenameSession(option.Id, name);
+    }
+
+    private void ForkSessionClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        if ((sender as Avalonia.Controls.MenuItem)?.DataContext is not AgentSessionOption option) return;
+        // The fork opens immediately with the source's full transcript restored.
+        if (!viewModel.ForkSession(option.Id)) return;
+    }
+
+    private async void ExportTranscript(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        var top = TopLevel.GetTopLevel(this);
+        if (top is null) return;
+        var storage = top.StorageProvider;
+        var markdown = viewModel.BuildTranscriptMarkdown();
+        var suggested = $"hackermes-{viewModel.SessionLabel}-{DateTimeOffset.Now:yyyyMMdd-HHmm}.md";
+        foreach (var invalid in System.IO.Path.GetInvalidFileNameChars())
+            suggested = suggested.Replace(invalid, '_');
+        var file = await storage.SaveFilePickerAsync(new Avalonia.Platform.Storage.FilePickerSaveOptions
+        {
+            Title = "导出会话转录",
+            SuggestedFileName = suggested,
+            DefaultExtension = "md",
+            FileTypeChoices =
+            [
+                new Avalonia.Platform.Storage.FilePickerFileType("Markdown") { Patterns = ["*.md"] },
+                new Avalonia.Platform.Storage.FilePickerFileType("文本") { Patterns = ["*.txt"] },
+            ],
+        });
+        if (file is null) return;
+        await using var stream = await file.OpenWriteAsync();
+        await using var writer = new System.IO.StreamWriter(stream, new System.Text.UTF8Encoding(false));
+        await writer.WriteAsync(markdown);
+    }
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_messagesSubscription is not null)
+        {
+            _messagesSubscription.CollectionChanged -= OnMessagesChanged;
+            _messagesSubscription = null;
+        }
+        if (DataContext is AiChatViewModel viewModel && this.FindControl<ScrollViewer>("PART_TranscriptScroll") is { } scroll)
+        {
+            _messagesSubscription = viewModel.Messages;
+            _messagesSubscription.CollectionChanged += OnMessagesChanged;
+        }
+    }
+
+    private System.Collections.Specialized.INotifyCollectionChanged? _messagesSubscription;
+
+    private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // Keep the newest turn in view; cheap enough to always follow on a chat surface.
+        if (this.FindControl<ScrollViewer>("PART_TranscriptScroll") is { } scroll
+            && e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Add)
+            scroll.ScrollToEnd();
     }
 }

@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
   <!-- Keep generated binaries away from the source tree on Windows.  The G:
        workspace is watched by software that temporarily locks every new DLL,
        which breaks project-reference builds before downstream projects can
@@ -21,9 +21,9 @@
   -->
   <PropertyGroup Condition="'$(IsToolGenProject)' != 'true'">
     <TargetFramework>net10.0</TargetFramework>
-    <Version Condition="'$(Version)' == ''">0.9.0</Version>
-    <AssemblyVersion>0.9.0.0</AssemblyVersion>
-    <FileVersion>0.9.0.0</FileVersion>
+    <Version Condition="'$(Version)' == ''">0.10.0</Version>
+    <AssemblyVersion>0.10.0.0</AssemblyVersion>
+    <FileVersion>0.10.0.0</FileVersion>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>

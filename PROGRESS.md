@@ -7,6 +7,26 @@
 本次会话目标：按 P0（补 Stage 9 发布门禁）→ P1（可行功能缺口）→ P2/P3（后续增强）的方案推进。
 按此前决定：门禁第 4 步（视觉矩阵）与第 5 步（Windows 打包校验）暂缓执行。
 
+> **2026-08-24 第十一阶段（本轮）—— 左栏「安全工具」面板易用性与资源优化**：
+> 目标是"用起来更顺手、资源占用更低、可接入的工具更多"，按三步落地：
+> ① **资源**——新增 `ToolCatalogService` 单例把 `DesktopToolCatalog.Describe()` 的同步磁盘探测
+> （File.Exists ×N、PATH 逐项扫描、java -version 子进程）整体移到后台线程，快照供界面直接消费；
+> 新增 `PathProbeCache` 单次扫描内按文件名去重运行时探测（此前 6 个 Python 工具各自遍历 PATH）；
+> `AuthorizedToolsView` 不再实现 `ITabActivationAware` —— 切回 Tab 零重建，仅目录快照变化或搜索词
+> 变化时重建列表。② **顺手**——顶部搜索框（多 token 子串匹配名称/描述/分类/id，`ToolSearchFilter`
+> 纯函数）；行紧凑化（描述/缺失原因/路径挪入 ToolTip，一屏可见条数翻倍）；分组默认展开且跨重建
+> 记忆收起状态、恢复滚动位置；「最近使用」置顶（`SecurityToolsSettings.RecentToolIds` 持久化，
+> 归一化为纯函数：新到旧/去重/截断 5 条）；右键菜单（复制路径/打开所在目录/带 AdapterId 工具
+> 转到授权评估）；搜索框内 ↑↓ 选择 + Enter 启动 + Esc 清空（隧道阶段拦截，避免被 TextBox 类处理
+> 抢占），Ctrl+L 聚焦搜索。③ **扩容**——声明式清单 `tools.json`（`ToolManifest` 手工 JsonDocument
+> 解析，坏条目跳过不炸整份；路径边界：相对路径限内置根内、绝对路径限两个授权根内，与
+> `PreferBundled` 同一套逃逸检查哲学）；新增 4 个进程内零依赖工具条目（JWT 解码 / URL 结构解析 /
+> 时间戳双向转换进编码工作台，正则测试器独立窗口，均 internal static 可直测）；设置窗口保存后经
+> 服务刷新替代旧的视图闭包引用。+30 测试（服务并发串行化/快照失败保留/最近使用归一化、清单
+> 解析与路径逃逸拒绝、过滤器、JWT/URL/时间戳/正则转换器），全量 **439/439 通过**，
+> Release 构建 0 警告 0 错误。回归修复：普通开发构建缺少 `bin/tools` 时保留设置中已验证存在的
+> `PrimaryToolRoot` / `SecondaryToolRoot` 条目，恢复随波逐流、Nmap、Layer 等本机工具；发布包仍优先内置副本。
+
 > **2026-08-23 第十阶段（本轮）—— ACP 主动上下文剪枝（参考 opencode-acp / pai-acp）**：
 > `AcpContextStore` 从未接线的骨架升级为完整机制并接入聊天链路：
 > 每条消息带稳定引用（`[m00012·2.3K·tool]`），模型通过 `context_compress/decompress/search/status`

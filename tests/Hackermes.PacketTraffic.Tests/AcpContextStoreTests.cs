@@ -187,6 +187,26 @@ public sealed class AcpContextStoreTests
     }
 
     [Fact]
+    public void Gc_never_orphans_tool_results_when_budget_is_crossed_between_call_and_results()
+    {
+        const int budget = 4_200;
+        var store = NewStore(budget);
+        store.AppendUser(Long(1_000, "OLD-USER"));
+        store.AppendAssistantToolCalls(null,
+        [
+            new AssistantToolCall("call-a", "page_context", "{}"),
+            new AssistantToolCall("call-b", "page_security_snapshot", "{}")
+        ]);
+        store.AppendToolResult("call-a", Long(900, "PAGE-CONTEXT"), "page_context");
+        store.AppendToolResult("call-b", Long(900, "SECURITY-SNAPSHOT"), "page_security_snapshot");
+        for (var i = 0; i < 6; i++) store.AppendAssistant(Long(100, $"recent-{i}"));
+
+        var request = store.BuildRequest(new AgentMemoryDocument(), [], Settings(budget));
+
+        AssertValidToolProtocol(request);
+    }
+
+    [Fact]
     public void Annotated_refs_are_visible_for_every_entry_in_request()
     {
         var store = NewStore();
@@ -247,9 +267,8 @@ public sealed class AcpContextStoreTests
     {
         var store = NewStore();
         store.AppendUser("旧任务");
-        store.AppendAssistant("f1");
-        store.AppendAssistant("f2");
-        store.AppendUser("新目标");
+        // 单条目标区间也要明显大于存档标记开销，否则会被收缩守卫（正确地）拒绝。
+        for (var i = 0; i < 3; i++) store.AppendUser(Long(160, $"target-{i}"));
         for (var i = 0; i < 6; i++) store.AppendAssistant(Long(90, $"filler-{i}"));
         store.AppendUser("收尾问题");
         store.AppendAssistant("好的");
@@ -267,5 +286,28 @@ public sealed class AcpContextStoreTests
         }
         // 三种写法各命中一个真实条目并成功建块；带尺寸/括号的形式不会误删其它条目。
         Assert.Equal(3, store.BlockCount);
+    }
+
+    private static void AssertValidToolProtocol(IReadOnlyList<ChatMessage> messages)
+    {
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var message in messages.Where(message => message.Role != "system"))
+        {
+            if (message.Role == "assistant" && message.ToolCalls is { Count: > 0 } calls)
+            {
+                Assert.Empty(pending);
+                pending.UnionWith(calls.Select(call => call.Id));
+                continue;
+            }
+            if (message.Role == "tool")
+            {
+                Assert.NotNull(message.ToolCallId);
+                Assert.True(pending.Remove(message.ToolCallId!),
+                    $"orphan tool result: {message.ToolCallId}");
+                continue;
+            }
+            Assert.Empty(pending);
+        }
+        Assert.Empty(pending);
     }
 }

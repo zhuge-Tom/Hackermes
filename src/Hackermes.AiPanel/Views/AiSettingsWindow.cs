@@ -274,7 +274,7 @@ public sealed class AiSettingsWindow : Window
         [
             new(AiPermissionMode.RequestApproval, "请求批准（默认）"),
             new(AiPermissionMode.HelpApproval, "帮我批准"),
-            new(AiPermissionMode.FullAccess, "完全访问权限")
+            new(AiPermissionMode.FullAccess, "完全访问权限（不再逐次确认）")
         ];
 
         public override string ToString() => Label;

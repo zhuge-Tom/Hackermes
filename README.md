@@ -1,4 +1,4 @@
-# Hackermes
+﻿# Hackermes
 
 ![Hackermes icon](src/Hackermes.App/Assets/hackermes-icon.png)
 
@@ -6,7 +6,7 @@ Hackermes 是面向人工操作与 Agent 协作的桌面网页调试、流量分
 项目基于 .NET 10 与 Avalonia，将内置浏览器、CDP、DOM 检查、HTTP 数据包处理、终端、
 AI 助手和受控 ToolHost 集成在同一应用中。
 
-> 当前版本：`0.9.0`，已发布 Windows 10/11 x64 自包含包。
+> 当前版本：`0.10.0`，已发布 Windows 10/11 x64 自包含包。
 > Windows 10/11 x64 是主要验证平台；Linux x64 为预览平台。
 
 ## 主要能力
@@ -23,20 +23,27 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - 授权评估工作区支持任务执行、取消/撤销、证据验证、Finding 创建与复核、HMAC 审计链验证，
   以及 JSON、Markdown、HTML 报告导出。
 - 人工、CLI 与 Agent 共用同一个授权控制面；Agent 不获得任意 Shell。
+- Agent 运行时融合 deepseek-harness 设计：turn/step 无头驱动器、append-only 会话事件流、
+  转向指令队列与优先抢占、只读工具有界并行池、干净失败退避重试与上下文溢出自愈。
+- 上下文三级保障：模型自主 ACP 压缩、压力触发的自动摘要压缩（含收缩守卫）、GC 墓碑兜底；
+  支持 token 级预算、每模型压缩策略与 KV-cache 对齐的摘要调用。
+- 思考流实时展示、任务清单面板、目标自动续跑、大结果外存分页读取（spill）、
+  审批审计落日志、会话事件持久化与断点恢复、转录导出与会话分叉。
+- Pre-step 拦截缝支持请求前脱敏与上下文注入；工具可声明输出模式并在违例时即时自纠。
 - Assessment 任务以 coherent case 原子呈现；Traffic 工作台在最小窗口下保留常用操作，并把低频工具折叠到 `More tools`。
 
-> v0.9.0 已完成完整发布验收：413/413 自动化测试、WebView2/CDP 真实回环自测 5/5、Assessment 与 Traffic 明暗主题及 wide/medium/minimum 响应式视觉矩阵、Windows x64 打包和 SHA-256 校验全部通过。
+> v0.10.0 已完成完整发布验收：521/521 自动化测试全部通过，解决方案零警告构建；Windows x64 打包和 SHA-256 校验通过。
 
 ## 下载与安装
 
-最新版位于 [Hackermes v0.9.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.9.0)，也可查看
+最新版位于 [Hackermes v0.10.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.10.0)，也可查看
 [GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases) 中的历史版本。附件同时提供
 `SHA256SUMS.txt` 用于校验下载完整性。
 
-- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.9.0/Hackermes-0.9.0-windows-x64.zip)
-- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.9.0/SHA256SUMS.txt)
+- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.10.0/Hackermes-0.10.0-windows-x64.zip)
+- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.10.0/SHA256SUMS.txt)
 
-v0.9.0 当前发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
+v0.10.0 当前发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
 需要 Linux 预览包时可使用
 [v0.7.0 历史发布](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.7.0)，或在能访问 NuGet 的 Linux/交叉构建环境中从源码发布。
 
@@ -137,7 +144,7 @@ G:\HackermesBuild\
 ### 本地创建 Windows/Linux 发布包
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.9.0 -Platforms all
+.\scripts\package-release.ps1 -Version 0.10.0 -Platforms all
 ```
 
 Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授权评估浅/深截图、打包与哈希校验）：
@@ -153,7 +160,7 @@ Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授
 只生成单个平台时可将 `all` 改为 `windows` 或 `linux`。产物位于：
 
 ```text
-G:\HackermesBuild\artifacts\release\0.9.0\
+G:\HackermesBuild\artifacts\release\0.10.0\
 ```
 
 发布脚本生成：
@@ -186,8 +193,15 @@ Agent 工具执行链：
 
 ## 安全工具与第三方组件
 
-左侧安全工具菜单保留人工原生入口：CLI 工具打开教学终端，GUI 工具使用原生界面。未内置工具会显示
-用途和缺失原因。公开发布包只包含清单中具备来源与许可信息的组件；标记为
+左侧安全工具菜单保留人工原生入口：CLI 工具打开教学终端，GUI 工具使用原生界面。未接入工具集中到
+底部的默认折叠组；缺失、缺依赖、无效和未验证状态分别标注。目录数据由后台线程扫描缓存
+（`ToolCatalogService`），切回面板不再触发 UI 线程磁盘探测；面板支持搜索过滤、最近使用置顶、
+分类展开状态保存、右键复制路径/打开所在目录，带 `AdapterId` 的工具标注「受控」并可一键跳转授权评估。
+设置窗口可选择主/次工具根目录、重新检测并查看最终解析路径。内置轻量工具（JWT 解码、URL 结构解析、
+时间戳转换、正则测试器等）纯进程内计算。
+在应用 `tools` 目录放置 `tools.json` 可接入自定义工具（路径必须位于内置根目录或已配置的授权根目录内），
+无需改代码重编译。发布包优先使用应用内置副本；普通开发构建没有 `tools` 目录时，会回退到设置中明确
+配置的主/次工具根目录。公开发布包只包含清单中具备来源与许可信息的组件；标记为
 `redistribution-unverified` 的本地工具不会进入附件。详情见
 [`third_party/tools/manifest.json`](third_party/tools/manifest.json)。
 
