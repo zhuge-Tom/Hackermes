@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Hackermes.AiPanel.Agent;
@@ -96,6 +97,21 @@ public sealed class AcpContextStore
     public int BlockCount { get { lock (_gate) return _blocks.Count; } }
     public long ActiveChars { get { lock (_gate) return _active.Sum(entry => (long)entry.Chars); } }
 
+    /// <summary>Extra request cost (tool schemas) reserved against the budget.</summary>
+    public int RequestOverhead { get; set; }
+
+    public int EstimateOverhead(string? system, IReadOnlyList<AiToolDefinition>? tools)
+    {
+        var total = string.IsNullOrEmpty(system) ? 0 : _estimate(system);
+        if (tools is null) return total;
+        foreach (var tool in tools)
+            total += _estimate(tool.Name + "\n" + tool.Description + "\n" + tool.InputSchema.GetRawText());
+        return total;
+    }
+
+    public long PressureChars(string? system, IReadOnlyList<AiToolDefinition>? tools) =>
+        ActiveChars + EstimateOverhead(system, tools);
+
     /// <summary>Compact usage line for the chat status bar, e.g. "上下文 38%（45.6K / 120K 字符 · 块 2）".</summary>
     /// <summary>Unit label for the status bar (tokens when token budgeting is active).</summary>
     public string UsageLine(int budget)
@@ -113,11 +129,12 @@ public sealed class AcpContextStore
     public void AppendUser(string content) => Append(new ChatMessage("user", content));
     public void AppendAssistant(string? content) => Append(new ChatMessage("assistant", content));
 
-    public void AppendToolResult(string toolCallId, string content, string? toolName = null)
+    public void AppendToolResult(string toolCallId, string content, string? toolName = null,
+        IReadOnlyList<ChatImage>? images = null)
     {
         // 工具输出是最值得压缩的内容,但刚产生的输出属于当前工作集 —— 由保护窗口兜底。
-        var entry = Append(new ChatMessage("tool", content, ToolCallId: toolCallId));
-        entry.Chars = _estimate(content);
+        var entry = Append(new ChatMessage("tool", content, ToolCallId: toolCallId, Images: images));
+        entry.Chars = _estimate(content) + (images is { Count: > 0 } ? 2_000 : 0);
         entry.ToolName = toolName;
     }
 
@@ -151,7 +168,7 @@ public sealed class AcpContextStore
     public IReadOnlyList<ChatMessage> BuildRequest(
         AgentMemoryDocument memory, IReadOnlyList<AgentSkill> skills, AiSettings settings)
     {
-        GcIfNeeded(settings);
+        GcIfNeeded(settings, RequestOverhead);
         List<AcpEntry> snapshot;
         long chars;
         lock (_gate)
@@ -168,9 +185,21 @@ public sealed class AcpContextStore
         if (nudge.Length > 0) system += "\n" + nudge;
         if (_gcRan) system += "\n[ACP] 更早的上下文已超出预算被自动截断；可用 context_search 检索已归档内容。";
 
+        var reserved = RequestOverhead + _estimate(system);
+        if (chars + reserved > budget)
+        {
+            GcIfNeeded(settings, reserved);
+            lock (_gate)
+            {
+                snapshot = [.. _active];
+                chars = _active.Sum(entry => (long)entry.Chars);
+            }
+        }
+
         var messages = new List<ChatMessage>(snapshot.Count + 1) { new("system", system) };
         foreach (var entry in snapshot)
             messages.Add(Annotate(entry));
+        KeepNewestScreenshot(messages);
         return messages;
     }
 
@@ -179,16 +208,31 @@ public sealed class AcpContextStore
         "[ACP 上下文管理] 你负责管理本会话的上下文：当较早的内容不再被当前步骤需要时，调用 context_compress 把该区间替换为你写的自包含摘要" +
         "（保留文件路径、决策、错误信息与用户目标）。压缩前可用 context_status 查看用量与可压缩区间，context_search 可检索已归档块。";
 
+    private static void KeepNewestScreenshot(List<ChatMessage> messages)
+    {
+        var newest = -1;
+        for (var index = messages.Count - 1; index >= 1; index--)
+        {
+            if (messages[index].Images is not { Count: > 0 }) continue;
+            newest = index;
+            break;
+        }
+        if (newest < 0) return;
+        for (var index = 1; index < messages.Count; index++)
+        {
+            if (index == newest || messages[index].Images is not { Count: > 0 }) continue;
+            messages[index] = messages[index] with
+            {
+                Images = null,
+                Content = (messages[index].Content ?? string.Empty) + "（较旧截图已省略）"
+            };
+        }
+    }
+
     private static ChatMessage Annotate(AcpEntry entry)
     {
         var message = entry.Message;
-        var size = FormatSize(entry.Chars);
-        var tag = message.Role switch
-        {
-            "user" => $"[{entry.Ref}·{size}] ",
-            "tool" => $"[{entry.Ref}·{size}·tool] ",
-            _ => $"[{entry.Ref}·{size}] "
-        };
+        var tag = message.Role == "tool" ? $"[{entry.Ref}·tool] " : $"[{entry.Ref}] ";
         if (string.IsNullOrEmpty(message.Content))
         {
             // Pure tool_calls turns carry no anchor text; synthesize one so every
@@ -275,16 +319,44 @@ public sealed class AcpContextStore
             }
             if (runChars >= MinCandidateChars)
             {
-                var roles = snapshot.Skip(start).Take(index - start)
+                var slice = snapshot.Skip(start).Take(index - start).ToArray();
+                var roles = slice
                     .GroupBy(entry => entry.Message.Role).OrderByDescending(group => group.Sum(entry => (long)entry.Chars))
                     .Select(group => group.Key == "tool" ? "工具输出" : group.Key == "user" ? "用户" : "助手")
                     .ToList();
                 runs.Add(new AcpRangeSuggestion(snapshot[start].Ref, snapshot[index - 1].Ref, runChars,
-                    roles.Count == 0 ? "混合" : string.Join("+", roles)));
+                    roles.Count == 0 ? "混合" : string.Join("+", roles), ScoreRange(slice, runChars)));
             }
         }
-        return runs.OrderByDescending(run => run.Chars).Take(MaxSuggestions).ToList();
+        return runs
+            .OrderByDescending(run => run.Score)
+            .ThenByDescending(run => run.Chars)
+            .Take(MaxSuggestions)
+            .ToList();
     }
+
+    private static long ScoreRange(IReadOnlyList<AcpEntry> entries, long runChars)
+    {
+        long score = runChars;
+        foreach (var entry in entries)
+        {
+            var name = entry.ToolName ?? string.Empty;
+            var text = entry.Message.Content ?? string.Empty;
+            if (IsEvidenceTool(name) || text.Contains("spill:", StringComparison.Ordinal) ||
+                text.Contains("\"code\":", StringComparison.Ordinal))
+                score -= entry.Chars / 2;
+            else if (IsLowValueTool(name))
+                score += entry.Chars;
+        }
+        return score;
+    }
+
+    private static bool IsEvidenceTool(string name) =>
+        name is "packet_analyze" or "packet_show" or "page_security_snapshot"
+            or "assessment_evidence" or "assessment_findings";
+
+    private static bool IsLowValueTool(string name) =>
+        name is "console_read" or "network_list" or "page_query" or "packet_list" or "page_screenshot";
 
     #endregion
 
@@ -460,6 +532,9 @@ public sealed class AcpContextStore
             $"（原约 {block.OriginalChars:N0} 字符）。标题: {(block.Title.Length == 0 ? "(未命名)" : block.Title)}\n" +
             $"摘要: {block.Summary}\n" +
             $"（本条为系统生成的存档标记，不是用户输入；需要原文时调用 context_decompress {{\"block\":\"{block.Id}\"}}）";
+        var spills = CollectSpillLocators(consumed);
+        if (spills.Count > 0)
+            markerText += "\n外存: " + string.Join(" ", spills);
         var marker = new AcpEntry
         {
             Ref = NextMarkerRef(),
@@ -519,10 +594,23 @@ public sealed class AcpContextStore
             foreach (var block in _blocks.AsEnumerable().Reverse())
             {
                 var haystack = $"{block.Title} {block.Summary}";
-                if (!haystack.Contains(keyword, StringComparison.OrdinalIgnoreCase)) continue;
                 var label = block.IsTombstone ? ",自动截断" : block.Active ? "" : ",已合并";
-                results.Add($"{block.Id}(T{block.Tier}{label}) \"{(block.Title.Length == 0 ? "未命名" : block.Title)}\": {Shorten(block.Summary, 220)}");
-                if (results.Count >= limit) return JsonSerializer.Serialize(results);
+                var title = block.Title.Length == 0 ? "未命名" : block.Title;
+                if (haystack.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                {
+                    results.Add($"{block.Id}(T{block.Tier}{label}) \"{title}\": {Shorten(block.Summary, 220)}");
+                    if (results.Count >= limit) return JsonSerializer.Serialize(results);
+                    continue;
+                }
+                foreach (var original in block.OriginalEntries)
+                {
+                    var text = original.Message.Content;
+                    if (string.IsNullOrEmpty(text) || !text.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    results.Add($"{block.Id}(T{block.Tier}{label}) \"{title}\": {Shorten(text, 180)}");
+                    if (results.Count >= limit) return JsonSerializer.Serialize(results);
+                    break;
+                }
             }
             foreach (var entry in _active.AsEnumerable().Reverse())
             {
@@ -581,14 +669,15 @@ public sealed class AcpContextStore
     /// parked into a searchable tombstone block instead of vanishing silently. Load-bearing
     /// context_compress results are dropped only after everything else is gone.
     /// </summary>
-    private void GcIfNeeded(AiSettings settings)
+    private void GcIfNeeded(AiSettings settings, int reserve = 0)
     {
         var budget = EffectiveBudget(settings);
         _budgetChars = budget;
+        var limit = Math.Max(1_000, budget - Math.Max(0, reserve));
         lock (_gate)
         {
             var dropped = new List<AcpEntry>();
-            while (_active.Sum(entry => (long)entry.Chars) > budget &&
+            while (_active.Sum(entry => (long)entry.Chars) > limit &&
                    _active.Count > ProtectedRecentEntries + 1)
             {
                 var snapshot = _active.ToArray();
@@ -665,6 +754,24 @@ public sealed class AcpContextStore
         var flat = value.Replace("\r", string.Empty).Replace('\n', ' ');
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
+
+    private static List<string> CollectSpillLocators(IEnumerable<AcpEntry> entries)
+    {
+        var found = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            var text = entry.Message.Content;
+            if (string.IsNullOrEmpty(text)) continue;
+            foreach (Match match in Regex.Matches(text, "spill:[0-9a-f]{32}"))
+            {
+                if (!seen.Add(match.Value)) continue;
+                found.Add(match.Value);
+                if (found.Count >= 8) return found;
+            }
+        }
+        return found;
+    }
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
@@ -692,7 +799,7 @@ public sealed class AcpStatusBreakdown
     public long AssistantChars { get; set; }
 }
 
-public sealed record AcpRangeSuggestion(string StartRef, string EndRef, long Chars, string Label);
+public sealed record AcpRangeSuggestion(string StartRef, string EndRef, long Chars, string Label, long Score = 0);
 
 public sealed class AcpStatusBlock
 {

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,7 +32,47 @@ public sealed record PageSecuritySnapshot(
     string Origin,
     string Title,
     PageSecurityTransportSnapshot Transport,
-    PageSecurityDomSnapshot Dom);
+    PageSecurityDomSnapshot Dom)
+{
+    public IReadOnlyList<PageSecurityObservation> Observations { get; init; } = [];
+}
+
+public sealed record PageSecurityObservation(string Code, string Severity, string Message);
+
+public static class PageSecurityObservations
+{
+    public static IReadOnlyList<PageSecurityObservation> From(
+        PageSecurityTransportSnapshot transport,
+        PageSecurityDomSnapshot dom)
+    {
+        var items = new List<PageSecurityObservation>();
+        if (transport.IsHttps && !transport.HasStrictTransportSecurity)
+            items.Add(new("missing-hsts", "Warning", "The document response has no Strict-Transport-Security header."));
+        if (!transport.HasContentSecurityPolicy)
+            items.Add(new("missing-csp", "Warning", "The document response has no Content-Security-Policy header."));
+        if (transport.ContentSecurityPolicyAllowsUnsafeInline)
+            items.Add(new("csp-unsafe-inline", "Warning", "The Content-Security-Policy allows unsafe-inline."));
+        if (transport.ContentSecurityPolicyAllowsUnsafeEval)
+            items.Add(new("csp-unsafe-eval", "Warning", "The Content-Security-Policy allows unsafe-eval."));
+        if (transport.ContentSecurityPolicyHasWildcardSource)
+            items.Add(new("csp-wildcard-src", "Warning", "The Content-Security-Policy includes a wildcard source."));
+        if (!transport.HasXContentTypeOptions)
+            items.Add(new("missing-xcto", "Info", "The document response has no X-Content-Type-Options header."));
+        if (!transport.HasFrameProtection)
+            items.Add(new("missing-frame-protection", "Warning", "The document response has no frame protection."));
+        if (transport.Cookies.SetCookieCount > 0 && transport.Cookies.SecureCount < transport.Cookies.SetCookieCount)
+            items.Add(new("cookie-missing-secure", "Warning", "One or more Set-Cookie headers are missing the Secure attribute."));
+        if (transport.Cookies.SetCookieCount > 0 && transport.Cookies.HttpOnlyCount < transport.Cookies.SetCookieCount)
+            items.Add(new("cookie-missing-httponly", "Warning", "One or more Set-Cookie headers are missing the HttpOnly attribute."));
+        if (dom.MixedContentResourceCount > 0)
+            items.Add(new("mixed-content", "High", "The page includes mixed-content resources."));
+        if (dom.Forms.Any(form => form.IsCrossOrigin))
+            items.Add(new("cross-origin-form", "Info", "The page contains a cross-origin form."));
+        if (dom.ExternalScripts.Any(script => !script.HasIntegrity))
+            items.Add(new("script-missing-integrity", "Info", "An external script is missing an integrity attribute."));
+        return items;
+    }
+}
 
 public sealed record PageSecurityTransportSnapshot(
     bool HasDocumentResponse,

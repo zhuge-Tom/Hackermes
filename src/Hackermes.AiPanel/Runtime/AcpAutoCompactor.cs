@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,16 +28,19 @@ public sealed record CompactionPrefix(string SystemPrompt, IReadOnlyList<AiToolD
 /// every failure is best-effort — the nudge/GC ladder remains the fallback.
 ///
 /// KV-cache alignment: when a prefix provider is wired, the summarizer replays the very
-/// system prompt and tool list used by main requests in front of the range, making the
-/// auxiliary call share its longest prefix with recent traffic instead of invalidating
-/// every provider cache.
+/// system prompt used by main requests in front of the range (tool schemas are omitted so
+/// the auxiliary call stays small), sharing the longest prompt prefix with recent traffic.
 /// </summary>
 public sealed class AcpAutoCompactor
 {
     private const int MinimumRangeChars = 2_000;
-    private const int MaximumEntryPreviewChars = 4_000;
+    private const int MaximumEntryPreviewChars = 6_000;
+    private const int EntryHeadChars = 2_500;
+    private const int EntryTailChars = 1_500;
     private const long MaximumSummarizerInputChars = 60_000;
     private static readonly TimeSpan MinimumAttemptInterval = TimeSpan.FromSeconds(20);
+    private static readonly Regex SpillLocatorRegex = new(
+        "spill:[0-9a-f]{32}", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly IOpenAiChatClient _client;
     private readonly Func<string?> _modelProvider;
@@ -93,11 +97,14 @@ public sealed class AcpAutoCompactor
         if (ratio <= 0) return null;
 
         var budget = AcpContextStore.EffectiveBudget(settings);
-        if (store.ActiveChars < budget * ratio) return null;
+        var prefix = _prefixProvider?.Invoke();
+        if (store.PressureChars(prefix?.SystemPrompt, prefix?.Tools) < budget * ratio) return null;
         if (DateTimeOffset.UtcNow - _lastAttempt < MinimumAttemptInterval) return null;
-        _lastAttempt = DateTimeOffset.UtcNow;
 
-        return await CompactLargestRangeAsync(store, MinimumRangeChars, ct).ConfigureAwait(true);
+        var compacted = await CompactLargestRangeAsync(store, MinimumRangeChars, ct).ConfigureAwait(true);
+        if (compacted is not null)
+            _lastAttempt = DateTimeOffset.UtcNow;
+        return compacted;
     }
 
     /// <summary>
@@ -195,19 +202,37 @@ public sealed class AcpAutoCompactor
             "用简体中文，按小节输出：【目标】【关键事实】【错误与修复】【待办】。不要寒暄，不要新增原文没有的信息，只输出摘要正文。"));
 
         long inputBudget = MaximumSummarizerInputChars;
-        foreach (var entry in rangeEntries)
+        var lines = new string[rangeEntries.Count];
+        var selected = new bool[rangeEntries.Count];
+        for (var index = 0; index < rangeEntries.Count; index++)
+            lines[index] = PreviewEntry(rangeEntries[index]);
+
+        var lo = 0;
+        var hi = rangeEntries.Count - 1;
+        var fromNewest = true;
+        while (lo <= hi)
         {
-            var body = entry.Message.Content ?? string.Empty;
-            if (body.Length > MaximumEntryPreviewChars)
-                body = body[..MaximumEntryPreviewChars] + "\n…[本条内容过长已截断]";
-            var line = $"[{entry.Ref}] {entry.Message.Role}{(entry.ToolName is { } tool ? $"/{tool}" : "")}: {body}";
-            if (inputBudget - line.Length < 0)
+            var index = fromNewest ? hi : lo;
+            if (fromNewest) hi--; else lo++;
+            fromNewest = !fromNewest;
+            if (inputBudget - lines[index].Length < 0) continue;
+            selected[index] = true;
+            inputBudget -= lines[index].Length;
+        }
+
+        var skipped = false;
+        for (var index = 0; index < rangeEntries.Count; index++)
+        {
+            if (!selected[index])
             {
-                messages.Add(new ChatMessage("user", "[更早的区间内容因过长未纳入本次压缩输入]"));
-                break;
+                if (!skipped)
+                {
+                    messages.Add(new ChatMessage("user", "[更早的区间内容因过长未纳入本次压缩输入]"));
+                    skipped = true;
+                }
+                continue;
             }
-            inputBudget -= line.Length;
-            messages.Add(new ChatMessage("user", line));
+            messages.Add(new ChatMessage("user", lines[index]));
         }
 
         messages.Add(new ChatMessage("user",
@@ -219,11 +244,28 @@ public sealed class AcpAutoCompactor
         if (string.IsNullOrWhiteSpace(model)) model = "gpt-4.1-mini";
         StringBuilder content = new();
         await foreach (var delta in _client.StreamChatAsync(
-                           new OpenAiChatRequest(model, messages, Tools: prefix?.Tools), ct).ConfigureAwait(true))
+                           new OpenAiChatRequest(model, messages, Tools: null), ct).ConfigureAwait(true))
         {
             if (delta.Content is { } text) content.Append(text);
         }
         return content.ToString().Trim();
+    }
+
+    private static string PreviewEntry(AcpEntry entry)
+    {
+        var body = entry.Message.Content ?? string.Empty;
+        if (body.Length > MaximumEntryPreviewChars)
+        {
+            var locators = SpillLocatorRegex.Matches(body)
+                .Select(static match => match.Value)
+                .Distinct(StringComparer.Ordinal)
+                .Take(8)
+                .ToList();
+            body = body[..EntryHeadChars] + "\n…[本条内容过长已截断]\n" + body[^EntryTailChars..];
+            if (locators.Count > 0)
+                body += "\n" + string.Join(" ", locators);
+        }
+        return $"[{entry.Ref}] {entry.Message.Role}{(entry.ToolName is { } tool ? $"/{tool}" : "")}: {body}";
     }
 
     private static int IndexOfRefPrefix(IReadOnlyList<AcpEntry> entries, string reference)

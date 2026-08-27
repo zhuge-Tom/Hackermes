@@ -63,7 +63,7 @@ public sealed class CommandContext
         index >= Args.Count ? string.Empty : string.Join(' ', Args.Skip(index));
 }
 
-public sealed record CommandResult(bool Success, string Output)
+public sealed record CommandResult(bool Success, string Output, string? MediaType = null, string? MediaBase64 = null)
 {
     public static CommandResult Ok(string output = "") => new(true, output);
 

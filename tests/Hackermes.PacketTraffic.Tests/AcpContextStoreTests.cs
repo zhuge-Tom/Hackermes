@@ -45,6 +45,26 @@ public sealed class AcpContextStoreTests
     }
 
     [Fact]
+    public void Search_finds_token_only_present_in_compressed_originals()
+    {
+        var store = NewStore();
+        store.AppendUser("旧任务开始");
+        store.AppendAssistantToolCalls(null, [new AssistantToolCall("c1", "packet_query", "{}")]);
+        store.AppendToolResult("c1", "packet-unique-xyz " + Long(600, "EVIDENCE-TAIL"), "packet_query");
+        for (var i = 0; i < 6; i++) store.AppendAssistant(Long(90, $"filler-{i}"));
+
+        var (ok, message) = store.Compress("m00002", "m00003",
+            "查询了 packet_query，得到长输出；结论记录于后续 filler。", "查询阶段");
+        Assert.True(ok, message);
+        Assert.DoesNotContain("packet-unique-xyz", store.Blocks[0].Summary, StringComparison.Ordinal);
+
+        var search = store.Search("packet-unique-xyz", 8);
+        Assert.DoesNotContain("没有匹配", search, StringComparison.Ordinal);
+        Assert.Contains("b1", search, StringComparison.Ordinal);
+        Assert.Contains("packet-unique-xyz", search, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compress_then_decompress_roundtrip_restores_originals()
     {
         var store = NewStore();
@@ -216,9 +236,9 @@ public sealed class AcpContextStoreTests
 
         var request = store.BuildRequest(new AgentMemoryDocument(), [], Settings(Budget));
         var bodies = request.Skip(1).Select(m => m.Content!).ToList();
-        Assert.StartsWith("[m00001·", bodies[0], StringComparison.Ordinal);
-        Assert.StartsWith("[m00002·", bodies[1], StringComparison.Ordinal);
-        Assert.StartsWith("[m00003·", bodies[2], StringComparison.Ordinal);
+        Assert.StartsWith("[m00001]", bodies[0], StringComparison.Ordinal);
+        Assert.StartsWith("[m00002]", bodies[1], StringComparison.Ordinal);
+        Assert.StartsWith("[m00003·tool]", bodies[2], StringComparison.Ordinal);
         Assert.Contains("(调用工具 tool_x)", bodies[1], StringComparison.Ordinal);
     }
 

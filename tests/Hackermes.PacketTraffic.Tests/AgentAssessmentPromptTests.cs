@@ -21,8 +21,11 @@ public sealed class AgentAssessmentPromptTests
         Assert.Contains("ToolHost", system, StringComparison.Ordinal);
         Assert.Contains("Never invent or substitute a target", system, StringComparison.Ordinal);
         Assert.Contains("do not claim a vulnerability without tool evidence", system, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("packet_analyze", system, StringComparison.Ordinal);
+        Assert.Contains("assessment_create_finding", system, StringComparison.Ordinal);
+        Assert.Contains("codes, not confirmed vulnerabilities", system, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("assessment_create_scope ", system, StringComparison.Ordinal);
-        Assert.True(system.Length < 4_000, $"System safety guidance unexpectedly grew to {system.Length} characters.");
+        Assert.True(system.Length < 7_000, $"System safety guidance unexpectedly grew to {system.Length} characters.");
     }
 
     [Fact]

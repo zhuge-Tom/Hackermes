@@ -95,6 +95,12 @@ public sealed class AgentSkillStore : IAgentSkillStore
             var path = PathFor("agent-skills.json");
             if (File.Exists(path))
                 _document = JsonSerializer.Deserialize(File.ReadAllText(path), AgentStateJsonContext.Default.AgentSkillDocument);
+            else
+            {
+                _document = new AgentSkillDocument { Skills = [CreateDefaultAssessmentSkill()] };
+                Save(_document);
+                return _document;
+            }
         }
         catch (Exception ex) { _logger.Warn($"Unable to read Agent skills: {ex.Message}"); }
 
@@ -127,6 +133,31 @@ public sealed class AgentSkillStore : IAgentSkillStore
         Instructions = (input.Instructions ?? string.Empty).Trim()[..Math.Min((input.Instructions ?? string.Empty).Trim().Length, 12_000)],
         Enabled = input.Enabled,
         ToolNames = (input.ToolNames ?? new List<string>()).Where(name => !string.IsNullOrWhiteSpace(name)).Select(name => name.Trim()).Distinct(StringComparer.Ordinal).Take(64).ToList()
+    };
+
+    public const string DefaultAssessmentSkillId = "authorized-assessment";
+
+    public static AgentSkill CreateDefaultAssessmentSkill() => new()
+    {
+        Id = DefaultAssessmentSkillId,
+        Name = "授权评估",
+        Enabled = true,
+        Instructions =
+            "Authorized assessment playbook. Observe first, then record. " +
+            "page_context → page_security_snapshot → packet_query/packet_analyze. " +
+            "Use page_eval_read for inspection JS and page_eval only for writes. " +
+            "Record Unreviewed findings with assessment_create_finding (evidenceId or source=page-snapshot|packet-analyze). " +
+            "Prefer assessment_authorize_and_run for one bounded ToolHost adapter. Never invent targets or claim a vuln without tool evidence.",
+        ToolNames =
+        [
+            "page_context", "page_security_snapshot", "page_query", "page_screenshot", "page_eval_read", "page_wait",
+            "console_read", "network_list",
+            "packet_query", "packet_analyze", "packet_show", "packet_body_info", "packet_body_chunk",
+            "assessment_tools", "assessment_cases", "assessment_authorize_and_run", "assessment_create_scope_from_page",
+            "assessment_evidence", "assessment_create_finding", "assessment_findings",
+            "assessment_jobs", "assessment_job_status", "assessment_cancel", "assessment_report",
+            "todo_write", "goal_set", "goal_clear", "read_spill", "agent_subtask"
+        ]
     };
 
     private static AgentSkill Clone(AgentSkill value) => new()

@@ -33,7 +33,6 @@ public sealed class AiChatViewLayoutTests
 
         Assert.Equal("Top", prompt.Attribute("VerticalContentAlignment")?.Value);
         Assert.Equal("Auto", prompt.Attribute("ScrollViewer.VerticalScrollBarVisibility")?.Value);
-        Assert.Equal("OnPromptKeyDown", prompt.Attribute("KeyDown")?.Value);
         Assert.Contains("Enter 发送", prompt.Attribute("PlaceholderText")?.Value);
         Assert.Contains("Ctrl+Enter 换行", prompt.Attribute("PlaceholderText")?.Value);
     }

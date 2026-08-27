@@ -11,7 +11,8 @@ public sealed record ChatMessage(
     string? Content,
     string? Name = null,
     string? ToolCallId = null,
-    IReadOnlyList<AssistantToolCall>? ToolCalls = null);
+    IReadOnlyList<AssistantToolCall>? ToolCalls = null,
+    IReadOnlyList<ChatImage>? Images = null);
 
 public sealed record OpenAiChatRequest(
     string Model,

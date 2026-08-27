@@ -1,11 +1,13 @@
 using Hackermes.AiPanel.Agent;
 using Hackermes.AiPanel.OpenAI;
 using Hackermes.AiPanel.Runtime;
+using Hackermes.AiPanel.Tools;
 using Hackermes.Platform.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -47,13 +49,13 @@ public sealed class AcpAutoCompactorTests
         private readonly Func<IReadOnlyList<ChatMessage>, string> _responder =
             responder ?? (_ => "【目标】测试目标。【关键事实】保留路径 /etc/app。【错误与修复】无。【待办】继续验证。");
 
-        public List<IReadOnlyList<ChatMessage>> Requests { get; } = [];
+        public List<OpenAiChatRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ChatStreamDelta> StreamChatAsync(
             OpenAiChatRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            Requests.Add(request.Messages);
+            Requests.Add(request);
             await Task.Yield();
             var reply = _responder(request.Messages);
             yield return new ChatStreamDelta(reply[..(reply.Length / 2)], null, null);
@@ -90,7 +92,7 @@ public sealed class AcpAutoCompactorTests
         Assert.True(store.ActiveChars < Budget * 0.8);
         // Summarizer replayed the annotated range verbatim as its input.
         Assert.Single(client.Requests);
-        var summarizerInput = string.Join("\n", client.Requests[0].Select(message => message.Content));
+        var summarizerInput = string.Join("\n", client.Requests[0].Messages.Select(message => message.Content));
         Assert.Contains("[m00001]", summarizerInput, StringComparison.Ordinal);
         Assert.Contains("[m00002]", summarizerInput, StringComparison.Ordinal);
         Assert.DoesNotContain("回答 5", summarizerInput, StringComparison.Ordinal); // protected tail excluded
@@ -150,5 +152,77 @@ public sealed class AcpAutoCompactorTests
         Assert.Equal(0.5, compactor.ResolvePressureRatio(Settings(ratio: 0.1)));
         Assert.Equal(0.95, compactor.ResolvePressureRatio(Settings(ratio: 0.99)));
         Assert.Equal(0.8, compactor.ResolvePressureRatio(Settings(ratio: 0.8)));
+    }
+
+    [Fact]
+    public async Task Failed_compact_does_not_rate_limit_the_next_attempt()
+    {
+        var store = CreatePressuredStore();
+        var bloated = new string('z', 20_000);
+        var client = new StubClient(_ => bloated);
+        var compactor = CreateCompactor(client, () => store);
+
+        Assert.Null(await compactor.CompactIfNeededAsync(CancellationToken.None));
+        Assert.Null(await compactor.CompactIfNeededAsync(CancellationToken.None));
+        Assert.Equal(2, client.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Summarizer_keeps_head_tail_spill_locators_and_omits_tool_schemas()
+    {
+        const string spill = "spill:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var store = new AcpContextStore(() => "system prompt", Budget);
+        var huge = "HEAD-UNIQUE-TOKEN" + new string('x', 7_000) + "MID-UNIQUE-TOKEN" + spill +
+                   new string('y', 7_000) + "TAIL-UNIQUE-TOKEN";
+        store.AppendUser("问题 0: " + huge);
+        for (var index = 1; index < 6; index++)
+        {
+            var filler = new string((char)('a' + index), 1_450);
+            if (index % 2 == 0) store.AppendUser($"问题 {index}: {filler}");
+            else store.AppendAssistant($"回答 {index}: {filler}");
+        }
+
+        var prefix = new CompactionPrefix("主请求系统提示",
+        [
+            new AiToolDefinition("packet_query", "q",
+                JsonSerializer.SerializeToElement(new { type = "object" }),
+                AiToolRisk.ReadOnly,
+                (_, _) => ValueTask.FromResult(ToolResult.Ok()))
+        ]);
+        var client = new StubClient();
+        var compactor = new AcpAutoCompactor(client, () => "test-model", () => store,
+            () => Settings(), prefixProvider: () => prefix);
+
+        var result = await compactor.CompactIfNeededAsync(CancellationToken.None);
+
+        Assert.NotNull(result);
+        var request = Assert.Single(client.Requests);
+        Assert.Null(request.Tools);
+        Assert.Equal("主请求系统提示", request.Messages[0].Content);
+        var summarizerInput = string.Join("\n", request.Messages.Select(message => message.Content));
+        Assert.Contains("HEAD-UNIQUE-TOKEN", summarizerInput, StringComparison.Ordinal);
+        Assert.Contains("TAIL-UNIQUE-TOKEN", summarizerInput, StringComparison.Ordinal);
+        Assert.Contains(spill, summarizerInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("MID-UNIQUE-TOKEN", summarizerInput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Summarizer_prefers_newest_range_entries_when_budget_is_tight()
+    {
+        var store = new AcpContextStore(() => "system prompt", Budget);
+        for (var index = 0; index < 24; index++)
+            store.AppendUser($"N{index:D2}-" + new string('z', 4_000));
+
+        var suggestions = store.SuggestRanges(store.ActiveEntries);
+        Assert.NotEmpty(suggestions);
+        var target = suggestions[0];
+        var client = new StubClient();
+        var compactor = CreateCompactor(client, () => store);
+
+        var result = await compactor.CompactIfNeededAsync(CancellationToken.None);
+
+        Assert.NotNull(result);
+        var summarizerInput = string.Join("\n", client.Requests[0].Messages.Select(message => message.Content));
+        Assert.Contains($"[{target.EndRef}]", summarizerInput, StringComparison.Ordinal);
     }
 }

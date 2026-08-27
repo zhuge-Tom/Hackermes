@@ -8,6 +8,8 @@ namespace Hackermes.AiPanel.Tools;
 
 public enum AiToolRisk { ReadOnly, Mutating, Dangerous }
 
+public sealed record ChatImage(string MimeType, string Base64);
+
 public sealed record AiToolDefinition(
     string Name,
     string Description,
@@ -15,7 +17,8 @@ public sealed record AiToolDefinition(
     AiToolRisk Risk,
     Func<ToolInvocation, CancellationToken, ValueTask<ToolResult>> Handler,
     Func<ToolInvocation, CancellationToken, ValueTask<ToolInvocation>>? Prepare = null,
-    JsonElement? OutputSchema = null);
+    JsonElement? OutputSchema = null,
+    TimeSpan? Timeout = null);
 
 public sealed record ToolInvocation(
     string ToolName,
@@ -34,7 +37,8 @@ public sealed record ToolResult(
     bool Success,
     string Content,
     IReadOnlyList<string>? AdditionalContexts = null,
-    bool ConcludesTurn = false)
+    bool ConcludesTurn = false,
+    IReadOnlyList<ChatImage>? Images = null)
 {
     public static ToolResult Ok(string content = "") => new(true, content);
     public static ToolResult Fail(string error) => new(false, error);

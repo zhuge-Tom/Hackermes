@@ -82,6 +82,19 @@ public sealed class PacketTypedOperationEntryPointTests
     }
 
     [Fact]
+    public void Packet_list_schema_does_not_advertise_editor_fields()
+    {
+        var registry = new AiToolRegistry();
+        TrafficAiToolRegistrar.Register(registry, new TypedService());
+        var list = registry.All.Single(tool => tool.Name == "packet_list").InputSchema;
+        var properties = list.GetProperty("properties");
+        Assert.True(properties.TryGetProperty("filter", out _));
+        Assert.False(properties.TryGetProperty("rawHttp", out _));
+        Assert.False(properties.TryGetProperty("leftId", out _));
+        Assert.False(properties.TryGetProperty("enabled", out _));
+    }
+
+    [Fact]
     public async Task Cli_and_agent_return_the_same_query_bounds_error_without_calling_backend()
     {
         var service = new TypedService();

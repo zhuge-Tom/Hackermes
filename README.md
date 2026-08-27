@@ -6,7 +6,7 @@ Hackermes 是面向人工操作与 Agent 协作的桌面网页调试、流量分
 项目基于 .NET 10 与 Avalonia，将内置浏览器、CDP、DOM 检查、HTTP 数据包处理、终端、
 AI 助手和受控 ToolHost 集成在同一应用中。
 
-> 当前版本：`0.10.0`，已发布 Windows 10/11 x64 自包含包。
+> 当前版本：`0.11.0`，已发布 Windows 10/11 x64 自包含包。
 > Windows 10/11 x64 是主要验证平台；Linux x64 为预览平台。
 
 ## 主要能力
@@ -18,7 +18,7 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - HTTP 请求/响应捕获、拦截、原始编辑、重放、Comparer、规则与历史记录。
 - Query、Form、Header、Cookie、有界 JSON Pointer 与 multipart 表单参数读取和修改。
 - OpenAI 兼容 API、模型自动发现、三档 Agent 权限、上下文压缩、持久记忆与 Skill 工作流。
-- AI 可对精确绑定的内置浏览器页面读取不含敏感值的 `page_security_snapshot`，再按证据选择必要的只读检查或受控授权评估工具。
+- AI 可对精确绑定的内置浏览器页面读取不含敏感值的 `page_security_snapshot`，输出有界观测码，再按证据选择只读检查、流量分析或受控授权评估工具，并写成待复核 Finding。
 - 精确授权范围、固定计划、一次性审批票据和独立 ToolHost 执行链路。
 - 授权评估工作区支持任务执行、取消/撤销、证据验证、Finding 创建与复核、HMAC 审计链验证，
   以及 JSON、Markdown、HTML 报告导出。
@@ -32,20 +32,19 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - Pre-step 拦截缝支持请求前脱敏与上下文注入；工具可声明输出模式并在违例时即时自纠。
 - Assessment 任务以 coherent case 原子呈现；Traffic 工作台在最小窗口下保留常用操作，并把低频工具折叠到 `More tools`。
 
-> v0.10.0 已完成完整发布验收：521/521 自动化测试全部通过，解决方案零警告构建；Windows x64 打包和 SHA-256 校验通过。
+> v0.11.0：563/563 自动化测试通过，Windows x64 自包含打包。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
 
 ## 下载与安装
 
-最新版位于 [Hackermes v0.10.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.10.0)，也可查看
-[GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases) 中的历史版本。附件同时提供
+最新版位于 [Hackermes v0.11.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.11.0)，也可查看
+[GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases)。附件同时提供
 `SHA256SUMS.txt` 用于校验下载完整性。
 
-- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.10.0/Hackermes-0.10.0-windows-x64.zip)
-- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.10.0/SHA256SUMS.txt)
+- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.11.0/Hackermes-0.11.0-windows-x64.zip)
+- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.11.0/SHA256SUMS.txt)
 
-v0.10.0 当前发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
-需要 Linux 预览包时可使用
-[v0.7.0 历史发布](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.7.0)，或在能访问 NuGet 的 Linux/交叉构建环境中从源码发布。
+v0.11.0 发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
+可在能访问 NuGet 的 Linux/交叉构建环境中从源码发布。
 
 ### Windows 10/11 x64
 
@@ -144,7 +143,7 @@ G:\HackermesBuild\
 ### 本地创建 Windows/Linux 发布包
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.10.0 -Platforms all
+.\scripts\package-release.ps1 -Version 0.11.0 -Platforms windows
 ```
 
 Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授权评估浅/深截图、打包与哈希校验）：
@@ -160,7 +159,7 @@ Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授
 只生成单个平台时可将 `all` 改为 `windows` 或 `linux`。产物位于：
 
 ```text
-G:\HackermesBuild\artifacts\release\0.10.0\
+G:\HackermesBuild\artifacts\release\0.11.0\
 ```
 
 发布脚本生成：
@@ -226,6 +225,7 @@ Agent 工具执行链：
 
 ## 文档
 
+- [下一阶段目标](NEXT-STAGE.md)
 - [开发状态](docs/DEVELOPMENT-STATUS.md)
 - [架构说明](docs/ARCHITECTURE.md)
 - [设计记录](docs/DESIGN-NOTES.md)
@@ -236,7 +236,7 @@ Agent 工具执行链：
 
 - Linux 是预览平台，真实 WebView2/CDP 桌面验收仅覆盖 Windows。
 - Linux 安全工具运行环境和依赖仍需逐项适配。
-- 多用户身份提供方和复杂规则表单属于后续增强项；评估报告已支持 ECDSA 签名导出与第三方离线验签（CLI `assessment report-export/report-verify`、Agent `assessment_report_export/verify`、ToolHost `--verify-report`）。
+- 隔离子代理、Linux GUI 转正与评估作业异步化见 [NEXT-STAGE.md](NEXT-STAGE.md)。评估报告已支持 ECDSA 签名导出与第三方离线验签。
 - WebView2 使用多进程架构，打开复杂页面时内存占用会明显高于纯 Avalonia 界面。
 
 ## 安全声明

@@ -74,14 +74,18 @@ public sealed class AgentRuntimeExtensionsTests : IDisposable
     }
 
     [Fact]
-    public void Todo_checklist_survives_until_the_next_turn_then_clears()
+    public void Todo_begin_turn_drops_completed_and_keeps_open_items()
     {
         var registry = new AgentTodoRegistry();
-        registry.Write(JsonDocument.Parse("""{"todos":[{"content":"step one"}]}""").RootElement.Clone());
-        Assert.Single(registry.Current);
+        registry.Write(JsonDocument.Parse(
+            """{"todos":[{"content":"step one","status":"pending"},{"content":"step two","status":"completed"}]}""")
+            .RootElement.Clone());
+        Assert.Equal(2, registry.Current.Count);
 
         registry.BeginTurn();
-        Assert.Empty(registry.Current);
+        Assert.Single(registry.Current);
+        Assert.Equal("step one", registry.Current[0].Content);
+        Assert.Equal(AgentTodoStatus.Pending, registry.Current[0].Status);
     }
 
     [Fact]

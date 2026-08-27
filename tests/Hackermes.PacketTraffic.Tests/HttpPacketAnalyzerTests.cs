@@ -1,4 +1,5 @@
 using Hackermes.Automation.Packet;
+using System;
 using System.Linq;
 using System.Text;
 using Xunit;
@@ -57,6 +58,48 @@ public sealed class HttpPacketAnalyzerTests
         Assert.Contains("body:client_secret", formAnalysis.SensitiveFields);
         Assert.Contains(formAnalysis.Findings, x => x.Code == "plaintext-secret" && x.Severity == PacketFindingSeverity.High);
         Assert.Contains("body:access_token", jsonAnalysis.SensitiveFields);
+    }
+
+    [Fact]
+    public void Analyze_reports_response_security_header_and_cookie_observation_codes()
+    {
+        var packet = HttpPacketCodec.Parse(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nSet-Cookie: session=secret-token; Path=/\r\n\r\n")
+            with { Target = "https://example.test/" };
+
+        var analysis = HttpPacketAnalyzer.Analyze(packet);
+        var codes = analysis.Findings.Select(item => item.Code).ToArray();
+
+        Assert.Contains("missing-csp", codes);
+        Assert.Contains("missing-hsts", codes);
+        Assert.Contains("missing-xcto", codes);
+        Assert.Contains("missing-frame-protection", codes);
+        Assert.Contains("cookie-missing-secure", codes);
+        Assert.Contains("cookie-missing-httponly", codes);
+        Assert.DoesNotContain(analysis.Findings, item =>
+            item.Message.Contains("secret-token", StringComparison.Ordinal) ||
+            item.Message.Contains("session=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Analyze_classifies_csp_tokens_without_echoing_the_policy()
+    {
+        var packet = HttpPacketCodec.Parse(
+            "HTTP/1.1 200 OK\r\nContent-Security-Policy: default-src *; script-src 'unsafe-inline' 'unsafe-eval'\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nStrict-Transport-Security: max-age=1\r\n\r\n")
+            with { Target = "https://example.test/" };
+
+        var analysis = HttpPacketAnalyzer.Analyze(packet);
+        var codes = analysis.Findings.Select(item => item.Code).ToArray();
+
+        Assert.Contains("csp-unsafe-inline", codes);
+        Assert.Contains("csp-unsafe-eval", codes);
+        Assert.Contains("csp-wildcard-src", codes);
+        Assert.DoesNotContain("missing-csp", codes);
+        Assert.DoesNotContain("missing-hsts", codes);
+        Assert.DoesNotContain("missing-xcto", codes);
+        Assert.DoesNotContain("missing-frame-protection", codes);
+        Assert.DoesNotContain(analysis.Findings, item =>
+            item.Message.Contains("default-src", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -65,7 +65,7 @@ public sealed class PageSecuritySnapshotService(
         var networkMetadata = network.ReadSecurityMetadata(pageId, before.Url);
         var safeUrl = SanitizeUrl(before.Url);
         var origin = ReadOrigin(before.Url);
-        return new PageSecuritySnapshot(
+        var snapshot = new PageSecuritySnapshot(
             pageId,
             safeUrl,
             origin,
@@ -90,6 +90,7 @@ public sealed class PageSecuritySnapshotService(
                 networkMetadata.HasCrossOriginResourcePolicy,
                 networkMetadata.Cookies),
             NormalizeDom(dom));
+        return snapshot with { Observations = PageSecurityObservations.From(snapshot.Transport, snapshot.Dom) };
     }
 
     private static PageSecurityDomSnapshot NormalizeDom(DomResult dom)

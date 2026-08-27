@@ -146,6 +146,8 @@ public partial class AiChatViewModel : ViewModelBase
     private readonly AcpContextRegistry? _acpRegistry;
     private readonly AgentTodoRegistry? _todos;
     private readonly AgentGoalRegistry _goals;
+    private readonly AgentEvidenceLedger _evidence = new();
+    private readonly IReadOnlyList<IAgentPreStepHook> _extraHooks;
     private readonly IAppLogger? _logger;
     private readonly AcpAutoCompactor _autoCompactor;
     private readonly AgentEventLogStore? _eventLogStore;
@@ -176,7 +178,8 @@ public partial class AiChatViewModel : ViewModelBase
         AcpContextRegistry? acpRegistry = null,
         IAppLogger? logger = null,
         AgentTodoRegistry? todos = null,
-        AgentGoalRegistry? goals = null)
+        AgentGoalRegistry? goals = null,
+        IEnumerable<IAgentPreStepHook>? extraHooks = null)
     {
         _client = client;
         _tools = tools;
@@ -189,6 +192,7 @@ public partial class AiChatViewModel : ViewModelBase
         _acpRegistry = acpRegistry;
         _todos = todos;
         _goals = goals ?? new AgentGoalRegistry();
+        _extraHooks = extraHooks?.ToArray() ?? [];
         // Created lazily per event so runtime toggles of ai.sessionEvents take effect
         // without an app restart; a write failure surfaces once, then pauses persistence.
         var settingsDirectory = Path.GetDirectoryName(settings.SettingsFilePath);
@@ -309,9 +313,7 @@ public partial class AiChatViewModel : ViewModelBase
     private CompactionPrefix? ProvideCompactionPrefix()
     {
         var ai = _settings.Load().Ai;
-        var system = AgentContextCompactor.BuildSystemMessage(
-            new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes },
-            _skills.Snapshot(), ai);
+        var system = AgentContextCompactor.BuildStableSystemMessage(ai);
         return new CompactionPrefix(system, AvailableTools());
     }
 
@@ -335,6 +337,8 @@ public partial class AiChatViewModel : ViewModelBase
                 AutoCompactor = _autoCompactor,
                 TurnStarting = _todos is null ? null : () => _todos.BeginTurn(),
                 Goals = _goals,
+                Evidence = _evidence,
+                PreStepHooks = [new EvidenceLedgerPreStepHook(_evidence), .. _extraHooks],
             },
             _logger,
             eventLogProvider: () => _settings.Load().Ai.SessionEventsEnabled ? _eventLogStore : null);
@@ -353,13 +357,15 @@ public partial class AiChatViewModel : ViewModelBase
         _summary = string.Empty;
         ResetAcpStore();
         _goals.Clear();
-        _todos?.BeginTurn(); // clears the previous checklist
+        _todos?.Clear();
+        _evidence.Clear();
         CreateRunner();
         Messages.Clear();
         Todos.Clear();
         TodoSummary = null;
         Error = null;
         TokenUsage = null;
+        ContextUsage = null;
         SessionPromptTokens = 0;
         SessionCompletionTokens = 0;
         _sessionId = Guid.NewGuid().ToString("N");
@@ -404,7 +410,9 @@ public partial class AiChatViewModel : ViewModelBase
         _summary = string.Empty;
         ResetAcpStore();
         _goals.Clear();
-        _todos?.BeginTurn();
+        _todos?.Clear();
+        _evidence.Clear();
+        ContextUsage = null;
         CreateRunner();
         Messages.Clear();
         Todos.Clear();
@@ -588,6 +596,7 @@ public partial class AiChatViewModel : ViewModelBase
                 if (_openToolCalls.Remove(completed.CallId, out var entry))
                     entry.Line.Complete(completed.Success,
                         FormatToolDetail(completed.Name, entry.Arguments, completed.Content));
+                RefreshContextUsage();
                 break;
 
             case UsageRecorded usage:
@@ -612,6 +621,7 @@ public partial class AiChatViewModel : ViewModelBase
                     $"{AcpContextStore.FormatSize(compacted.ReclaimedChars)} 字符；可用 context_search 检索归档内容。";
                 if (!string.IsNullOrEmpty(compacted.Warning)) compactedText += "\n⚠️ " + compacted.Warning;
                 Messages.Add(new AiChatLine("assistant", compactedText, "自动压缩"));
+                RefreshContextUsage();
                 break;
 
             case TurnEnded ended:
@@ -637,6 +647,7 @@ public partial class AiChatViewModel : ViewModelBase
                 }
                 if (ended.Reason is AgentTurnEndReason.Completed or AgentTurnEndReason.LengthCapped)
                     MaybeAutoNameSession();
+                RefreshContextUsage();
                 break;
         }
     }
@@ -746,7 +757,12 @@ public partial class AiChatViewModel : ViewModelBase
 
         // Workflow management remains available so an Agent can repair a restrictive workflow,
         // but any mutation still travels through the shared policy gate.
-        string[] control = ["agent_skill_list", "agent_skill_upsert", "agent_skill_remove", "agent_memory_read", "agent_memory_write", "agent_memory_clear"];
+        string[] control =
+        [
+            "agent_skill_list", "agent_skill_upsert", "agent_skill_remove",
+            "agent_memory_read", "agent_memory_write", "agent_memory_clear",
+            "todo_write", "goal_set", "goal_clear", "read_spill", "agent_subtask"
+        ];
         foreach (var tool in control) listed.Add(tool);
         // ACP context management must stay reachable even under restrictive workflows —
         // it is the session's only mechanism for reclaiming context.
@@ -856,8 +872,9 @@ public partial class AiChatViewModel : ViewModelBase
                 : content => (content?.Length ?? 0) + AcpContextStore.LegacyEntryOverheadChars;
             _acp = new AcpContextStore(() => AgentContextCompactor.BuildSystemMessage(
                 new AgentMemoryDocument { Summary = _summary, Notes = _memory.Load().Notes },
-                _skills.Snapshot(), _settings.Load().Ai), budget, estimate);
+                _skills.Snapshot(), _settings.Load().Ai, AvailableTools()), budget, estimate);
         }
+        _acp.RequestOverhead = _acp.EstimateOverhead(null, AvailableTools());
         _acpRegistry.Current = _acp;
         return _acp;
     }
@@ -980,6 +997,12 @@ public partial class AiChatViewModel : ViewModelBase
         {
             return json;
         }
+    }
+
+    private void RefreshContextUsage()
+    {
+        try { ContextUsage = _runner.Strategy?.DescribeUsage(_settings.Load().Ai); }
+        catch { /* status bar must not break transcript projection */ }
     }
 
     private static string Shorten(string value, int max)

@@ -101,6 +101,17 @@ public sealed class AiPanelModule : IModule
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         new AgentSpillToolAdapter(serviceProvider.GetRequiredService<IAgentSpillStore>())
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        var settingsService = serviceProvider.GetRequiredService<ISettingsService>();
+        var toolRegistry = serviceProvider.GetRequiredService<IAiToolRegistry>();
+        var skills = serviceProvider.GetRequiredService<IAgentSkillStore>();
+        new AgentSubtaskToolAdapter(
+            serviceProvider.GetRequiredService<IOpenAiChatClient>(),
+            serviceProvider.GetRequiredService<AiToolDispatcher>(),
+            () => settingsService.Load().Ai,
+            () => toolRegistry.All,
+            () => settingsService.Load().Ai.Model,
+            serviceProvider.GetRequiredService<IAppLogger>())
+            .RegisterAll(toolRegistry);
         _ = serviceProvider.GetRequiredService<McpToolAdapter>().InitializeAsync(aiSettings);
 
         var dock = serviceProvider.GetRequiredService<IDockLayoutRegistry>();
@@ -137,7 +148,8 @@ public sealed class AiPanelModule : IModule
                         serviceProvider.GetRequiredService<AcpContextRegistry>(),
                         serviceProvider.GetRequiredService<IAppLogger>(),
                         serviceProvider.GetRequiredService<AgentTodoRegistry>(),
-                        serviceProvider.GetRequiredService<AgentGoalRegistry>())
+                        serviceProvider.GetRequiredService<AgentGoalRegistry>(),
+                        serviceProvider.GetServices<IAgentPreStepHook>())
                     {
                         Model = aiSettings.Model
                     }

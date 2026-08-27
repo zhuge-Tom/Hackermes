@@ -246,9 +246,12 @@ public sealed class CommandRegistry
                     new ActionDescriptor { Kind = ActionKind.Screenshot, Origin = ActionOrigin.Repl },
                     ct).ConfigureAwait(false);
 
-                return result.Success
-                    ? CommandResult.Ok($"截图成功({result.Value?.Length ?? 0} 字节 base64)")
-                    : CommandResult.Fail(result.Error ?? "截图失败");
+                if (!result.Success)
+                    return CommandResult.Fail(result.Error ?? "截图失败");
+                var payload = result.Value;
+                if (payload is { Length: > 1_200_000 })
+                    return CommandResult.Ok($"截图成功但过大（{payload.Length} 字节 base64），未附加图像；请缩小视口后重试。");
+                return new CommandResult(true, $"截图成功({payload?.Length ?? 0} 字节 base64)", "image/png", payload);
             }
         });
 

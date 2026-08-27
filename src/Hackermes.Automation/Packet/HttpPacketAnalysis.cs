@@ -69,6 +69,8 @@ public static partial class HttpPacketAnalyzer
                 packet.Headers.First(h => h.Value.Contains("\r", StringComparison.Ordinal) || h.Value.Contains("\n", StringComparison.Ordinal)).Name));
         if (sensitive.Count > 0)
             findings.Add(new PacketFinding(PacketFindingSeverity.Info, "sensitive-data", $"Detected {sensitive.Count} sensitive field(s); redact before sharing.", "packet") { Side = side });
+        if (packet.Kind == HttpPacketKind.Response)
+            AddResponseSecurityObservations(packet, findings, side);
         return new PacketAnalysis(findings, sensitive.Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
@@ -90,6 +92,60 @@ public static partial class HttpPacketAnalyzer
             if (!string.Equals(a, b, StringComparison.Ordinal)) result.Add(new(location, a, b));
         }
     }
+
+    private static void AddResponseSecurityObservations(HttpPacket packet, List<PacketFinding> findings, PacketFindingSide side)
+    {
+        var cspValues = packet.HeaderValues("Content-Security-Policy").ToArray();
+        if (cspValues.Length == 0)
+            findings.Add(AtHeader(PacketFindingSeverity.Warning, "missing-csp",
+                "The response has no Content-Security-Policy header.", side, "Content-Security-Policy"));
+        else
+        {
+            var tokens = string.Join(';', cspValues).Split([' ', '\t', '\r', '\n', ';'], StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Contains("'unsafe-inline'", StringComparer.OrdinalIgnoreCase))
+                findings.Add(AtHeader(PacketFindingSeverity.Warning, "csp-unsafe-inline",
+                    "The Content-Security-Policy allows unsafe-inline.", side, "Content-Security-Policy"));
+            if (tokens.Contains("'unsafe-eval'", StringComparer.OrdinalIgnoreCase))
+                findings.Add(AtHeader(PacketFindingSeverity.Warning, "csp-unsafe-eval",
+                    "The Content-Security-Policy allows unsafe-eval.", side, "Content-Security-Policy"));
+            if (tokens.Contains("*", StringComparer.Ordinal))
+                findings.Add(AtHeader(PacketFindingSeverity.Warning, "csp-wildcard-src",
+                    "The Content-Security-Policy includes a wildcard source.", side, "Content-Security-Policy"));
+        }
+
+        if (!packet.HeaderValues("X-Content-Type-Options").Any())
+            findings.Add(AtHeader(PacketFindingSeverity.Info, "missing-xcto",
+                "The response has no X-Content-Type-Options header.", side, "X-Content-Type-Options"));
+
+        var hasFrameAncestors = cspValues.Any(value => value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(directive => directive.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+            .Any(name => name is not null && name.Equals("frame-ancestors", StringComparison.OrdinalIgnoreCase)));
+        if (!packet.HeaderValues("X-Frame-Options").Any() && !hasFrameAncestors)
+            findings.Add(AtHeader(PacketFindingSeverity.Warning, "missing-frame-protection",
+                "The response has no frame protection.", side, "X-Frame-Options"));
+
+        if (!packet.HeaderValues("Strict-Transport-Security").Any() && IsHttpsTarget(packet))
+            findings.Add(AtHeader(PacketFindingSeverity.Warning, "missing-hsts",
+                "The response has no Strict-Transport-Security header.", side, "Strict-Transport-Security"));
+
+        var cookieIndex = 0;
+        foreach (var setCookie in packet.HeaderValues("Set-Cookie"))
+        {
+            var occurrence = cookieIndex++;
+            var attributes = setCookie.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1).ToArray();
+            if (!attributes.Any(attribute => string.Equals(attribute, "secure", StringComparison.OrdinalIgnoreCase)))
+                findings.Add(AtHeader(PacketFindingSeverity.Warning, "cookie-missing-secure",
+                    "A Set-Cookie header is missing the Secure attribute.", side, "Set-Cookie", occurrence));
+            if (!attributes.Any(attribute => string.Equals(attribute, "httponly", StringComparison.OrdinalIgnoreCase)))
+                findings.Add(AtHeader(PacketFindingSeverity.Warning, "cookie-missing-httponly",
+                    "A Set-Cookie header is missing the HttpOnly attribute.", side, "Set-Cookie", occurrence));
+        }
+    }
+
+    private static bool IsHttpsTarget(HttpPacket packet) =>
+        packet.Target is { Length: > 0 } target &&
+        Uri.TryCreate(target, UriKind.Absolute, out var uri) &&
+        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSensitive(string name) => SensitiveNames.Any(s =>
         name.Equals(s, StringComparison.OrdinalIgnoreCase) || name.EndsWith("_" + s, StringComparison.OrdinalIgnoreCase));

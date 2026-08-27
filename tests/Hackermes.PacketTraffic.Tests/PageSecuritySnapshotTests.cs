@@ -7,6 +7,7 @@ using Hackermes.Inspector.Services;
 using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -78,6 +79,72 @@ public sealed class PageSecuritySnapshotTests
         Assert.DoesNotContain("#", snapshot.Url, StringComparison.Ordinal);
         Assert.All(snapshot.Dom.Forms, form => Assert.DoesNotContain("?", form.Action, StringComparison.Ordinal));
         Assert.All(snapshot.Dom.ExternalScripts, script => Assert.DoesNotContain("?", script.Source, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Snapshot_emits_value_free_observation_codes()
+    {
+        var pages = new FakePages(new(
+            "page-obs", "https://selected.test/app?token=super-secret#fragment", "App", true, true));
+        var runtime = new FakeRuntime("page-obs", DomResult(new
+        {
+            formCount = 1,
+            forms = new object[]
+            {
+                new
+                {
+                    method = "post",
+                    action = "https://other.test/submit?token=super-secret",
+                    isCrossOrigin = true,
+                    inputCount = 2,
+                    passwordInputCount = 0,
+                    autocompleteDisabled = false
+                }
+            },
+            externalScriptCount = 1,
+            inlineScriptCount = 0,
+            externalScripts = new object[]
+            {
+                new
+                {
+                    source = "https://cdn.test/app.js?access_token=super-secret",
+                    origin = "https://cdn.test",
+                    isCrossOrigin = true,
+                    hasIntegrity = false,
+                    crossOriginMode = "anonymous"
+                }
+            },
+            passwordInputCount = 0,
+            hiddenInputCount = 0,
+            mixedContentResourceCount = 2
+        }));
+        var network = new FakeNetwork(new NetworkSecurityMetadata(
+            true, 200, false, false, false, [], false, false, false,
+            false, false, false, false, false, false, false,
+            new PageSecurityCookieSummary(2, 0, 1, 0, 0, 0, 0)));
+        var service = new PageSecuritySnapshotService(pages, runtime, network);
+
+        var snapshot = await service.ReadAsync("page-obs");
+        var codes = snapshot.Observations.Select(item => item.Code).ToArray();
+        var json = JsonSerializer.Serialize(snapshot);
+
+        Assert.Contains("missing-hsts", codes);
+        Assert.Contains("missing-csp", codes);
+        Assert.Contains("missing-xcto", codes);
+        Assert.Contains("missing-frame-protection", codes);
+        Assert.Contains("cookie-missing-secure", codes);
+        Assert.Contains("cookie-missing-httponly", codes);
+        Assert.Contains("mixed-content", codes);
+        Assert.Contains("cross-origin-form", codes);
+        Assert.Contains("script-missing-integrity", codes);
+        Assert.DoesNotContain("super-secret", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("access_token", json, StringComparison.Ordinal);
+        Assert.All(snapshot.Observations, item =>
+        {
+            Assert.DoesNotContain("?", item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("super-secret", item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("access_token", item.Message, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -191,13 +258,13 @@ public sealed class PageSecuritySnapshotTests
         }
     }
 
-    private sealed class FakeNetwork : INetworkSecurityMetadataQueryService
+    private sealed class FakeNetwork(NetworkSecurityMetadata? metadata = null) : INetworkSecurityMetadataQueryService
     {
         public string? PageId { get; private set; }
         public NetworkSecurityMetadata ReadSecurityMetadata(string pageId, string documentUrl)
         {
             PageId = pageId;
-            return NetworkSecurityMetadata.Empty;
+            return metadata ?? NetworkSecurityMetadata.Empty;
         }
     }
 

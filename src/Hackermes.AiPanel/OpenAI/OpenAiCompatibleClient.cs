@@ -118,7 +118,7 @@ public sealed class OpenAiCompatibleClient : IOpenAiChatClient
             model = request.Model,
             messages = request.Messages.Select(m => new
             {
-                role = m.Role, content = m.Content, name = m.Name, tool_call_id = m.ToolCallId,
+                role = m.Role, content = SerializeContent(m), name = m.Name, tool_call_id = m.ToolCallId,
                 tool_calls = m.ToolCalls?.Select(call => new
                 {
                     id = call.Id, type = "function",
@@ -258,6 +258,21 @@ public sealed class OpenAiCompatibleClient : IOpenAiChatClient
         if (response.Headers.RetryAfter?.Delta is { } hint && hint > delay)
             return hint > MaxRetryDelay ? MaxRetryDelay : hint;
         return delay;
+    }
+
+    private static object? SerializeContent(ChatMessage message)
+    {
+        if (message.Images is not { Count: > 0 }) return message.Content;
+        var parts = new List<object>();
+        if (!string.IsNullOrEmpty(message.Content))
+            parts.Add(new { type = "text", text = message.Content });
+        foreach (var image in message.Images)
+        {
+            if (string.IsNullOrEmpty(image.Base64)) continue;
+            var mime = string.IsNullOrWhiteSpace(image.MimeType) ? "image/png" : image.MimeType;
+            parts.Add(new { type = "image_url", image_url = new { url = $"data:{mime};base64,{image.Base64}" } });
+        }
+        return parts.Count == 0 ? message.Content : parts;
     }
 
     private static StreamUsage ReadUsage(JsonElement usage) => new(

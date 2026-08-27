@@ -10,7 +10,7 @@ param(
     [switch]$SkipLoopback,
     [switch]$SkipVisual,
     [switch]$SkipPackaging,
-    [string]$Version = '0.9.0'
+    [string]$Version = '0.11.0'
 )
 
 $ErrorActionPreference = 'Stop'

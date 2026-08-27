@@ -236,7 +236,7 @@ public sealed class AiSettings
     /// never trigger confirmation dialogs, so pooling them cannot stack approval modals.
     /// </summary>
     [JsonPropertyName("maxParallelReadOnlyTools")]
-    public int MaxParallelReadOnlyTools { get; set; } = 1;
+    public int MaxParallelReadOnlyTools { get; set; } = 4;
 
     /// <summary>
     /// Automatic ACP context compaction trigger as a ratio of MaxContextCharacters

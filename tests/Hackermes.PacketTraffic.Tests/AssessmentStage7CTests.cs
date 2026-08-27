@@ -114,11 +114,11 @@ public sealed class AssessmentStage7CTests : IDisposable
     public async Task Evidence_finding_review_and_reports_share_one_audited_job()
     {
         var plane = CreatePlane();
-        var job = await RunEchoAsync(plane, "warning from bounded simulation");
+        var job = await RunEchoAsync(plane, "bounded simulation output");
         var evidence = Assert.Single(plane.Evidence(job.Id));
 
         Assert.True(plane.VerifyEvidence(evidence.Id).Valid);
-        var generated = Assert.Single(plane.Findings(job.Id));
+        Assert.Empty(plane.Findings(job.Id));
         var finding = plane.CreateFinding(job.Id, evidence.Id, "Observed behavior", "Needs human review", "High", "Medium", "analyst");
         var reviewed = plane.ReviewFinding(finding.Id, AssessmentFindingStatus.Confirmed, "reviewer-1", "Reproduced in loopback evidence.");
 
@@ -129,8 +129,7 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.Contains("Observed behavior", plane.ExportReport(job.Id, "json"));
         Assert.Contains("# Hackermes authorized assessment report", plane.ExportReport(job.Id, "markdown"));
         Assert.Contains("<!doctype html>", plane.ExportReport(job.Id, "html"));
-        Assert.Equal(2, plane.Findings(job.Id).Count);
-        Assert.Equal(AssessmentFindingStatus.Unreviewed.ToString(), generated.Status);
+        Assert.Equal(AssessmentFindingStatus.Confirmed.ToString(), Assert.Single(plane.Findings(job.Id)).Status);
     }
 
     [Fact]
@@ -352,8 +351,14 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.True(result.Success, result.Content);
         Assert.Equal(0, confirmation.Count);
         Assert.Equal(["example.com"], Assert.Single(plane.Scopes).Targets);
-        Assert.Equal(AssessmentJobStatus.Completed, Assert.Single(plane.Jobs).Status);
-        Assert.Equal("one-call-evidence", Assert.Single(plane.Evidence(Assert.Single(plane.Jobs).Id)).Content);
+        var job = Assert.Single(plane.Jobs);
+        Assert.Equal(AssessmentJobStatus.Completed, job.Status);
+        var stored = Assert.Single(plane.Evidence(job.Id));
+        Assert.Equal("one-call-evidence", stored.Content);
+        using var json = JsonDocument.Parse(result.Content);
+        var evidence = json.RootElement.GetProperty("Evidence");
+        Assert.True(evidence.GetArrayLength() >= 1);
+        Assert.Contains(evidence.EnumerateArray(), item => item.GetProperty("Id").GetString() == stored.Id);
     }
 
     [Fact]
@@ -377,7 +382,55 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.True(result.Success, result.Content);
         Assert.Equal(0, confirmation.Count);
         Assert.Equal(["127.0.0.1"], Assert.Single(plane.Scopes).Targets);
-        Assert.Equal("explicit-target-evidence", Assert.Single(plane.Evidence(Assert.Single(plane.Jobs).Id)).Content);
+        var job = Assert.Single(plane.Jobs);
+        var stored = Assert.Single(plane.Evidence(job.Id));
+        Assert.Equal("explicit-target-evidence", stored.Content);
+        using var json = JsonDocument.Parse(result.Content);
+        var evidence = json.RootElement.GetProperty("Evidence");
+        Assert.True(evidence.GetArrayLength() >= 1);
+        Assert.Contains(evidence.EnumerateArray(), item => item.GetProperty("Id").GetString() == stored.Id);
+    }
+
+    [Fact]
+    public void Observation_finding_can_be_recorded_without_a_toolhost_job()
+    {
+        var plane = CreatePlane();
+        var evidence = plane.AttachObservation("page-snapshot",
+            """[{"code":"missing-hsts","severity":"Warning","message":"No HSTS"}]""", "analyst");
+        var finding = plane.CreateFinding(evidence.JobId, evidence.Id, "Missing HSTS", "from snapshot",
+            "Medium", "Low", "analyst");
+
+        Assert.Equal("page-snapshot", evidence.Source);
+        Assert.Equal(AssessmentFindingStatus.Unreviewed.ToString(), finding.Status);
+        Assert.Equal(evidence.Id, finding.EvidenceId);
+        Assert.Equal(["observation.local"], plane.Scopes.Single(scope => scope.Id == plane.Jobs.Single(job => job.Id == evidence.JobId).ScopeId).Targets);
+    }
+
+    [Fact]
+    public async Task Agent_can_create_finding_from_page_snapshot_observation()
+    {
+        var plane = CreatePlane();
+        var registry = new AiToolRegistry();
+        AssessmentIntegrationModule.RegisterAgent(registry, plane);
+        var result = await InvokeAgent(registry, "assessment_create_finding", new
+        {
+            source = "page-snapshot",
+            observation = """{"code":"missing-csp","severity":"Warning","message":"No CSP"}""",
+            title = "Missing CSP", description = "snapshot code", severity = "Medium", confidence = "Low"
+        });
+
+        Assert.True(result.Success, result.Content);
+        var finding = Assert.Single(plane.Findings(plane.Jobs.Single().Id));
+        Assert.Equal("Missing CSP", finding.Title);
+        Assert.Equal("page-snapshot", plane.Evidence(finding.JobId).Single().Source);
+    }
+
+    [Fact]
+    public async Task Warning_substring_does_not_auto_create_a_simulation_finding()
+    {
+        var plane = CreatePlane();
+        var job = await RunEchoAsync(plane, "warning: simulated");
+        Assert.Empty(plane.Findings(job.Id));
     }
 
     [Fact]

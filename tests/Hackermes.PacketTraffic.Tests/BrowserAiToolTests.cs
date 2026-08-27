@@ -44,6 +44,92 @@ public sealed class BrowserAiToolTests
     }
 
     [Fact]
+    public void Identity_and_signing_keys_are_not_projected()
+    {
+        var commands = CreateCommands();
+        commands.Register(new CommandDefinition
+        {
+            Name = "identity",
+            Summary = "operator identity CLI",
+            Usage = "identity list",
+            IsMutating = true,
+            Handler = (_, _) => Task.FromResult(CommandResult.Ok())
+        });
+        commands.Register(new CommandDefinition
+        {
+            Name = "signing-keys",
+            Summary = "signing key CLI",
+            Usage = "signing-keys list",
+            IsMutating = true,
+            Handler = (_, _) => Task.FromResult(CommandResult.Ok())
+        });
+
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(commands).RegisterAll(tools);
+
+        Assert.DoesNotContain(tools.All, tool => tool.Name == "page_identity");
+        Assert.DoesNotContain(tools.All, tool => tool.Name == "page_signing_keys");
+    }
+
+    [Fact]
+    public void Core_browser_tools_expose_typed_input_schemas()
+    {
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(CreateCommands()).RegisterAll(tools);
+
+        var navigate = tools.All.Single(tool => tool.Name == "page_navigate");
+        var click = tools.All.Single(tool => tool.Name == "page_click");
+
+        Assert.True(navigate.InputSchema.GetProperty("properties").TryGetProperty("url", out var url));
+        Assert.Equal("string", url.GetProperty("type").GetString());
+        Assert.Contains("url", RequiredNames(navigate.InputSchema));
+        Assert.True(click.InputSchema.GetProperty("properties").TryGetProperty("selector", out var selector));
+        Assert.Equal("string", selector.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Page_eval_read_is_readonly_and_shares_the_eval_handler()
+    {
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(CreateCommands()).RegisterAll(tools);
+        var write = tools.All.Single(tool => tool.Name == "page_eval");
+        var read = tools.All.Single(tool => tool.Name == "page_eval_read");
+        Assert.Equal(AiToolRisk.Mutating, write.Risk);
+        Assert.Equal(AiToolRisk.ReadOnly, read.Risk);
+        Assert.Equal(write.InputSchema.GetRawText(), read.InputSchema.GetRawText());
+    }
+
+    [Fact]
+    public async Task Page_navigate_typed_url_is_forwarded_to_open()
+    {
+        var commands = CreateCommands();
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(commands).RegisterAll(tools);
+
+        string? received = null;
+        commands.Register(new CommandDefinition
+        {
+            Name = "open",
+            Summary = "导航到指定地址",
+            Usage = "open <url>",
+            IsMutating = true,
+            Handler = (context, _) =>
+            {
+                received = context.RawInput;
+                return Task.FromResult(CommandResult.Ok());
+            }
+        });
+
+        var tool = tools.All.Single(candidate => candidate.Name == "page_navigate");
+        var result = await tool.Handler(
+            new ToolInvocation(tool.Name, JsonSerializer.SerializeToElement(new { url = "https://typed.test/" }), "page-selected"),
+            default);
+
+        Assert.True(result.Success);
+        Assert.Equal("open https://typed.test/", received);
+    }
+
+    [Fact]
     public async Task Browser_command_tools_forward_selected_page_and_classify_writes()
     {
         var commands = CreateCommands();
@@ -206,6 +292,11 @@ public sealed class BrowserAiToolTests
     }
 
     private static JsonElement EmptyArguments() => JsonSerializer.SerializeToElement(new { });
+
+    private static string[] RequiredNames(JsonElement schema) =>
+        schema.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString() ?? string.Empty)
+            .ToArray();
 
     private sealed class RecordingConsoleQuery : IConsoleQueryService
     {

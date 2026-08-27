@@ -14,8 +14,8 @@ public sealed record AgentTodoItem(string Content, AgentTodoStatus Status);
 
 /// <summary>
 /// Holds the model-authored task checklist. Deliberately session-transient like dsh's
-/// todo/write: the list survives until the next turn starts, giving the model a compact
-/// durable plan instead of re-narrating tasks in messages.
+/// todo/write: incomplete items survive the next turn; completed items drop, giving the
+/// model a compact durable plan instead of re-narrating tasks in messages.
 /// </summary>
 public sealed class AgentTodoRegistry
 {
@@ -32,16 +32,26 @@ public sealed class AgentTodoRegistry
         get { lock (_gate) return _items.ToArray(); }
     }
 
-    /// <summary>dsh semantics: a finished checklist stays visible until the next turn begins.</summary>
+    /// <summary>Drops completed items; pending and in-progress items survive into the next turn.</summary>
     public void BeginTurn()
     {
-        List<AgentTodoItem> before;
         lock (_gate)
         {
-            before = _items;
+            var kept = _items.FindAll(item => item.Status is not AgentTodoStatus.Completed);
+            if (kept.Count == _items.Count) return;
+            _items = kept;
+        }
+        Publish();
+    }
+
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            if (_items.Count == 0) return;
             _items = [];
         }
-        if (before.Count > 0) Publish();
+        Publish();
     }
 
     /// <summary>Validates and replaces the whole list. Returns a model-facing result.</summary>

@@ -437,24 +437,62 @@ internal static class TrafficAiToolRegistrar
         }));
     }
 
-    private static JsonElement CreateSchema(string name, string primary, bool required) =>
-        JsonSerializer.SerializeToElement(new
+    private static JsonElement CreateSchema(string name, string primary, bool required)
+    {
+        var properties = new Dictionary<string, object>(StringComparer.Ordinal);
+        switch (name)
+        {
+            case "packet_list":
+                properties["filter"] = new { type = "string" };
+                break;
+            case "packet_show":
+            case "packet_parameters":
+            case "packet_edit_draft":
+                properties["id"] = new { type = "string" };
+                properties["side"] = SideEnum();
+                break;
+            case "packet_diff":
+                properties["leftId"] = new { type = "string" };
+                properties["rightId"] = new { type = "string" };
+                properties["side"] = SideEnum();
+                break;
+            case "packet_audit":
+                properties["packetId"] = new { type = "string" };
+                properties["limit"] = new { type = "integer", minimum = 1, maximum = 500, description = "Maximum audit entries returned." };
+                break;
+            case "packet_replay":
+            case "packet_continue":
+            case "packet_drop":
+            case "packet_edit_discard":
+                properties["id"] = new { type = "string" };
+                if (name == "packet_edit_discard") properties["side"] = SideEnum();
+                break;
+            case "packet_intercept":
+                properties["enabled"] = new { type = "boolean" };
+                break;
+            case "packet_intercept_mode":
+                properties["mode"] = new { type = "string", @enum = new[] { "request", "response", "both", "off" } };
+                break;
+            case "packet_edit":
+                properties["id"] = new { type = "string" };
+                properties["side"] = SideEnum();
+                properties["rawHttp"] = new { type = "string" };
+                break;
+            default:
+                properties[primary] = new { type = "string" };
+                break;
+        }
+
+        return JsonSerializer.SerializeToElement(new
         {
             type = "object",
-            properties = new
-            {
-                id = new { type = "string" }, leftId = new { type = "string" }, rightId = new { type = "string" },
-                side = new { type = "string", @enum = new[] { "request", "response" } },
-                filter = new { type = "string" }, enabled = new { type = "boolean" }, rawHttp = new { type = "string" },
-                location = new { type = "string", @enum = new[] { "query", "form", "json", "header", "cookie", "multipart" } },
-                name = new { type = "string" }, occurrence = new { type = "integer", minimum = 0 }, value = new { type = "string" },
-                mode = new { type = "string", @enum = new[] { "request", "response", "both", "off" } },
-                packetId = new { type = "string" },
-                limit = new { type = "integer", minimum = 1, maximum = 500, description = "Maximum audit entries returned." }
-            },
+            properties,
             required = required ? RequiredFields(name, primary) : Array.Empty<string>(),
             additionalProperties = false
         });
+    }
+
+    private static object SideEnum() => new { type = "string", @enum = new[] { "request", "response" } };
 
     private static string[] RequiredFields(string name, string primary) => name switch
     {

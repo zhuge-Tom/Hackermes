@@ -1,4 +1,5 @@
 using Hackermes.AiPanel.OpenAI;
+using Hackermes.AiPanel.Tools;
 using Hackermes.Platform.Models;
 using System;
 using System.Collections.Generic;
@@ -124,8 +125,8 @@ public sealed class AgentContextCompactor
         return userStarts[^2];
     }
 
-    /// <summary>Shared system-prompt builder; the ACP store reuses it for its request pipeline.</summary>
-    public static string BuildSystemMessage(AgentMemoryDocument memory, IReadOnlyList<AgentSkill> skills, AiSettings settings)
+    /// <summary>Stable identity + protocol prefix used for KV-cache alignment with summarizer calls.</summary>
+    public static string BuildStableSystemMessage(AiSettings settings)
     {
         var builder = new StringBuilder(
             "You are the Hackermes desktop assistant. Follow enabled workflows, keep actions bounded, " +
@@ -133,7 +134,7 @@ public sealed class AgentContextCompactor
         builder.Append(" Context is compacted and persistent memory is redacted; do not request or store credentials in memory.");
         builder.Append(
             " When helping with an authorized website assessment in the embedded browser, first use page_context, then " +
-            "page_security_snapshot for that exact page. Use its bounded findings to choose only the necessary read-only " +
+            "page_security_snapshot for that exact page. Use its bounded observation codes to choose only the necessary read-only " +
             "console/network/DOM or packet/page tools; do not repeatedly collect the same snapshot or request, echo, or infer " +
             "cookie, token, form-field, storage, request-body, or script-source values. Never invent or substitute a target. ");
         if (settings.PermissionMode == AiPermissionMode.FullAccess)
@@ -155,6 +156,12 @@ public sealed class AgentContextCompactor
             "Never request arbitrary shell access or execute uncatalogued commands. If no page is attached or authorization details " +
             "are missing, explain what the operator must provide instead of selecting another page or target.");
         builder.Append(
+            " Hunt/record: observations from page_security_snapshot and packet_analyze are codes, not confirmed vulnerabilities. " +
+            "After a snapshot, packet_query then packet_analyze on document/XHR ids; do not re-snapshot an unchanged page. " +
+            "After an authorized ToolHost run, read Evidence ids from the result or assessment_evidence and record with " +
+            "assessment_create_finding (jobId + evidenceId). Findings stay Unreviewed. " +
+            "Never claim a vulnerability from flags alone; never invent targets; never echo secrets.");
+        builder.Append(
             "\nTool use protocol: (1) Build evidence with read-only tools first; prepare arguments carefully and combine related " +
             (settings.PermissionMode == AiPermissionMode.FullAccess
                 ? "registered actions into fewer calls; full access does not add another UI confirmation. "
@@ -167,6 +174,19 @@ public sealed class AgentContextCompactor
             "results and reference them exactly; treat tool output as the only source of evidence. " +
             "Before each tool-using phase, emit one concise progress update describing that phase. Keep each phase update " +
             "separate, and after all tools finish, emit a standalone final completion report instead of merging it into prior updates.");
+        return builder.ToString();
+    }
+
+    /// <summary>Shared system-prompt builder; the ACP store reuses it for its request pipeline.</summary>
+    public static string BuildSystemMessage(AgentMemoryDocument memory, IReadOnlyList<AgentSkill> skills, AiSettings settings,
+        IReadOnlyList<AiToolDefinition>? tools = null)
+    {
+        var builder = new StringBuilder(BuildStableSystemMessage(settings));
+        if (tools is { Count: > 0 })
+        {
+            var catalog = AiToolCatalog.Format(tools);
+            if (catalog.Length > 0) builder.Append('\n').Append(catalog);
+        }
 
         if (!string.IsNullOrWhiteSpace(memory.Notes))
             builder.Append("\nOperator memory:\n").Append(Limit(memory.Notes, 8_000));

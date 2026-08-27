@@ -1,3 +1,4 @@
+using Hackermes.AiPanel.Runtime;
 using Hackermes.AiPanel.Tools;
 using Hackermes.Assessment;
 using Hackermes.Automation.Commands;
@@ -38,6 +39,7 @@ public sealed class AssessmentIntegrationModule : IModule
                 serviceProvider.GetRequiredService<IAssessmentReportTrustPolicy>()));
         services.AddSingleton<ToolLaunchService>();
         services.AddSingleton<ToolCatalogService>();
+        services.AddSingleton<IAgentPreStepHook, AssessmentContextPreStepHook>();
     }
 
     public void Initialize(IServiceProvider serviceProvider)
@@ -224,7 +226,8 @@ public sealed class AssessmentIntegrationModule : IModule
         }
         registry.Register(new AiToolDefinition("assessment_authorize_and_run",
             "Create the exact scope, fixed plan and one-time approval, then run one bounded adapter in a single call. " +
-            "When a browser page is attached, target is derived from that page; otherwise target is required.", Schema(new
+            "When a browser page is attached, target is derived from that page; otherwise target is required. " +
+            "The result includes Evidence ids for assessment_create_finding.", Schema(new
             {
                 name = new { type = "string" }, authorization = new { type = "string" },
                 operatorId = new { type = "string" }, target = new { type = "string" },
@@ -237,13 +240,20 @@ public sealed class AssessmentIntegrationModule : IModule
                 ? null
                 : (call, _) => ValueTask.FromResult(string.IsNullOrWhiteSpace(call.PageId)
                     ? call
-                    : PrepareScopeFromPage(pageContexts, call))));
+                    : PrepareScopeFromPage(pageContexts, call)),
+            Timeout: TimeSpan.FromSeconds(600)));
         registry.Register(new AiToolDefinition("assessment_create_plan", "Create a bounded plan using a registered ToolHost adapter.", Schema(new { scopeId = new { type = "string" }, name = new { type = "string" }, adapterId = new { type = "string" }, input = new { type = "string", description = "Structured JSON; arbitrary commands are rejected." }, timeoutSeconds = new { type = "integer" } }), AiToolRisk.Mutating,
             (call, _) => ValueTask.FromResult(CreatePlan(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_approve", "Request an approval grant for an unchanged assessment plan.", Schema(new { planId = new { type = "string" }, operatorId = new { type = "string" }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
             (call, _) => ValueTask.FromResult(Approve(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_run", "Run an approved local simulation plan and return its job status.", Schema(new { planId = new { type = "string" }, approvalId = new { type = "string" }, operatorId = new { type = "string" } }), AiToolRisk.Dangerous,
-            (call, token) => RunAsync(plane, call.Arguments, token)));
+            (call, token) => RunAsync(plane, call.Arguments, token), Timeout: TimeSpan.FromSeconds(600)));
+        registry.Register(new AiToolDefinition("assessment_jobs", "List assessment jobs and their status.", Schema(new { }), AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(Try(() => plane.Jobs))));
+        registry.Register(new AiToolDefinition("assessment_job_status", "Read one assessment job by id.", Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+            (call, _) => ValueTask.FromResult(JobStatus(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_cancel", "Cancel a queued or running assessment job.", Schema(new { jobId = new { type = "string" }, reason = new { type = "string" } }), AiToolRisk.Mutating,
+            (call, _) => ValueTask.FromResult(CancelJob(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_report", "Read the redacted JSON, Markdown or HTML report for an assessment job.", Schema(new
         {
             jobId = new { type = "string" }, format = new { type = "string", @enum = new[] { "json", "markdown", "html" } }
@@ -255,12 +265,18 @@ public sealed class AssessmentIntegrationModule : IModule
             (call, _) => ValueTask.FromResult(Try(() => plane.VerifyEvidence(Text(call.Arguments, "evidenceId"))))));
         registry.Register(new AiToolDefinition("assessment_findings", "List findings and human-review state for one assessment job.", Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
             (call, _) => ValueTask.FromResult(Try(() => plane.Findings(Text(call.Arguments, "jobId"))))));
-        registry.Register(new AiToolDefinition("assessment_create_finding", "Create a bounded finding linked to existing evidence; it remains unreviewed.", Schema(new
-        {
-            jobId = new { type = "string" }, evidenceId = new { type = "string" }, title = new { type = "string" },
-            description = new { type = "string" }, severity = new { type = "string", @enum = new[] { "Critical", "High", "Medium", "Low", "Info" } },
-            confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } }
-        }), AiToolRisk.Mutating, (call, _) => ValueTask.FromResult(CreateFinding(plane, call.Arguments))));
+        registry.Register(new AiToolDefinition("assessment_create_finding",
+            "Record an Unreviewed finding. Prefer jobId + evidenceId from a ToolHost run. " +
+            "For page_security_snapshot or packet_analyze codes, set source to page-snapshot or packet-analyze and pass observation JSON (code/severity/message only).",
+            Schema(new
+            {
+                jobId = new { type = "string" }, evidenceId = new { type = "string" }, title = new { type = "string" },
+                description = new { type = "string" },
+                source = new { type = "string", @enum = new[] { "page-snapshot", "packet-analyze" } },
+                observation = new { type = "string", description = "Bounded observation JSON or codes; no secrets." },
+                severity = new { type = "string", @enum = new[] { "Critical", "High", "Medium", "Low", "Info" } },
+                confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } }
+            }), AiToolRisk.Mutating, (call, _) => ValueTask.FromResult(CreateFinding(plane, call.Arguments))));
         registry.Register(new AiToolDefinition("assessment_review_finding", "Record an attributed review decision for a finding.", Schema(new
         {
             findingId = new { type = "string" }, status = new { type = "string", @enum = Enum.GetNames<AssessmentFindingStatus>() },
@@ -404,7 +420,16 @@ public sealed class AssessmentIntegrationModule : IModule
             var approval = plane.Approve(plan.Id, actor,
                 DateTimeOffset.UtcNow.AddMinutes(Math.Min(scopeMinutes, 1_440)));
             var job = await plane.StartAsync(plan.Id, approval.Id, actor, ct).ConfigureAwait(false);
-            return ToolResult.Ok(JsonSerializer.Serialize(new { Scope = scope, Plan = plan, Approval = approval, Job = job }));
+            var evidence = plane.Evidence(job.Id);
+            return ToolResult.Ok(JsonSerializer.Serialize(new
+            {
+                Scope = scope, Plan = plan, Approval = approval, Job = job,
+                Evidence = evidence.Select(item => new
+                {
+                    item.Id, item.Source, item.Sha256, item.ContentType,
+                    Preview = item.Content.Length <= 800 ? item.Content : item.Content[..800] + "…"
+                }).ToArray()
+            }));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -430,9 +455,32 @@ public sealed class AssessmentIntegrationModule : IModule
     private static ToolResult Approve(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.Approve(Text(args, "planId"), Text(args, "operatorId"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 30))));
     private static async ValueTask<ToolResult> RunAsync(IAssessmentControlPlane plane, JsonElement args, System.Threading.CancellationToken ct) { try { var job = await plane.StartAsync(Text(args, "planId"), Text(args, "approvalId"), Text(args, "operatorId"), ct).ConfigureAwait(false); return ToolResult.Ok(JsonSerializer.Serialize(job)); } catch (Exception ex) { return ToolResult.Fail(ex.Message); } }
     private static ToolResult ReadReport(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.ExportReport(Text(args, "jobId"), Text(args, "format") is { Length: > 0 } format ? format : "json"));
-    private static ToolResult CreateFinding(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateFinding(
-        Text(args, "jobId"), Text(args, "evidenceId"), Text(args, "title"), Text(args, "description"),
-        Text(args, "severity"), Text(args, "confidence"), "agent"));
+    private static ToolResult CreateFinding(IAssessmentControlPlane plane, JsonElement args) => Try(() =>
+    {
+        var evidenceId = Text(args, "evidenceId");
+        var jobId = Text(args, "jobId");
+        if (evidenceId.Length == 0)
+        {
+            var evidence = plane.AttachObservation(Text(args, "source"), Text(args, "observation"), "agent",
+                jobId.Length == 0 ? null : jobId);
+            jobId = evidence.JobId;
+            evidenceId = evidence.Id;
+        }
+        return plane.CreateFinding(jobId, evidenceId, Text(args, "title"), Text(args, "description"),
+            Text(args, "severity"), Text(args, "confidence"), "agent");
+    });
+    private static ToolResult JobStatus(IAssessmentControlPlane plane, JsonElement args)
+    {
+        var jobId = Text(args, "jobId");
+        var job = plane.Jobs.FirstOrDefault(value => string.Equals(value.Id, jobId, StringComparison.Ordinal));
+        return job is null ? ToolResult.Fail("Job not found.") : ToolResult.Ok(JsonSerializer.Serialize(job));
+    }
+    private static ToolResult CancelJob(IAssessmentControlPlane plane, JsonElement args)
+    {
+        var reason = Text(args, "reason");
+        var cancelled = plane.Cancel(Text(args, "jobId"), "agent", reason.Length == 0 ? "operator-requested" : reason);
+        return cancelled ? ToolResult.Ok("cancelled") : ToolResult.Fail("Job could not be cancelled.");
+    }
     private static ToolResult ReviewFinding(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.ReviewFinding(
         Text(args, "findingId"), Enum.Parse<AssessmentFindingStatus>(Text(args, "status"), true),
         Text(args, "reviewer"), Text(args, "note")));

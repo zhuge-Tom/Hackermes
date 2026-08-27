@@ -95,6 +95,7 @@ public interface IAssessmentControlPlane
     IReadOnlyList<AssessmentFinding> Findings(string jobId);
     AssessmentFinding CreateFinding(string jobId, string evidenceId, string title, string description,
         string severity, string confidence, string actor);
+    AssessmentEvidence AttachObservation(string source, string content, string actor, string? jobId = null);
     AssessmentFinding ReviewFinding(string findingId, AssessmentFindingStatus status, string actor, string note);
     AssessmentEvidenceVerification VerifyEvidence(string evidenceId);
     IReadOnlyList<AssessmentAuditEntry> Audit(int limit = 100);
@@ -466,11 +467,73 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         {
             var evidence = new AssessmentEvidence(Id(), jobId, DateTimeOffset.UtcNow, source, safe, Hash(safe));
             _document.Evidence.Add(evidence);
-            if (safe.Contains("warning", StringComparison.OrdinalIgnoreCase))
-                _document.Findings.Add(new AssessmentFinding(Id(), jobId, evidence.Id, "Simulation warning", "Info", AssessmentFindingStatus.Unreviewed.ToString(), DateTimeOffset.UtcNow));
+            foreach (var observation in ReconObservationParser.Parse(source, safe).Take(8))
+            {
+                _document.Findings.Add(new AssessmentFinding(
+                    Id(), jobId, evidence.Id, Limit(observation.Title, 160),
+                    NormalizeSeverity(observation.Severity), AssessmentFindingStatus.Unreviewed.ToString(),
+                    DateTimeOffset.UtcNow, Limit(observation.Message, 4000), "Low"));
+            }
             AuditUnsafe("system", "evidence.append", evidence.Id, $"job={jobId};sha256={evidence.Sha256}"); SaveUnsafe();
         }
     }
+
+    public AssessmentEvidence AttachObservation(string source, string content, string actor, string? jobId = null)
+    {
+        if (string.IsNullOrWhiteSpace(actor)) throw new ArgumentException("Actor is required.");
+        if (!IsObservationSource(source))
+            throw new ArgumentException("Observation source must be page-snapshot or packet-analyze.");
+        var safe = Limit(content, 8_192);
+        if (safe.Length == 0) throw new ArgumentException("Observation content is required.");
+        lock (_gate)
+        {
+            var job = string.IsNullOrWhiteSpace(jobId)
+                ? EnsureObservationJobUnsafe(actor)
+                : _document.Jobs.SingleOrDefault(value => value.Id == jobId)
+                    ?? throw new InvalidOperationException("Job not found.");
+            var evidence = new AssessmentEvidence(Id(), job.Id, DateTimeOffset.UtcNow, source.Trim(), safe, Hash(safe));
+            _document.Evidence.Add(evidence);
+            AuditUnsafe(actor, "evidence.observe", evidence.Id, $"job={job.Id};source={evidence.Source}");
+            SaveUnsafe();
+            return evidence;
+        }
+    }
+
+    private AssessmentJob EnsureObservationJobUnsafe(string actor)
+    {
+        const string observationName = "Passive observations";
+        foreach (var existing in _document.Jobs)
+        {
+            var plan = _document.Plans.FirstOrDefault(value => value.Id == existing.PlanId);
+            var scope = Scope(existing.ScopeId);
+            if (plan?.Name == observationName &&
+                string.Equals(existing.RequestedBy, actor, StringComparison.Ordinal) &&
+                scope is { Revoked: false })
+                return existing;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var scopeNew = new AssessmentScope(Id(), observationName, "passive-observation", Limit(actor, 120),
+            ["observation.local"], now, now.AddDays(7));
+        var step = new AssessmentStep(AuthorizedToolCatalog.SimulationEcho, "passive-observation", 1);
+        var hash = Hash(scopeNew.Id + "\n" + observationName + "\n" +
+                        $"{step.AdapterId}|{step.Input}|{step.TimeoutSeconds}|{step.MaxOutputBytes}|{step.ContinueOnError}");
+        var planNew = new AssessmentPlan(Id(), scopeNew.Id, observationName, [step], Limit(actor, 120), now, hash);
+        var approval = new AssessmentApproval(Id(), planNew.Id, planNew.VersionHash, Limit(actor, 120), now.AddDays(7),
+            ConsumedAt: now);
+        var job = new AssessmentJob(Id(), scopeNew.Id, planNew.Id, approval.Id, AssessmentJobStatus.Completed,
+            Limit(actor, 120), now, now, now);
+        _document.Scopes.Add(scopeNew);
+        _document.Plans.Add(planNew);
+        _document.Approvals.Add(approval);
+        _document.Jobs.Add(job);
+        AuditUnsafe(actor, "job.observe", job.Id, observationName);
+        return job;
+    }
+
+    private static bool IsObservationSource(string source) =>
+        source.Equals("page-snapshot", StringComparison.OrdinalIgnoreCase) ||
+        source.Equals("packet-analyze", StringComparison.OrdinalIgnoreCase);
 
     private AssessmentScope? Scope(string id) => _document.Scopes.SingleOrDefault(value => value.Id == id);
     private AssessmentPlan? Plan(string id) => _document.Plans.SingleOrDefault(value => value.Id == id);

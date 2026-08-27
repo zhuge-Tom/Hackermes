@@ -30,6 +30,8 @@ public interface IAgentContextStrategy
     void OnAssistant(string? content) { }
     void OnAssistantToolCalls(string? content, IReadOnlyList<AssistantToolCall> toolCalls) { }
     void OnToolResult(string callId, string content, string? toolName) { }
+    void OnToolResult(string callId, string content, string? toolName, IReadOnlyList<ChatImage>? images) =>
+        OnToolResult(callId, content, toolName);
 
     /// <summary>Optional one-line usage status for the chat status bar.</summary>
     string? DescribeUsage(AiSettings settings) => null;
@@ -69,6 +71,9 @@ public sealed class AcpContextStrategy : IAgentContextStrategy
         Store.AppendAssistantToolCalls(content, toolCalls);
     public void OnToolResult(string callId, string content, string? toolName) =>
         Store.AppendToolResult(callId, content, toolName);
+
+    public void OnToolResult(string callId, string content, string? toolName, IReadOnlyList<ChatImage>? images) =>
+        Store.AppendToolResult(callId, content, toolName, images);
     public string? DescribeUsage(AiSettings settings) =>
         Store.UsageLine(AcpContextStore.EffectiveBudget(settings));
 }
@@ -95,6 +100,9 @@ public sealed class AgentTurnRunnerOptions
 
     /// <summary>Pre-step interception waterfall, evaluated in order before every model call.</summary>
     public IReadOnlyList<IAgentPreStepHook> PreStepHooks { get; set; } = [];
+
+    /// <summary>Sidecar evidence that survives compaction; observed on every tool commit.</summary>
+    public AgentEvidenceLedger? Evidence { get; set; }
 }
 
 /// <summary>
@@ -412,7 +420,7 @@ public sealed class AgentTurnRunner
 
         // Retry loop: only clean failures (nothing streamed yet) restart the request, so a
         // partially rendered answer is never duplicated — mirrors dsh's assembler contract.
-        // Transient shapes retry with backoff; context overflow gets ONE recovery attempt
+        // Transient shapes retry with backoff; context overflow gets up to 3 recovery attempts
         // (forced compaction, or head-trim on the legacy strategy); terminal failures end
         // the turn immediately.
         StringBuilder content = new();
@@ -460,12 +468,12 @@ public sealed class AgentTurnRunner
                 throw;
             }
             catch (Exception ex) when (!receivedAnything &&
-                                       overflowRetries < 1 &&
+                                       overflowRetries < 3 &&
                                        AgentRequestError.IsContextOverflow(ex))
             {
-                // dsh compaction-basic overflow path: force one useful reduction and rebuild
-                // the request against it. ACP recovers through the compactor; the legacy
-                // strategy trims its oldest completed turn instead.
+                // dsh compaction-basic overflow path: force a useful reduction and rebuild
+                // the request against it (up to 3 times). ACP recovers through the
+                // compactor; the legacy strategy trims its oldest completed turn instead.
                 overflowRetries++;
                 var recovered = _options.AutoCompactor is { } autoCompactor
                     ? await autoCompactor.CompactNowAsync(ct).ConfigureAwait(true)
@@ -670,8 +678,9 @@ public sealed class AgentTurnRunner
 
         void Commit(AssistantToolCall call, ToolResult result)
         {
-            History.Add(new ChatMessage("tool", result.Content, ToolCallId: call.Id));
-            strategy.OnToolResult(call.Id, result.Content, call.Name);
+            History.Add(new ChatMessage("tool", result.Content, ToolCallId: call.Id, Images: result.Images));
+            strategy.OnToolResult(call.Id, result.Content, call.Name, result.Images);
+            _options.Evidence?.Observe(call.Name, result.Content, result.Success);
             Emit(AgentEventKind.ToolResult, turn, step,
                 new ToolCallCompleted(call.Id, call.Name, result.Success, result.Content));
             committed.Add(call.Id);

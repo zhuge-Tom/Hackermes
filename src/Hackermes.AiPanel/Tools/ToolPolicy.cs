@@ -196,6 +196,14 @@ public sealed class AiToolDispatcher
             }
         }
 
+        if (invocation.Arguments.ValueKind != JsonValueKind.Object)
+            return ToolResult.Fail("工具参数必须是 JSON 对象，且包含 schema 声明的必填字段。");
+
+        var inputViolation = ToolOutputValidator.Validate(invocation.Arguments.GetRawText(), tool.InputSchema);
+        if (inputViolation is not null && !AcceptsLegacyArguments(invocation.Arguments, inputViolation))
+            return ToolResult.Fail(
+                $"工具 '{tool.Name}' 参数不符合模式：{inputViolation} 请按 schema 补齐必填字段后重试，不要改用未声明的参数名。");
+
         var grantKey = CreateGrantKey(invocation, tool.Name);
         var now = _timeProvider.GetUtcNow();
         var hasGrant = grantKey is { } key
@@ -238,7 +246,10 @@ public sealed class AiToolDispatcher
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(_toolCallTimeout);
+        var timeout = tool.Timeout is { } requested && requested > TimeSpan.Zero
+            ? TimeSpan.FromSeconds(Math.Clamp(requested.TotalSeconds, 5, 3_600))
+            : _toolCallTimeout;
+        timeoutCts.CancelAfter(timeout);
         ToolResult result;
         try
         {
@@ -247,7 +258,7 @@ public sealed class AiToolDispatcher
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             result = ToolResult.Fail(
-                $"工具 '{invocation.ToolName}' 超过 {_toolCallTimeout.TotalSeconds:0} 秒未完成，已按超时取消。" +
+                $"工具 '{invocation.ToolName}' 超过 {timeout.TotalSeconds:0} 秒未完成，已按超时取消。" +
                 " 可把步骤拆小（缩小过滤/分页/缩短等待）后重试。");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -373,6 +384,12 @@ public sealed class AiToolDispatcher
         foreach (var key in _sessionGrants.Keys)
             if (string.Equals(key.Session, sessionId, StringComparison.Ordinal)) _sessionGrants.TryRemove(key, out _);
     }
+
+    private static bool AcceptsLegacyArguments(JsonElement arguments, string violation) =>
+        violation.Contains("缺少必填属性", StringComparison.Ordinal) &&
+        arguments.TryGetProperty("arguments", out var legacy) &&
+        legacy.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(legacy.GetString());
 
     private static SessionGrantKey? CreateGrantKey(ToolInvocation invocation, string toolName)
     {
