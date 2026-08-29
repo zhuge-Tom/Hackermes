@@ -76,28 +76,31 @@ function Copy-PackageFiles {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'src\Hackermes.App\Assets\hackermes-icon.png') -Destination $assetDirectory
 }
 
-function Copy-ToolDirectory {
-    param([string]$ToolsSource, [string]$ToolsDestination, [string]$Name)
-    $source = Join-Path $ToolsSource $Name
-    if (Test-Path -LiteralPath $source -PathType Container) {
-        Copy-Item -LiteralPath $source -Destination (Join-Path $ToolsDestination $Name) -Recurse -Force
-    }
-}
-
 function Stage-Tools {
     param([string]$AppDirectory, [bool]$IncludeWindowsRuntime)
     $source = Join-Path $projectRoot 'third_party\tools'
     if (-not (Test-Path -LiteralPath (Join-Path $source 'manifest.json') -PathType Leaf)) { return }
     $destination = Join-Path $AppDirectory 'tools'
+
+    # Mirror build-hackermes.ps1: stage the full bundled tool tree, not a
+    # hard-coded subset.  The catalog resolves application-relative entries and
+    # _runtime (python / javafx / java11) directly from tools/; omitting any
+    # manifest tool silently drops it from releases.
+    $resolvedSource = [IO.Path]::GetFullPath($source)
+    foreach ($directory in Get-ChildItem -LiteralPath $source -Directory -Force) {
+        $resolvedDirectory = [IO.Path]::GetFullPath($directory.FullName)
+        if (-not $resolvedDirectory.StartsWith(
+            $resolvedSource + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to stage a tool directory outside the source tree: $resolvedDirectory"
+        }
+    }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $source 'manifest.json') -Destination $destination
-    if ($IncludeWindowsRuntime) {
-        Copy-ToolDirectory $source $destination '_runtime'
-        Copy-ToolDirectory $source $destination 'recon.nmap.terminal'
-    }
-    foreach ($name in @('recon.dirsearch.terminal', 'detect.wafw00f.terminal', 'exploit.xss-fuzzer.terminal', 'exploit.sqlmap.terminal')) {
-        Copy-ToolDirectory $source $destination $name
-    }
+    # -LiteralPath would not expand the '*' wildcard on Windows PowerShell 5.1,
+    # silently staging an empty tools directory.  -Path expands wildcards while
+    # this source path contains no characters that need escaping.
+    Copy-Item -Path (Join-Path $source '*') -Destination $destination -Recurse -Force
+
     # Installer binaries copied into the original xssFuzz folder are not used
     # by its Python entry point and are intentionally excluded from releases.
     $unusedXssWindows = Join-Path $destination 'exploit.xss-fuzzer.terminal\windows'
