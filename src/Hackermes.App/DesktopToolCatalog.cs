@@ -434,17 +434,36 @@ public static class DesktopToolCatalog
         }
         else if (toolId == "gui.hikvision")
         {
-            // HikvisionExploitGUI 是 Java 8 + ClassFinal 加密 jar：
-            // 1) 必须 -javaagent 指向自身解密类文件
-            // 2) 必须 Java 8 运行时（解密后的字节码没有 StackMapTable，Java 9+ 拒绝加载）
-            var java8 = FindJava8Runtime();
-            if (java8 is null)
+            // HikvisionExploitGUI 是 ClassFinal 加密 jar，内嵌的 JavaFX 类按 Java 11
+            // 编译（class version 55.0）：Java 8 加载不了内嵌 JavaFX，必须走与
+            // 老 ControlsFX 工具相同的 Java 11 + JavaFX 11 legacy 栈；
+            // -javaagent 指向自身在加载期解密。
+            var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools");
+            var legacyJava = Path.Combine(toolsDir, "_runtime", "java11", "bin", "java.exe");
+            var legacyFxLib = Path.Combine(toolsDir, "_runtime", "javafx11", "lib");
+            if (!File.Exists(legacyJava))
             {
-                unavailableReason = "需要 Java 8 运行时（未在常见安装路径找到）。";
+                unavailableReason = "需要内置 Java 11 运行时（tools/_runtime/java11）。";
                 return false;
             }
-            java = java8;
-            arguments = [$"-javaagent:{jarPath}", "-jar", jarPath];
+            if (!Directory.Exists(legacyFxLib))
+            {
+                unavailableReason = "缺少内置 JavaFX 11 模块（tools/_runtime/javafx11/lib）。";
+                return false;
+            }
+            java = legacyJava;
+            arguments =
+            [
+                "--module-path", legacyFxLib,
+                "--add-modules", "javafx.controls,javafx.fxml,javafx.web",
+                "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+                "--add-opens", "javafx.base/com.sun.javafx.runtime=ALL-UNNAMED",
+                "--add-opens", "javafx.controls/com.sun.javafx.scene.control=ALL-UNNAMED",
+                "--add-opens", "javafx.graphics/com.sun.javafx.scene=ALL-UNNAMED",
+                "--add-opens", "javafx.graphics/com.sun.javafx.stage=ALL-UNNAMED",
+                $"-javaagent:{jarPath}",
+                "-jar", jarPath
+            ];
         }
         else
         {
@@ -479,53 +498,6 @@ public static class DesktopToolCatalog
                 .FirstOrDefault(File.Exists);
             if (found is not null) return found;
         }
-        return null;
-    }
-
-    /// <summary>
-    /// 查找 Java 8 运行时：ClassFinal 加密的老工具（如 HikvisionExploitGUI）只能在
-    /// Java 8 上运行，因为它们引用了 JavaFX 8 独有的内部类。
-    /// </summary>
-    internal static string? FindJava8Runtime()
-    {
-        var candidates = new List<string>();
-        foreach (var root in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
-        {
-            var javaRoot = Path.Combine(Environment.GetFolderPath(root), "Java");
-            if (!Directory.Exists(javaRoot)) continue;
-            foreach (var dir in Directory.GetDirectories(javaRoot, "*1.8*").OrderByDescending(d => d))
-                candidates.Add(Path.Combine(dir, "bin", "java.exe"));
-            foreach (var dir in Directory.GetDirectories(javaRoot, "jre8*").OrderByDescending(d => d))
-                candidates.Add(Path.Combine(dir, "bin", "java.exe"));
-        }
-        // Oracle javapath 也可能有 Java 8（如果它是默认版本）
-        var common = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), "Oracle", "Java", "javapath");
-        if (Directory.Exists(common))
-        {
-            var javapathJava = Path.Combine(common, "java.exe");
-            if (File.Exists(javapathJava))
-            {
-                try
-                {
-                    var start = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = javapathJava, Arguments = "-version", UseShellExecute = false,
-                        RedirectStandardError = true, CreateNoWindow = true
-                    };
-                    using var p = System.Diagnostics.Process.Start(start);
-                    if (p is not null)
-                    {
-                        var output = p.StandardError.ReadToEnd();
-                        p.WaitForExit(3000);
-                        if (output.Contains("\"1.8.")) return javapathJava;
-                    }
-                }
-                catch { }
-            }
-        }
-        foreach (var candidate in candidates)
-            if (File.Exists(candidate)) return candidate;
         return null;
     }
 
