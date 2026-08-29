@@ -200,6 +200,8 @@ public sealed class DesktopToolCatalogTests
             @"gui.decrypt-tools.terminal\DecryptTools.jar",
             @"gui.mdat.terminal\Multiple.Database.Utilization.Tools-2.1.1-jar-with-dependencies.jar",
             @"gui.api-tool.terminal\API-T00L_v1.2.jar",
+            @"_runtime\java11\bin\java.exe",
+            @"_runtime\javafx11\lib\javafx-base-11.0.2-win.jar",
             @"_runtime\javafx\lib\javafx-base-21.0.5-win.jar"
         };
         try

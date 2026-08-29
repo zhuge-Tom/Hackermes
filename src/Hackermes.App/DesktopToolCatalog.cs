@@ -251,7 +251,8 @@ public static class DesktopToolCatalog
         DesktopToolKind? Kind = null,
         bool RequiresPython = false,
         bool RequiresJava21 = false,
-        bool RequiresJavaFx = false);
+        bool RequiresJavaFx = false,
+        bool LegacyJavaFx = false);
 
     private static readonly IReadOnlyDictionary<string, BundledDescriptor> BundledTools =
         new Dictionary<string, BundledDescriptor>(StringComparer.Ordinal)
@@ -279,13 +280,13 @@ public static class DesktopToolCatalog
             ["detect.nacos.terminal"] = new("detect.nacos.terminal/nacos_probe.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
             ["exploit.fastjson-payload.terminal"] = new("exploit.fastjson-payload.terminal/FastjsonExploit-0.1-beta2-all.jar", Kind: DesktopToolKind.TeachingTerminal),
             ["probe.cloud-aksk.terminal"] = new("probe.cloud-aksk.terminal/cf.exe", Kind: DesktopToolKind.TeachingTerminal),
-            ["gui.shiro-exploit"] = new("gui.shiro-exploit.terminal/ShiroExploit.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
+            ["gui.shiro-exploit"] = new("gui.shiro-exploit.terminal/ShiroExploit.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true, LegacyJavaFx: true),
             ["gui.struts2-check"] = new("gui.struts2-check.terminal/Struts2_19.21.jar", Kind: DesktopToolKind.Gui),
             ["gui.thinkphp"] = new("gui.thinkphp.terminal/ThinkPHP.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.tomcat-pass"] = new("gui.tomcat-pass.terminal/TomcatPass.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.nacos-exploit"] = new("gui.nacos-exploit.terminal/NacosExploitGUI_v4.0.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.xxl-job"] = new("gui.xxl-job.terminal/xxl-jobExploitGUI_v1.0.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
-            ["gui.jenkins-exploit"] = new("gui.jenkins-exploit.terminal/JenkinsExploit-GUI-1.3-SNAPSHOT.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
+            ["gui.jenkins-exploit"] = new("gui.jenkins-exploit.terminal/JenkinsExploit-GUI-1.3-SNAPSHOT.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true, LegacyJavaFx: true),
             ["gui.tongda-oa"] = new("gui.tongda-oa.terminal/TongdaOATool_V1.3.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.frchannel"] = new("gui.frchannel.terminal/FrChannelPlus.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.hikvision"] = new("gui.hikvision.terminal/HikvisionExploitGUI_v3.0.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
@@ -337,6 +338,14 @@ public static class DesktopToolCatalog
             available = available && java is not null && Directory.Exists(fxLib);
             unavailableReason = available ? null : "尚未找到 Java 运行时或内置 JavaFX 模块（_runtime/javafx/lib）";
         }
+        if (descriptor.LegacyJavaFx)
+        {
+            // 老工具专用栈：内置 Java 11 JRE + JavaFX 11 模块，与 21 栈完全隔离。
+            var legacyJava = Path.Combine(root, "_runtime", "java11", "bin", "java.exe");
+            var legacyFx = Path.Combine(root, "_runtime", "javafx11", "lib");
+            available = available && File.Exists(legacyJava) && Directory.Exists(legacyFx);
+            unavailableReason = available ? null : "需要内置 Java 11 运行时（_runtime/java11）与 JavaFX 11 模块（_runtime/javafx11/lib）";
+        }
         return tool with
         {
             Kind = descriptor.Kind ?? tool.Kind,
@@ -381,8 +390,28 @@ public static class DesktopToolCatalog
         workingDirectory = Path.GetDirectoryName(jarPath);
         if (descriptor.RequiresJavaFx)
         {
-            var fxLib = Path.Combine(AppContext.BaseDirectory, "tools", "_runtime", "javafx", "lib");
-            if (!Directory.Exists(fxLib))
+            // 双运行时隔离：老 ControlsFX 工具跑在独立的 Java 11 + JavaFX 11 栈上，
+            // 其余走当前栈；两个环境的模块目录完全分开，不混用。
+            var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools");
+            var fxLib = Path.Combine(toolsDir, "_runtime", "javafx", "lib");
+            if (descriptor.LegacyJavaFx)
+            {
+                var legacyJava = Path.Combine(toolsDir, "_runtime", "java11", "bin", "java.exe");
+                var legacyFxLib = Path.Combine(toolsDir, "_runtime", "javafx11", "lib");
+                if (!File.Exists(legacyJava))
+                {
+                    unavailableReason = "需要内置 Java 11 运行时（tools/_runtime/java11）。";
+                    return false;
+                }
+                if (!Directory.Exists(legacyFxLib))
+                {
+                    unavailableReason = "缺少内置 JavaFX 11 模块（tools/_runtime/javafx11/lib）。";
+                    return false;
+                }
+                java = legacyJava;
+                fxLib = legacyFxLib;
+            }
+            else if (!Directory.Exists(fxLib))
             {
                 unavailableReason = "内置 JavaFX 模块缺失（tools/_runtime/javafx/lib）。";
                 return false;
@@ -395,6 +424,11 @@ public static class DesktopToolCatalog
                 "--add-opens", "java.base/java.util=ALL-UNNAMED",
                 "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
                 "--add-opens", "java.desktop/java.awt=ALL-UNNAMED",
+                "--add-opens", "java.xml/com.sun.org.apache.xalan.internal.xsltc.runtime=ALL-UNNAMED",
+                "--add-opens", "javafx.base/com.sun.javafx.runtime=ALL-UNNAMED",
+                "--add-opens", "javafx.controls/com.sun.javafx.scene.control=ALL-UNNAMED",
+                "--add-opens", "javafx.graphics/com.sun.javafx.scene=ALL-UNNAMED",
+                "--add-opens", "javafx.graphics/com.sun.javafx.stage=ALL-UNNAMED",
                 "-jar", jarPath
             ];
         }

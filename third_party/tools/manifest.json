@@ -13,6 +13,20 @@
       "source": "Maven Central org.openjfx platform jars (base/graphics/controls/fxml/media/web)",
       "license": "GPL-2.0-with-classpath-exception",
       "notes": "Module path for bundled JavaFX GUI tools; requires a Java 21 runtime on PATH."
+    },
+    "legacyJava": {
+      "id": "temurin-jre-11.0.32.1-win",
+      "path": "_runtime/java11",
+      "source": "https://github.com/adoptium/temurin11-binaries (downloaded at packaging time; binaries not in git)",
+      "license": "GPL-2.0-with-classpath-exception",
+      "notes": "隔离运行时：老 ControlsFX 工具（gui.shiro-exploit/gui.jenkins-exploit 等需 LegacyJavaFx 的条目）专用，与 Java 21 栈完全不混用。"
+    },
+    "legacyJavaFx": {
+      "id": "openjfx-11.0.2-win",
+      "path": "_runtime/javafx11/lib",
+      "source": "Maven Central org.openjfx platform jars 11.0.2 (base/graphics/controls/fxml/media/web)",
+      "license": "GPL-2.0-with-classpath-exception",
+      "notes": "JavaFX 11 模块仅配 Java 11 使用，服务 LegacyJavaFx 工具。"
     }
   },
   "tools": [
