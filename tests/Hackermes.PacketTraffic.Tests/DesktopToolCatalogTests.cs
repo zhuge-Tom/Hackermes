@@ -233,6 +233,40 @@ public sealed class DesktopToolCatalogTests
     }
 
     [Fact]
+    public void BundledGuiLaunchResolvesJavaAndJavaFxArguments()
+    {
+        // 回归：BundledTools 条目缺 Kind 时启动器会静默回退（0.12.0 实测事故）。
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-guilaunch-" + System.Guid.NewGuid().ToString("N"));
+        var files = new[]
+        {
+            @"gui.tomcat-pass.terminal\TomcatPass.jar",
+            @"gui.struts2-check.terminal\Struts2_19.21.jar",
+            @"_runtime\javafx\lib\javafx-base-21.0.5-win.jar"
+        };
+        try
+        {
+            foreach (var relative in files)
+            {
+                var path = Path.Combine(root, relative.Replace('\\', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, [0x4D, 0x5A]);
+            }
+
+            var tools = DesktopToolCatalog.Describe(new SecurityToolsSettings
+            {
+                PrimaryToolRoot = Path.Combine(root, "missing-primary"),
+                SecondaryToolRoot = Path.Combine(root, "missing-secondary")
+            }, root);
+
+            var fx = Assert.Single(tools, tool => tool.Id == "gui.tomcat-pass");
+            Assert.True(fx.Available, $"{fx.Id}: {fx.UnavailableReason}");
+            var swing = Assert.Single(tools, tool => tool.Id == "gui.struts2-check");
+            Assert.True(swing.Available, $"{swing.Id}: {swing.UnavailableReason}");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void BasicCodecConverters_AreBuiltInAndNeverRequireExternalPaths()
     {
         var tools = DesktopToolCatalog.Describe(new SecurityToolsSettings
