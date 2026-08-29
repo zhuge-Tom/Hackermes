@@ -70,8 +70,8 @@ public sealed class AuthorizedToolsView : UserControl
         _launcher = launcher;
         _catalog = catalog;
         _eventBus = eventBus;
-        _categoryExpansion = new Dictionary<string, bool>(
-            _settings.Load().SecurityTools.ToolCategoryExpansion ?? [], StringComparer.Ordinal);
+        // 启动时全部收拢：不加载上次会话的展开状态，用户点开后当次会话内记住。
+        _categoryExpansion = new Dictionary<string, bool>();
 
         BuildSkeleton();
         AttachBehaviors();

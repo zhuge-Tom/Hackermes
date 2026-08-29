@@ -810,13 +810,7 @@ public partial class AiChatViewModel : ViewModelBase
         BindWorkspace(option.WorkspaceId);
         OnPropertyChanged(nameof(HasSessions));
 
-        // Seed the first-ever session from the legacy global memory so nothing is silently lost.
-        var legacy = settings.MemoryEnabled ? _memory.Load() : new AgentMemoryDocument();
-        if (legacy.RecentMessages.Count > 0 || legacy.Summary.Length > 0)
-        {
-            _summary = legacy.Summary;
-            RestoreMessages(legacy.RecentMessages, settings);
-        }
+        // 新会话始终空白启动：不从持久记忆恢复旧消息。
         PersistSession();
     }
 
