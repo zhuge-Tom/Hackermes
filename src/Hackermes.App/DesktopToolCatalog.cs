@@ -289,7 +289,7 @@ public static class DesktopToolCatalog
             ["gui.jenkins-exploit"] = new("gui.jenkins-exploit.terminal/JenkinsExploit-GUI-1.3-SNAPSHOT.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true, LegacyJavaFx: true),
             ["gui.tongda-oa"] = new("gui.tongda-oa.terminal/TongdaOATool_V1.3.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.frchannel"] = new("gui.frchannel.terminal/FrChannelPlus.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
-            ["gui.hikvision"] = new("gui.hikvision.terminal/HikvisionExploitGUI_v3.0.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
+            ["gui.hikvision"] = new("gui.hikvision.terminal/HikvisionExploitGUI_v3.0.jar", Kind: DesktopToolKind.Gui),
             ["gui.dahua"] = new("gui.dahua.terminal/DahuaExploitGUI.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.myexploit"] = new("gui.myexploit.terminal/MYExploit.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.decrypt-tools"] = new("gui.decrypt-tools.terminal/DecryptTools.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
@@ -434,8 +434,17 @@ public static class DesktopToolCatalog
         }
         else if (toolId == "gui.hikvision")
         {
-            // HikvisionExploitGUI 被 ClassFinal 加密，需要 -javaagent 指向自身解密。
-            arguments = ["-javaagent", jarPath, "-jar", jarPath];
+            // HikvisionExploitGUI 是 Java 8 + ClassFinal 加密 jar：
+            // 1) 必须 -javaagent 指向自身解密类文件
+            // 2) 必须 Java 8 运行时（解密后的字节码没有 StackMapTable，Java 9+ 拒绝加载）
+            var java8 = FindJava8Runtime();
+            if (java8 is null)
+            {
+                unavailableReason = "需要 Java 8 运行时（未在常见安装路径找到）。";
+                return false;
+            }
+            java = java8;
+            arguments = [$"-javaagent:{jarPath}", "-jar", jarPath];
         }
         else
         {
@@ -470,6 +479,53 @@ public static class DesktopToolCatalog
                 .FirstOrDefault(File.Exists);
             if (found is not null) return found;
         }
+        return null;
+    }
+
+    /// <summary>
+    /// 查找 Java 8 运行时：ClassFinal 加密的老工具（如 HikvisionExploitGUI）只能在
+    /// Java 8 上运行，因为它们引用了 JavaFX 8 独有的内部类。
+    /// </summary>
+    internal static string? FindJava8Runtime()
+    {
+        var candidates = new List<string>();
+        foreach (var root in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
+        {
+            var javaRoot = Path.Combine(Environment.GetFolderPath(root), "Java");
+            if (!Directory.Exists(javaRoot)) continue;
+            foreach (var dir in Directory.GetDirectories(javaRoot, "*1.8*").OrderByDescending(d => d))
+                candidates.Add(Path.Combine(dir, "bin", "java.exe"));
+            foreach (var dir in Directory.GetDirectories(javaRoot, "jre8*").OrderByDescending(d => d))
+                candidates.Add(Path.Combine(dir, "bin", "java.exe"));
+        }
+        // Oracle javapath 也可能有 Java 8（如果它是默认版本）
+        var common = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), "Oracle", "Java", "javapath");
+        if (Directory.Exists(common))
+        {
+            var javapathJava = Path.Combine(common, "java.exe");
+            if (File.Exists(javapathJava))
+            {
+                try
+                {
+                    var start = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = javapathJava, Arguments = "-version", UseShellExecute = false,
+                        RedirectStandardError = true, CreateNoWindow = true
+                    };
+                    using var p = System.Diagnostics.Process.Start(start);
+                    if (p is not null)
+                    {
+                        var output = p.StandardError.ReadToEnd();
+                        p.WaitForExit(3000);
+                        if (output.Contains("\"1.8.")) return javapathJava;
+                    }
+                }
+                catch { }
+            }
+        }
+        foreach (var candidate in candidates)
+            if (File.Exists(candidate)) return candidate;
         return null;
     }
 
