@@ -1,15 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$Root = 'G:\HackermesBuild',
+    # Build roots live outside the watched source tree on a local drive. The
+    # exFAT G: volume has dropped freshly written build outputs, so C: is the
+    # recommended default (see build-hackermes.ps1 notes).
+    [string]$Root = 'C:\HackermesBuild',
     [switch]$PersistUserEnvironment
 )
 
 $resolvedRoot = [IO.Path]::GetFullPath($Root)
 if (-not [IO.Path]::IsPathRooted($Root) -or $resolvedRoot -eq [IO.Path]::GetPathRoot($resolvedRoot)) {
     throw "Build environment root must be an absolute non-root directory: $resolvedRoot"
-}
-if (-not $resolvedRoot.StartsWith('G:\', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Hackermes build environment must stay on G: $resolvedRoot"
 }
 
 $sharedRoot = Join-Path $resolvedRoot 'shared'

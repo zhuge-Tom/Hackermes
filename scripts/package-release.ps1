@@ -29,9 +29,10 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $buildEnvironment.Root 'artifacts\release'
 }
 $resolvedOutputRoot = [IO.Path]::GetFullPath($OutputRoot)
-if ([IO.Path]::GetPathRoot($resolvedBuildRoot) -ne 'G:\' -or
-    [IO.Path]::GetPathRoot($resolvedOutputRoot) -ne 'G:\') {
-    throw "BuildRoot and OutputRoot must stay on G: $resolvedBuildRoot ; $resolvedOutputRoot"
+$buildDrive = [IO.Path]::GetPathRoot($resolvedBuildRoot)
+$outputDrive = [IO.Path]::GetPathRoot($resolvedOutputRoot)
+if (-not $buildDrive.Equals($outputDrive, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "BuildRoot and OutputRoot must stay on the same drive: $resolvedBuildRoot ; $resolvedOutputRoot"
 }
 $versionRoot = [IO.Path]::GetFullPath((Join-Path $resolvedOutputRoot $Version))
 if (-not $versionRoot.StartsWith($resolvedOutputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

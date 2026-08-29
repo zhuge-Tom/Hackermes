@@ -39,7 +39,7 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - 内置 OpenJFX 21 运行时与 14 个图形化综合利用工具（Shiro/Struts2/Nacos/Tomcat/Jenkins/帆软等，人工使用），
   左侧安全工具面板分门别类、开箱即用。
 
-> v0.12.0：658/658 自动化测试通过，Windows x64 自包含打包（含 43 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
+> v0.12.0：659/659 自动化测试通过，Windows x64 自包含打包（含 43 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
 
 ## 下载与安装
 
