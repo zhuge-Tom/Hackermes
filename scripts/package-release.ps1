@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.11.0',
+    [string]$Version = '0.13.0',
     [string]$OutputRoot,
     [string]$BuildRoot,
     [ValidateSet('all', 'windows', 'linux')]
