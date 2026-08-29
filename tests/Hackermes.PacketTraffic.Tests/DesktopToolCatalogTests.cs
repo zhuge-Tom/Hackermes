@@ -19,7 +19,7 @@ public sealed class DesktopToolCatalogTests
             SecondaryToolRoot = Path.Combine(missingRoot, "secondary")
         }, Path.Combine(missingRoot, "bundle"));
 
-        Assert.Equal(51, tools.Count);
+        Assert.Equal(50, tools.Count);
         Assert.DoesNotContain(tools, tool => tool.Id == "crypto.supersoft");
         Assert.DoesNotContain(tools, tool => tool.Id == "crypto.convert");
         Assert.Equal("加解密", tools[0].Category);
@@ -194,7 +194,6 @@ public sealed class DesktopToolCatalogTests
             @"gui.jenkins-exploit.terminal\JenkinsExploit-GUI-1.3-SNAPSHOT.jar",
             @"gui.tongda-oa.terminal\TongdaOATool_V1.3.jar",
             @"gui.frchannel.terminal\FrChannelPlus.jar",
-            @"gui.hikvision.terminal\HikvisionExploitGUI_v3.0.jar",
             @"gui.dahua.terminal\DahuaExploitGUI.jar",
             @"gui.myexploit.terminal\MYExploit.jar",
             @"gui.decrypt-tools.terminal\DecryptTools.jar",
@@ -221,7 +220,7 @@ public sealed class DesktopToolCatalogTests
                 SecondaryToolRoot = Path.Combine(root, "missing-secondary")
             }, root);
 
-            Assert.Equal(51, tools.Count);
+            Assert.Equal(50, tools.Count);
             var placeholders = tools.Where(tool => tool.Id is "web.burp" or "traffic.wireshark" or "detect.apk-analyser"
                 or "password.john.terminal" or "password.archpr" or "reverse.ghidra" or "reverse.x64dbg").ToArray();
             Assert.Equal(7, placeholders.Length);

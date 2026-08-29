@@ -36,10 +36,10 @@ AI 助手和受控 ToolHost 集成在同一应用中。
   vCenter/云 AK-SK 只读验证；利用型适配器受"同目标检测证据"强制门控。
 - 本地 JNDI 回连监听检测闭环；web_search 联网搜索（Brave/Serper API 或内置浏览器降级）、
   CVE 查询（NVD/OSV）、云凭证 DPAPI 暂存与零密钥只读验证、联网工件资料库。
-- 内置 OpenJFX 21 运行时与 15 个图形化综合利用工具（Shiro/Struts2/Nacos/Tomcat/Jenkins/帆软/海康等，人工使用），
+- 内置 OpenJFX 21 运行时与 14 个图形化综合利用工具（Shiro/Struts2/Nacos/Tomcat/Jenkins/帆软等，人工使用），
   左侧安全工具面板分门别类、开箱即用。
 
-> v0.12.0：658/658 自动化测试通过，Windows x64 自包含打包（含 44 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
+> v0.12.0：658/658 自动化测试通过，Windows x64 自包含打包（含 43 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
 
 ## 下载与安装
 

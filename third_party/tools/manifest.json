@@ -329,15 +329,7 @@
       "uiKind": "javafx-or-swing"
     },
     {
-      "id": "gui.hikvision.terminal",
-      "version": "local-copy",
-      "source": "海康威视综合利用工具 v3.0 (user-supplied local copy)",
-      "license": "redistribution-unverified",
-      "entryPoint": "HikvisionExploitGUI_v3.0.jar",
-      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
-      "uiKind": "javafx-or-swing"
-    },
-    {
+      "id": "gui.dahua.terminal",
       "id": "gui.dahua.terminal",
       "version": "local-copy",
       "source": "大华 DahuaExploitGUI (user-supplied local copy)",

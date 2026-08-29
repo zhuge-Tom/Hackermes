@@ -168,7 +168,6 @@ public static class DesktopToolCatalog
             NotBundled("gui.jenkins-exploit", "漏洞利用", "JenkinsExploit-GUI", "Jenkins 未授权控制台、文件读取与 RCE 利用。", "jenkins-exploit/JenkinsExploit-GUI-1.3-SNAPSHOT.jar"),
             NotBundled("gui.tongda-oa", "漏洞利用", "通达OA综合利用", "通达 OA 任意文件上传/下载、SQL 注入综合利用。", "tongda-oa/TongdaOATool_V1.3.jar"),
             NotBundled("gui.frchannel", "漏洞利用", "帆软 FrChannelPlus", "帆软 FineReport 反序列化、文件读取综合利用。", "frchannel/FrChannelPlus.jar"),
-            NotBundled("gui.hikvision", "漏洞利用", "海康威视综合利用", "海康设备 CVE-2021-36260 命令注入与弱口令利用。", "hikvision/HikvisionExploitGUI_v3.0.jar"),
             NotBundled("gui.dahua", "漏洞利用", "大华综合利用", "大华设备登录绕过弱口令与文件下载利用。", "dahua/DahuaExploitGUI.jar"),
             NotBundled("gui.myexploit", "漏洞利用", "MYExploit 综合利用", "OA、数据库、中间件常见漏洞图形化综合利用面板。", "myexploit/MYExploit.jar"),
             NotBundled("gui.decrypt-tools", "加解密", "DecryptTools 综合加解密", "常见加密编码转换与各产品配置文件专用解密。", "decrypt-tools/DecryptTools.jar"),
@@ -289,7 +288,6 @@ public static class DesktopToolCatalog
             ["gui.jenkins-exploit"] = new("gui.jenkins-exploit.terminal/JenkinsExploit-GUI-1.3-SNAPSHOT.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true, LegacyJavaFx: true),
             ["gui.tongda-oa"] = new("gui.tongda-oa.terminal/TongdaOATool_V1.3.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.frchannel"] = new("gui.frchannel.terminal/FrChannelPlus.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
-            ["gui.hikvision"] = new("gui.hikvision.terminal/HikvisionExploitGUI_v3.0.jar", Kind: DesktopToolKind.Gui),
             ["gui.dahua"] = new("gui.dahua.terminal/DahuaExploitGUI.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.myexploit"] = new("gui.myexploit.terminal/MYExploit.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
             ["gui.decrypt-tools"] = new("gui.decrypt-tools.terminal/DecryptTools.jar", Kind: DesktopToolKind.Gui, RequiresJavaFx: true),
@@ -429,39 +427,6 @@ public static class DesktopToolCatalog
                 "--add-opens", "javafx.controls/com.sun.javafx.scene.control=ALL-UNNAMED",
                 "--add-opens", "javafx.graphics/com.sun.javafx.scene=ALL-UNNAMED",
                 "--add-opens", "javafx.graphics/com.sun.javafx.stage=ALL-UNNAMED",
-                "-jar", jarPath
-            ];
-        }
-        else if (toolId == "gui.hikvision")
-        {
-            // HikvisionExploitGUI 是 ClassFinal 加密 jar，内嵌的 JavaFX 类按 Java 11
-            // 编译（class version 55.0）：Java 8 加载不了内嵌 JavaFX，必须走与
-            // 老 ControlsFX 工具相同的 Java 11 + JavaFX 11 legacy 栈；
-            // -javaagent 指向自身在加载期解密。
-            var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools");
-            var legacyJava = Path.Combine(toolsDir, "_runtime", "java11", "bin", "java.exe");
-            var legacyFxLib = Path.Combine(toolsDir, "_runtime", "javafx11", "lib");
-            if (!File.Exists(legacyJava))
-            {
-                unavailableReason = "需要内置 Java 11 运行时（tools/_runtime/java11）。";
-                return false;
-            }
-            if (!Directory.Exists(legacyFxLib))
-            {
-                unavailableReason = "缺少内置 JavaFX 11 模块（tools/_runtime/javafx11/lib）。";
-                return false;
-            }
-            java = legacyJava;
-            arguments =
-            [
-                "--module-path", legacyFxLib,
-                "--add-modules", "javafx.controls,javafx.fxml,javafx.web",
-                "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-                "--add-opens", "javafx.base/com.sun.javafx.runtime=ALL-UNNAMED",
-                "--add-opens", "javafx.controls/com.sun.javafx.scene.control=ALL-UNNAMED",
-                "--add-opens", "javafx.graphics/com.sun.javafx.scene=ALL-UNNAMED",
-                "--add-opens", "javafx.graphics/com.sun.javafx.stage=ALL-UNNAMED",
-                $"-javaagent:{jarPath}",
                 "-jar", jarPath
             ];
         }
