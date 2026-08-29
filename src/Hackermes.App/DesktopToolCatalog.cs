@@ -432,6 +432,11 @@ public static class DesktopToolCatalog
                 "-jar", jarPath
             ];
         }
+        else if (toolId == "gui.hikvision")
+        {
+            // HikvisionExploitGUI 被 ClassFinal 加密，需要 -javaagent 指向自身解密。
+            arguments = ["-javaagent", jarPath, "-jar", jarPath];
+        }
         else
         {
             arguments = ["-jar", jarPath];
