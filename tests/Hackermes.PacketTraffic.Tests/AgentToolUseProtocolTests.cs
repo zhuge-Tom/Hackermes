@@ -28,7 +28,7 @@ public sealed class AgentToolUseProtocolTests
 
         var request = compactor.BuildRequest(
             [new ChatMessage("user", "检查捕获的数据包。")],
-            new AgentMemoryDocument(), [], new AiSettings());
+            new AgentMemoryDocument(), [], new AiSettings { PermissionMode = AiPermissionMode.RequestApproval });
 
         var system = request.Single(message => message.Role == "system").Content ?? string.Empty;
         Assert.Contains("Tool use protocol", system);

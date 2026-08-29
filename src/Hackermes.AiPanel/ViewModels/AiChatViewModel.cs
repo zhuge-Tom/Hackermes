@@ -794,23 +794,9 @@ public partial class AiChatViewModel : ViewModelBase
             return;
         }
 
-        var document = _sessionStore.Load();
-        foreach (var entry in document.Sessions)
+        // 保留旧会话在下拉列表里供切换，但启动时始终新建一个空会话。
+        foreach (var entry in _sessionStore.Load().Sessions)
             AddSessionOption(new AgentSessionOption(entry.Id, entry.Name, entry.UpdatedAt, entry.WorkspaceId));
-
-        var activeId = document.ActiveId.Length > 0 ? document.ActiveId : document.Sessions.FirstOrDefault()?.Id;
-        SetSelectedSessionSilently(Sessions.FirstOrDefault(option => option.Id == activeId) ?? Sessions.FirstOrDefault());
-        var current = document.Sessions.FirstOrDefault(session => session.Id == (SelectedSession?.Id ?? string.Empty));
-        if (current is not null)
-        {
-            _sessionId = current.Id;
-            _summary = current.Summary;
-            BindWorkspace(current.WorkspaceId);
-            if (!TryRestoreFromEventLog()) RestoreMessages(current.RecentMessages, settings);
-            return;
-        }
-
-        // First run after upgrade: migrate the legacy global conversation into a named session.
         NewSessionInternal(settings);
     }
 

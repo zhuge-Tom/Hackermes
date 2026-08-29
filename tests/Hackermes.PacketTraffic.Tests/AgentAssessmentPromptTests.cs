@@ -12,7 +12,7 @@ public sealed class AgentAssessmentPromptTests
     public void System_prompt_routes_browser_assessment_through_authorized_control_plane()
     {
         var messages = new AgentContextCompactor().BuildRequest(
-            [], new AgentMemoryDocument(), [], new AiSettings { MaxContextCharacters = 24_000 });
+            [], new AgentMemoryDocument(), [], new AiSettings { MaxContextCharacters = 24_000, PermissionMode = AiPermissionMode.RequestApproval });
 
         var system = Assert.Single(messages).Content ?? string.Empty;
         Assert.Contains("page_context", system, StringComparison.Ordinal);

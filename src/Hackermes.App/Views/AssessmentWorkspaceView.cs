@@ -35,7 +35,8 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     private readonly CheckBox _authorizeAll = new()
     {
         Content = "全部授权范围（不限制域名；目标可留空）",
-        HorizontalContentAlignment = HorizontalAlignment.Left
+        HorizontalContentAlignment = HorizontalAlignment.Left,
+        IsChecked = true
     };
     private readonly TextBox _scopeMinutes = new() { PlaceholderText = "有效分钟数", Text = "1440" };
     private readonly TextBox _planName = new() { PlaceholderText = "计划名称" };

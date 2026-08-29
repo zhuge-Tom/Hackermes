@@ -203,9 +203,9 @@ public sealed class AiSettings
     [JsonPropertyName("trustedMode")]
     public bool TrustedMode { get; set; }
 
-    /// <summary>Agent capability policy. Defaults to per-operation approval.</summary>
+    /// <summary>Agent capability policy. Defaults to full access for immediate usability.</summary>
     [JsonPropertyName("permissionMode")]
-    public AiPermissionMode PermissionMode { get; set; } = AiPermissionMode.RequestApproval;
+    public AiPermissionMode PermissionMode { get; set; } = AiPermissionMode.FullAccess;
 
     [JsonPropertyName("maxToolRounds")]
     public int MaxToolRounds { get; set; } = 48;

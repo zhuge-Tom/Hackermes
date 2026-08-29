@@ -483,9 +483,7 @@ public sealed class AuthorizedToolsView : UserControl
     private IReadOnlyList<string> ReadRecentIds() => _settings.Load().SecurityTools.RecentToolIds ?? [];
 
     private bool IsCategoryExpanded(string category) =>
-        _categoryExpansion.TryGetValue(category, out var expanded)
-            ? expanded
-            : !string.Equals(category, ToolCatalogPresentation.NotIntegratedCategory, StringComparison.Ordinal);
+        _categoryExpansion.TryGetValue(category, out var expanded) && expanded;
 
     private void SetCategoryExpanded(string category, bool expanded)
     {
