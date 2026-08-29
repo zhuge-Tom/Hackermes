@@ -42,12 +42,14 @@ public sealed class ToolLaunchService
             userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local");
         var start = new ProcessStartInfo
         {
-            FileName = java,
+            FileName = Path.GetFileName(java).Equals("java.exe", StringComparison.OrdinalIgnoreCase)
+                ? Path.Combine(Path.GetDirectoryName(java)!, "javaw.exe")
+                : java,
             WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
                 ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
                 : workingDirectory,
             UseShellExecute = false,
-            CreateNoWindow = false
+            CreateNoWindow = true
         };
         start.Environment["TEMP"] = Path.Combine(userData, "Temp");
         start.Environment["TMP"] = Path.Combine(userData, "Temp");
