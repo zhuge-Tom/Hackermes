@@ -137,8 +137,11 @@ public sealed class AgentTurnRunner
     /// <summary>Resolved per append so runtime setting changes take effect on the next event.</summary>
     private readonly Func<AgentEventLogStore?>? _eventLogProvider;
     private readonly List<InboxInstruction> _inbox = [];
+    private readonly object _stepAbortGate = new();
+    private CancellationTokenSource? _stepAbort;
     private int _turnCounter;
     private string? _currentSessionId;
+    private string? _turnPageId;
 
     public AgentTurnRunner(
         IOpenAiChatClient client,
@@ -205,15 +208,15 @@ public sealed class AgentTurnRunner
     {
         lock (_inbox)
         {
-            // Operator promotion only reorders operator input; injected contexts keep their place.
+            // Operator promotion jumps the queue, including ahead of injected goal rounds.
             var candidates = _inbox.Where(instruction => !instruction.Injected).ToList();
             if (candidates.Count == 0) return false;
             var latest = candidates[^1] with { Priority = true };
             _inbox.Remove(candidates[^1]);
-            var firstOperatorIndex = _inbox.FindIndex(instruction => !instruction.Injected);
-            _inbox.Insert(firstOperatorIndex < 0 ? _inbox.Count : firstOperatorIndex, latest);
-            return true;
+            _inbox.Insert(0, latest);
         }
+        lock (_stepAbortGate) _stepAbort?.Cancel();
+        return true;
     }
 
     public bool DropNextInstruction()
@@ -275,6 +278,7 @@ public sealed class AgentTurnRunner
         CancellationToken ct)
     {
         _currentSessionId = sessionId;
+        _turnPageId = pageId;
         var turn = ++_turnCounter;
         Emit(AgentEventKind.TurnStart, turn, 0, new TurnStarted(turn));
         var reason = AgentTurnEndReason.Completed;
@@ -331,7 +335,7 @@ public sealed class AgentTurnRunner
                     ephemeralAppendix = appendix.Messages;
                     entering = null;
 
-                    outcome = await ExecuteStepAsync(strategy, turn, step, model, pageId, sessionId,
+                    outcome = await ExecuteStepAsync(strategy, turn, step, model, _turnPageId, sessionId,
                         ephemeralAppendix, ct).ConfigureAwait(true);
                 }
                 finally
@@ -428,6 +432,10 @@ public sealed class AgentTurnRunner
         var attempt = 0;
         var overflowRetries = 0;
         string? finishReason = null;
+        using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        lock (_stepAbortGate) _stepAbort = stepCts;
+        try
+        {
         while (true)
         {
             var receivedAnything = false;
@@ -438,7 +446,7 @@ public sealed class AgentTurnRunner
                     ? messages.Concat(ephemeralAppendix).ToArray()
                     : messages;
                 var request = new OpenAiChatRequest(model, outgoing, tools);
-                await foreach (var delta in _client.StreamChatAsync(request, ct).ConfigureAwait(true))
+                await foreach (var delta in _client.StreamChatAsync(request, stepCts.Token).ConfigureAwait(true))
                 {
                     receivedAnything = true;
                     if (delta.Reasoning is { } reasoningText)
@@ -463,6 +471,12 @@ public sealed class AgentTurnRunner
                 finishReason = attemptFinish ?? finishReason ?? "stop";
                 break;
             }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Operator 优先执行 aborted this in-flight request; the turn claims the inbox next.
+                return new StepOutcome(HasToolCalls: false, Failed: false, ErrorText: null,
+                    LengthCapped: false, Concluded: false);
+            }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
@@ -484,10 +498,12 @@ public sealed class AgentTurnRunner
                 messages = strategy.BuildRequest(History, _memory(), _skills(), settings);
             }
             catch (Exception ex) when (attempt < _options.MaxRequestRetries &&
-                                       !receivedAnything &&
-                                       AgentRequestError.IsTransient(ex))
+                                       AgentRequestError.IsTransient(ex) &&
+                                       (!receivedAnything || AgentRequestError.IsPrematureStreamEnd(ex)))
             {
                 attempt++;
+                content.Clear();
+                calls.Clear();
                 var delay = BackoffDelay(attempt - 1);
                 Emit(AgentEventKind.RequestRetry, turn, step,
                     new RequestRetried(attempt, _options.MaxRequestRetries, ex.Message, delay));
@@ -533,6 +549,14 @@ public sealed class AgentTurnRunner
             .ConfigureAwait(true);
         return new StepOutcome(HasToolCalls: true, Failed: false, ErrorText: null,
             LengthCapped: finishReason == "length", Concluded: concluded);
+        }
+        finally
+        {
+            lock (_stepAbortGate)
+            {
+                if (ReferenceEquals(_stepAbort, stepCts)) _stepAbort = null;
+            }
+        }
     }
 
     /// <summary>
@@ -803,9 +827,12 @@ public sealed class AgentTurnRunner
         try
         {
             using var arguments = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.Arguments) ? "{}" : call.Arguments);
-            return await _dispatcher.InvokeAsync(
-                new ToolInvocation(call.Name, arguments.RootElement.Clone(), pageId, sessionId, call.Id), ct)
+            var result = await _dispatcher.InvokeAsync(
+                new ToolInvocation(call.Name, arguments.RootElement.Clone(), _turnPageId ?? pageId, sessionId, call.Id), ct)
                 .ConfigureAwait(true);
+            if (result.Success && !string.IsNullOrWhiteSpace(result.AttachedPageId))
+                _turnPageId = result.AttachedPageId;
+            return result;
         }
         catch (JsonException ex)
         {

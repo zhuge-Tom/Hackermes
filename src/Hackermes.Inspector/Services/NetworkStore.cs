@@ -61,7 +61,13 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
     {
         if (string.IsNullOrWhiteSpace(pageId) || string.IsNullOrWhiteSpace(documentUrl))
             return NetworkSecurityMetadata.Empty;
-        var entry = Entries.FirstOrDefault(candidate =>
+        // 查询走同步数据源(_byRequestId),不依赖 UI 线程泉的时机——Agent 调用是确定性的。
+        List<NetworkEntry> snapshot;
+        lock (_gate)
+        {
+            snapshot = _byRequestId.Values.ToList();
+        }
+        var entry = snapshot.FirstOrDefault(candidate =>
             string.Equals(candidate.PageId, pageId, StringComparison.Ordinal) &&
             string.Equals(candidate.ResourceType, "Document", StringComparison.OrdinalIgnoreCase) &&
             DocumentUrlsMatch(candidate.Url, documentUrl));
@@ -170,13 +176,15 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
         // CDP 自己的 initiator 多数只有 URL,拿不到具体栈帧;Agent 的记录更有用。
         TryApplyPendingInitiator(entry);
 
+        // 查询数据源同步登记:ReadSecurityMetadata 等查询(含 Agent 调用)必须立即可见,
+        // 不能等 UI 泵的时机;Entries(可观察集合)镜像仍走 UI 线程。
+        lock (_gate)
+        {
+            _byRequestId[requestId] = entry;
+        }
+
         UiThreadBridge.Post(() =>
         {
-            lock (_gate)
-            {
-                _byRequestId[requestId] = entry;
-            }
-
             Entries.Insert(0, entry);
 
             while (Entries.Count > MaxEntries)
@@ -361,6 +369,14 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
 
     private void UpdateEntry(string requestId, Action<NetworkEntry> mutate)
     {
+        // 状态(状态码/安全元数据等)同步落到查询数据源,保证 ReadSecurityMetadata
+        // 与 Agent 查询的确定性;可观察集合的刷新仍走 UI 线程。
+        lock (_gate)
+        {
+            if (_byRequestId.TryGetValue(requestId, out var tracked))
+                mutate(tracked);
+        }
+
         UiThreadBridge.Post(() =>
         {
             NetworkEntry? entry;
@@ -373,7 +389,6 @@ public sealed class NetworkStore : INetworkQueryService, INetworkSecurityMetadat
             if (entry is null)
                 return;
 
-            mutate(entry);
             Changed?.Invoke();
         });
     }

@@ -51,6 +51,7 @@ public sealed class AgentCapabilityPolishTests : IDisposable
         Assert.True(skill.Enabled);
         Assert.Contains("page_security_snapshot", skill.ToolNames);
         Assert.Contains("page_eval_read", skill.ToolNames);
+        Assert.Contains("page_navigate", skill.ToolNames);
         Assert.True(File.Exists(Path.Combine(_root, "agent-skills.json")));
     }
 
@@ -60,6 +61,18 @@ public sealed class AgentCapabilityPolishTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "agent-skills.json"), """{"version":1,"skills":[]}""");
         var store = new AgentSkillStore(new PathSettings(Path.Combine(_root, "settings.json")), new NullLogger());
         Assert.Empty(store.Snapshot());
+    }
+
+    [Fact]
+    public void Stock_assessment_skill_gains_page_navigate_on_load()
+    {
+        File.WriteAllText(Path.Combine(_root, "agent-skills.json"),
+            """{"Version":1,"Skills":[{"Id":"authorized-assessment","Name":"授权评估","Enabled":true,"Instructions":"Authorized assessment playbook. Observe first.","ToolNames":["page_context"]}]}""");
+        var store = new AgentSkillStore(new PathSettings(Path.Combine(_root, "settings.json")), new NullLogger());
+        var skill = Assert.Single(store.Snapshot());
+        Assert.Contains("page_navigate", skill.ToolNames);
+        Assert.Contains("page_context", skill.ToolNames);
+        Assert.Contains("creates a tab", skill.Instructions, StringComparison.Ordinal);
     }
 
     [Fact]

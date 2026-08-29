@@ -19,7 +19,7 @@ public sealed class DesktopToolCatalogTests
             SecondaryToolRoot = Path.Combine(missingRoot, "secondary")
         }, Path.Combine(missingRoot, "bundle"));
 
-        Assert.Equal(22, tools.Count);
+        Assert.Equal(51, tools.Count);
         Assert.DoesNotContain(tools, tool => tool.Id == "crypto.supersoft");
         Assert.DoesNotContain(tools, tool => tool.Id == "crypto.convert");
         Assert.Equal("加解密", tools[0].Category);
@@ -170,7 +170,37 @@ public sealed class DesktopToolCatalogTests
             @"detect.unauthorized.terminal\Unauthorized-Vul.py",
             @"exploit.sqlmap.terminal\sqlmap.py",
             @"exploit.xss-fuzzer.terminal\xssFuzz.py",
-            @"exploit.dnslog-sqli.terminal\dnslogSql.py"
+            @"exploit.dnslog-sqli.terminal\dnslogSql.py",
+            @"recon.git-leak.terminal\GitHack.py",
+            @"recon.svn-leak.terminal\SvnExploit.py",
+            @"recon.ds-store.terminal\ds_store_exp.py",
+            @"recon.swagger-api.terminal\swagger-hack2.0.py",
+            @"detect.weblogic-t3.terminal\WeblogicScan.py",
+            @"detect.fastjson-jndi.terminal\JsonExp.exe",
+            @"exploit.vcenter.terminal\main.exe",
+            @"exploit.heapdump.terminal\JDumpSpider-1.1-SNAPSHOT-full.jar",
+            @"detect.oa-poc.terminal\oa_poc_runner.py",
+            @"detect.shiro.terminal\shiro_tool.jar",
+            @"detect.struts2.terminal\Struts2Scan.py",
+            @"detect.nacos.terminal\nacos_probe.py",
+            @"exploit.fastjson-payload.terminal\FastjsonExploit-0.1-beta2-all.jar",
+            @"probe.cloud-aksk.terminal\cf.exe",
+            @"gui.shiro-exploit.terminal\ShiroExploit.jar",
+            @"gui.struts2-check.terminal\Struts2_19.21.jar",
+            @"gui.thinkphp.terminal\ThinkPHP.jar",
+            @"gui.tomcat-pass.terminal\TomcatPass.jar",
+            @"gui.nacos-exploit.terminal\NacosExploitGUI_v4.0.jar",
+            @"gui.xxl-job.terminal\xxl-jobExploitGUI_v1.0.jar",
+            @"gui.jenkins-exploit.terminal\JenkinsExploit-GUI-1.3-SNAPSHOT.jar",
+            @"gui.tongda-oa.terminal\TongdaOATool_V1.3.jar",
+            @"gui.frchannel.terminal\FrChannelPlus.jar",
+            @"gui.hikvision.terminal\HikvisionExploitGUI_v3.0.jar",
+            @"gui.dahua.terminal\DahuaExploitGUI.jar",
+            @"gui.myexploit.terminal\MYExploit.jar",
+            @"gui.decrypt-tools.terminal\DecryptTools.jar",
+            @"gui.mdat.terminal\Multiple.Database.Utilization.Tools-2.1.1-jar-with-dependencies.jar",
+            @"gui.api-tool.terminal\API-T00L_v1.2.jar",
+            @"_runtime\javafx\lib\javafx-base-21.0.5-win.jar"
         };
         try
         {
@@ -189,7 +219,7 @@ public sealed class DesktopToolCatalogTests
                 SecondaryToolRoot = Path.Combine(root, "missing-secondary")
             }, root);
 
-            Assert.Equal(22, tools.Count);
+            Assert.Equal(51, tools.Count);
             var placeholders = tools.Where(tool => tool.Id is "web.burp" or "traffic.wireshark" or "detect.apk-analyser"
                 or "password.john.terminal" or "password.archpr" or "reverse.ghidra" or "reverse.x64dbg").ToArray();
             Assert.Equal(7, placeholders.Length);

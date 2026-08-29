@@ -78,6 +78,7 @@ public sealed class AgentSessionStore : IAgentSessionStore
         CreatedAt = input.CreatedAt == default ? DateTimeOffset.UtcNow : input.CreatedAt,
         UpdatedAt = input.UpdatedAt == default ? DateTimeOffset.UtcNow : input.UpdatedAt,
         Summary = Limit(input.Summary, 20_000),
+        WorkspaceId = Limit(input.WorkspaceId, 96),
         RecentMessages = (input.RecentMessages ?? new List<AgentMemoryMessage>())
             .Where(message => message is not null && message.Role is "user" or "assistant")
             .Select(message => new AgentMemoryMessage { Role = message.Role, Content = Limit(message.Content, 8_000) })
@@ -94,6 +95,7 @@ public sealed class AgentSessionStore : IAgentSessionStore
     private static AgentSessionEntry Clone(AgentSessionEntry value) => new()
     {
         Id = value.Id, Name = value.Name, CreatedAt = value.CreatedAt, UpdatedAt = value.UpdatedAt, Summary = value.Summary,
+        WorkspaceId = value.WorkspaceId,
         RecentMessages = value.RecentMessages.Select(message => new AgentMemoryMessage { Role = message.Role, Content = message.Content }).ToList()
     };
 

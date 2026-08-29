@@ -136,6 +136,20 @@ public static class DesktopToolCatalog
             PythonTerminal("exploit.dnslog-sqli.terminal", "漏洞利用", "DNSLog SQL 注入", "DNSLog 盲注辅助工具（内置副本已兼容 Python 3）。",
                 Combine(primary, "03-漏洞利用", "DNS注入", "DnslogSqlinj", "dnslogSql.py"), probes,
                 ["先在 config.py 配置你自己的 APItoken 与 DNSurl。", "完整帮助：python .\\dnslogSql.py --help", "仅对明确授权的目标使用。"]),
+            NotBundled("recon.git-leak.terminal", "信息收集", "GitHack .git 泄露恢复", "解析暴露的 /.git/ 并还原源码；Agent 适配器 recon.git_leak.scan。"),
+            NotBundled("recon.svn-leak.terminal", "信息收集", "SvnExploit .svn 泄露枚举", "解析暴露的 /.svn/wc.db 并列出受控文件；Agent 适配器 recon.svn_leak.scan。"),
+            NotBundled("recon.ds-store.terminal", "信息收集", "DS_Store 目录枚举", "解析暴露的 /.DS_Store 并还原目录结构；Agent 适配器 recon.ds_store.scan。"),
+            NotBundled("recon.swagger-api.terminal", "信息收集", "Swagger API 枚举", "解析 Swagger 文档并批量请求接口；Agent 适配器 recon.swagger_api.enum。"),
+            NotBundled("detect.weblogic-t3.terminal", "漏洞扫描", "WeblogicScan T3 检测", "检测 Weblogic T3 反序列化 CVE；Agent 适配器 detect.weblogic_t3.scan。"),
+            NotBundled("detect.fastjson-jndi.terminal", "漏洞扫描", "JsonExp Fastjson 检测", "发送带 payload 的 JSON 检测 Fastjson/Jackson；Agent 适配器 detect.fastjson_jndi.scan。"),
+            NotBundled("exploit.vcenter.terminal", "漏洞利用", "VcenterKiller 验证", "验证 vCenter CVE（仅限已授权目标）；Agent 适配器 exploit.vcenter.verify。"),
+            NotBundled("exploit.heapdump.terminal", "漏洞利用", "JDumpSpider 堆转储分析", "从 heapdump 提取敏感凭据（需 Java）；Agent 适配器 exploit.heapdump.analyze。"),
+            NotBundled("detect.oa-poc.terminal", "漏洞扫描", "OA POC 定向探测", "国内 OA 漏洞 POC 库（泛微/致远/通达/用友等 97 条）；Agent 适配器 detect.oa_poc.probe。"),
+            NotBundled("detect.shiro.terminal", "漏洞扫描", "Shiro key 检测", "Shiro rememberMe key 爆破（需 Java）；Agent 适配器 detect.shiro.scan。"),
+            NotBundled("detect.struts2.terminal", "漏洞扫描", "Struts2 全版本检测", "S2-001~057 系列 OGNL 漏洞检测；Agent 适配器 detect.struts2.scan。"),
+            NotBundled("detect.nacos.terminal", "漏洞扫描", "Nacos 只读探测", "未授权用户列表/配置读取/控制台暴露检测；Agent 适配器 detect.nacos.scan。"),
+            NotBundled("exploit.fastjson-payload.terminal", "漏洞利用", "Fastjson payload 生成", "生成指定 gadget 的利用 payload 文本；Agent 适配器 exploit.fastjson_payload.generate。"),
+            NotBundled("probe.cloud-aksk.terminal", "漏洞利用", "云 AK/SK 只读验证", "验证云凭证并列出只读资源（cf）；Agent 适配器 probe.cloud_aksk.verify。"),
 
             NotBundled("password.john.terminal", "密码审计", "John the Ripper", "对获授权的密码哈希执行字典、规则与增量模式审计。"),
             NotBundled("password.archpr", "密码审计", "ARCHPR", "恢复和审计获授权的压缩包密码，支持常见 ZIP、RAR 等归档格式。"),
@@ -143,6 +157,23 @@ public static class DesktopToolCatalog
             NotBundled("reverse.ghidra", "逆向分析", "Ghidra", "反汇编、反编译并分析可执行文件、函数、符号和交叉引用。"),
             Gui("reverse.x64dbg", "逆向分析", "x64dbg", "在 Windows 上动态调试 x86/x64 程序，检查寄存器、内存、断点与调用流程。",
                 secondary, "snapshot_2026-05-27_12-11", "release", "x96dbg.exe"),
+
+            NotBundled("gui.shiro-exploit", "漏洞利用", "ShiroExploit", "Shiro rememberMe key 爆破与反序列化利用（内置 ysoserial）。",
+                "shiro-exploit/ShiroExploit.jar"),
+            NotBundled("gui.struts2-check", "漏洞利用", "Struts2 全版本检测", "Struts2 S2-001~057 全版本漏洞检测界面。", "struts2-check/Struts2_19.21.jar"),
+            NotBundled("gui.thinkphp", "漏洞利用", "ThinkPHP 综合利用", "ThinkPHP 多版本 RCE 检测与利用。", "thinkphp/ThinkPHP.jar"),
+            NotBundled("gui.tomcat-pass", "漏洞利用", "TomcatPass", "Tomcat Manager 弱口令爆破与 WAR 部署。", "tomcat-pass/TomcatPass.jar"),
+            NotBundled("gui.nacos-exploit", "漏洞利用", "NacosExploitGUI", "Nacos 未授权/添加用户/身份绕过/Derby SQL 综合利用。", "nacos-exploit/NacosExploitGUI_v4.0.jar"),
+            NotBundled("gui.xxl-job", "漏洞利用", "XXL-JOB ExploitGUI", "XXL-JOB 默认 token、executor 未授权与 GLUE RCE 利用。", "xxl-job/xxl-jobExploitGUI_v1.0.jar"),
+            NotBundled("gui.jenkins-exploit", "漏洞利用", "JenkinsExploit-GUI", "Jenkins 未授权控制台、文件读取与 RCE 利用。", "jenkins-exploit/JenkinsExploit-GUI-1.3-SNAPSHOT.jar"),
+            NotBundled("gui.tongda-oa", "漏洞利用", "通达OA综合利用", "通达 OA 任意文件上传/下载、SQL 注入综合利用。", "tongda-oa/TongdaOATool_V1.3.jar"),
+            NotBundled("gui.frchannel", "漏洞利用", "帆软 FrChannelPlus", "帆软 FineReport 反序列化、文件读取综合利用。", "frchannel/FrChannelPlus.jar"),
+            NotBundled("gui.hikvision", "漏洞利用", "海康威视综合利用", "海康设备 CVE-2021-36260 命令注入与弱口令利用。", "hikvision/HikvisionExploitGUI_v3.0.jar"),
+            NotBundled("gui.dahua", "漏洞利用", "大华综合利用", "大华设备登录绕过弱口令与文件下载利用。", "dahua/DahuaExploitGUI.jar"),
+            NotBundled("gui.myexploit", "漏洞利用", "MYExploit 综合利用", "OA、数据库、中间件常见漏洞图形化综合利用面板。", "myexploit/MYExploit.jar"),
+            NotBundled("gui.decrypt-tools", "加解密", "DecryptTools 综合加解密", "常见加密编码转换与各产品配置文件专用解密。", "decrypt-tools/DecryptTools.jar"),
+            NotBundled("gui.mdat", "漏洞利用", "MDAT 数据库综合利用", "MySQL/SQLServer/Oracle/Redis 等数据库综合利用（UDF、文件读写）。", "mdat/Multiple.Database.Utilization.Tools-2.1.1-jar-with-dependencies.jar"),
+            NotBundled("gui.api-tool", "Web 与流量", "API-T00L", "互联网厂商常见 API 接口利用与发包测试。", "api-tool/API-T00L_v1.2.jar"),
 
 
         ];
@@ -219,7 +250,8 @@ public static class DesktopToolCatalog
         string? WorkingDirectory = null,
         DesktopToolKind? Kind = null,
         bool RequiresPython = false,
-        bool RequiresJava21 = false);
+        bool RequiresJava21 = false,
+        bool RequiresJavaFx = false);
 
     private static readonly IReadOnlyDictionary<string, BundledDescriptor> BundledTools =
         new Dictionary<string, BundledDescriptor>(StringComparer.Ordinal)
@@ -233,6 +265,35 @@ public static class DesktopToolCatalog
             ["exploit.sqlmap.terminal"] = new("exploit.sqlmap.terminal/sqlmap.py", RequiresPython: true),
             ["exploit.xss-fuzzer.terminal"] = new("exploit.xss-fuzzer.terminal/xssFuzz.py", RequiresPython: true),
             ["exploit.dnslog-sqli.terminal"] = new("exploit.dnslog-sqli.terminal/dnslogSql.py", RequiresPython: true),
+            ["recon.git-leak.terminal"] = new("recon.git-leak.terminal/GitHack.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["recon.svn-leak.terminal"] = new("recon.svn-leak.terminal/SvnExploit.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["recon.ds-store.terminal"] = new("recon.ds-store.terminal/ds_store_exp.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["recon.swagger-api.terminal"] = new("recon.swagger-api.terminal/swagger-hack2.0.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["detect.weblogic-t3.terminal"] = new("detect.weblogic-t3.terminal/WeblogicScan.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["detect.fastjson-jndi.terminal"] = new("detect.fastjson-jndi.terminal/JsonExp.exe", Kind: DesktopToolKind.TeachingTerminal),
+            ["exploit.vcenter.terminal"] = new("exploit.vcenter.terminal/main.exe", Kind: DesktopToolKind.TeachingTerminal),
+            ["exploit.heapdump.terminal"] = new("exploit.heapdump.terminal/JDumpSpider-1.1-SNAPSHOT-full.jar", Kind: DesktopToolKind.TeachingTerminal),
+            ["detect.oa-poc.terminal"] = new("detect.oa-poc.terminal/oa_poc_runner.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["detect.shiro.terminal"] = new("detect.shiro.terminal/shiro_tool.jar", Kind: DesktopToolKind.TeachingTerminal),
+            ["detect.struts2.terminal"] = new("detect.struts2.terminal/Struts2Scan.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["detect.nacos.terminal"] = new("detect.nacos.terminal/nacos_probe.py", Kind: DesktopToolKind.TeachingTerminal, RequiresPython: true),
+            ["exploit.fastjson-payload.terminal"] = new("exploit.fastjson-payload.terminal/FastjsonExploit-0.1-beta2-all.jar", Kind: DesktopToolKind.TeachingTerminal),
+            ["probe.cloud-aksk.terminal"] = new("probe.cloud-aksk.terminal/cf.exe", Kind: DesktopToolKind.TeachingTerminal),
+            ["gui.shiro-exploit"] = new("gui.shiro-exploit.terminal/ShiroExploit.jar", RequiresJavaFx: true),
+            ["gui.struts2-check"] = new("gui.struts2-check.terminal/Struts2_19.21.jar"),
+            ["gui.thinkphp"] = new("gui.thinkphp.terminal/ThinkPHP.jar", RequiresJavaFx: true),
+            ["gui.tomcat-pass"] = new("gui.tomcat-pass.terminal/TomcatPass.jar", RequiresJavaFx: true),
+            ["gui.nacos-exploit"] = new("gui.nacos-exploit.terminal/NacosExploitGUI_v4.0.jar", RequiresJavaFx: true),
+            ["gui.xxl-job"] = new("gui.xxl-job.terminal/xxl-jobExploitGUI_v1.0.jar", RequiresJavaFx: true),
+            ["gui.jenkins-exploit"] = new("gui.jenkins-exploit.terminal/JenkinsExploit-GUI-1.3-SNAPSHOT.jar", RequiresJavaFx: true),
+            ["gui.tongda-oa"] = new("gui.tongda-oa.terminal/TongdaOATool_V1.3.jar", RequiresJavaFx: true),
+            ["gui.frchannel"] = new("gui.frchannel.terminal/FrChannelPlus.jar", RequiresJavaFx: true),
+            ["gui.hikvision"] = new("gui.hikvision.terminal/HikvisionExploitGUI_v3.0.jar", RequiresJavaFx: true),
+            ["gui.dahua"] = new("gui.dahua.terminal/DahuaExploitGUI.jar", RequiresJavaFx: true),
+            ["gui.myexploit"] = new("gui.myexploit.terminal/MYExploit.jar", RequiresJavaFx: true),
+            ["gui.decrypt-tools"] = new("gui.decrypt-tools.terminal/DecryptTools.jar", RequiresJavaFx: true),
+            ["gui.mdat"] = new("gui.mdat.terminal/Multiple.Database.Utilization.Tools-2.1.1-jar-with-dependencies.jar", RequiresJavaFx: true),
+            ["gui.api-tool"] = new("gui.api-tool.terminal/API-T00L_v1.2.jar", RequiresJavaFx: true),
         };
 
     private static DesktopToolEntry PreferBundled(DesktopToolEntry tool, string bundledRoot, PathProbeCache probes)
@@ -269,6 +330,13 @@ public static class DesktopToolCatalog
             available = available && java is not null && IsJava21OrNewer(java);
             unavailableReason = available ? null : "内置 Ghidra 已找到，但尚未找到 Java 21 或更高版本";
         }
+        if (descriptor.RequiresJavaFx)
+        {
+            var java = probes.FindOnPath("java.exe");
+            var fxLib = Path.Combine(root, "_runtime", "javafx", "lib");
+            available = available && java is not null && Directory.Exists(fxLib);
+            unavailableReason = available ? null : "尚未找到 Java 运行时或内置 JavaFX 模块（_runtime/javafx/lib）";
+        }
         return tool with
         {
             Kind = descriptor.Kind ?? tool.Kind,
@@ -279,11 +347,74 @@ public static class DesktopToolCatalog
         };
     }
 
+    /// <summary>
+    /// Resolves the launch command for a bundled GUI jar: JavaFX tools run against the
+    /// bundled OpenJFX modules, Swing tools run on the plain JVM. Returns false when the
+    /// entry is not a bundled GUI jar or a Java runtime is unavailable.
+    /// </summary>
+    public static bool TryGetBundledGuiLaunch(string toolId, out string java,
+        out IReadOnlyList<string> arguments, out string? workingDirectory)
+    {
+        java = string.Empty;
+        arguments = [];
+        workingDirectory = null;
+        if (!BundledTools.TryGetValue(toolId, out var descriptor) || descriptor.Kind is not DesktopToolKind.Gui)
+            return false;
+        var runtime = FindJavaRuntime();
+        if (runtime is null) return false;
+        var jarPath = Path.Combine(
+            AppContext.BaseDirectory, "tools", descriptor.EntryPoint.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(jarPath)) return false;
+        java = runtime;
+        workingDirectory = Path.GetDirectoryName(jarPath);
+        if (descriptor.RequiresJavaFx)
+        {
+            var fxLib = Path.Combine(AppContext.BaseDirectory, "tools", "_runtime", "javafx", "lib");
+            if (!Directory.Exists(fxLib)) return false;
+            arguments =
+            [
+                "--module-path", fxLib,
+                "--add-modules", "javafx.controls,javafx.fxml,javafx.web",
+                "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+                "--add-opens", "java.base/java.util=ALL-UNNAMED",
+                "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-opens", "java.desktop/java.awt=ALL-UNNAMED",
+                "-jar", jarPath
+            ];
+        }
+        else
+        {
+            arguments = ["-jar", jarPath];
+        }
+        return true;
+    }
+
+    private static string? FindJavaRuntime()
+    {
+        var candidates = new[] { "java.exe", "java" };
+        foreach (var candidate in candidates)
+        {
+            var found = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(path => Path.Combine(path, candidate))
+                .FirstOrDefault(File.Exists);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
     private static DesktopToolEntry BuiltIn(string id, string category, string name, string description) =>
         new(id, category, name, description, DesktopToolKind.BuiltIn, true);
 
     private static DesktopToolEntry NotBundled(string id, string category, string name, string description) =>
         new(id, category, name, description, DesktopToolKind.Gui, false,
+            UnavailableReason: "未接入；当前版本不随程序分发");
+
+    /// <summary>Bundled GUI tool declared without a user-root copy; PreferBundled activates it from bin/tools.</summary>
+    private static DesktopToolEntry NotBundled(string id, string category, string name, string description,
+        string bundledRelativeEntry) =>
+        new(id, category, name, description, DesktopToolKind.Gui, false,
+            Path: Path.Combine(AppContext.BaseDirectory, "tools", bundledRelativeEntry.Replace('/', Path.DirectorySeparatorChar)),
             UnavailableReason: "未接入；当前版本不随程序分发");
 
     private static DesktopToolEntry Gui(string id, string category, string name, string description, string root, params string[] parts) =>

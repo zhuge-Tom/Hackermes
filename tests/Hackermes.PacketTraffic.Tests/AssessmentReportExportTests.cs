@@ -7,6 +7,7 @@ using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Xunit;
@@ -68,6 +69,41 @@ public sealed class AssessmentReportExportTests : IDisposable
     public void Static_verification_needs_no_control_plane_or_private_key()
     {
         Assert.Equal("empty_content", AssessmentReportExportService.VerifyDocument("").ErrorCode);
+    }
+
+    [Fact]
+    public async Task Archive_writes_human_report_with_poc_evidence_and_audit_under_data_root()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), "hackermes-archive-" + Guid.NewGuid().ToString("N"));
+        var oldRoot = Environment.GetEnvironmentVariable("HACKERMES_DATA_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_DATA_ROOT", dataRoot);
+            var plane = CreatePlane();
+            var job = await RunEchoAsync(plane, "archive evidence body");
+            var evidence = plane.Evidence(job.Id).Single();
+            plane.CreateFinding(job.Id, evidence.Id, "An issue", "Reproduced on authorized host",
+                "High", "High", "analyst", "curl -sSI 'https://host/'");
+            var archive = new AssessmentReportArchive(plane);
+
+            var folder = archive.Archive(job.Id);
+
+            Assert.Equal(Path.Combine(dataRoot, "reports", job.Id), folder);
+            var report = File.ReadAllText(Path.Combine(folder, "report.md"));
+            Assert.Contains("An issue", report, StringComparison.Ordinal);
+            Assert.Contains("curl -sSI", report, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(folder, "case.json")));
+            Assert.True(File.Exists(Path.Combine(folder, "audit.json")));
+            Assert.True(File.Exists(Path.Combine(folder, "evidence", "index.md")));
+            var evidenceFile = Path.Combine(folder, "evidence", "01_simulation_echo.txt");
+            Assert.True(File.Exists(evidenceFile));
+            Assert.Contains("archive evidence body", File.ReadAllText(evidenceFile), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_DATA_ROOT", oldRoot);
+            try { Directory.Delete(dataRoot, recursive: true); } catch { }
+        }
     }
 
     private AssessmentControlPlane CreatePlane() => new(new SimulatedAssessmentExecutionHost(),

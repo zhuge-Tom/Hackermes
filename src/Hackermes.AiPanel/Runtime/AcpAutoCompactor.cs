@@ -21,11 +21,12 @@ public sealed record CompactionPrefix(string SystemPrompt, IReadOnlyList<AiToolD
 /// compaction-basic: when active context crosses a ratio of the budget, the oldest safe
 /// compressible range is summarized by an auxiliary model call and landed through the
 /// store's normal <c>context_compress</c> path — so protections (recent working set, last
-/// user message, load-bearing compress results) and tool-pair integrity still apply.
+/// user message, load-bearing block markers) and tool-pair integrity still apply.
 ///
 /// Ported invariants: the summary must be strictly smaller than what it replaces
-/// (shrink guard), attempts are rate-limited so a failing summarizer cannot loop, and
-/// every failure is best-effort — the nudge/GC ladder remains the fallback.
+/// (shrink guard), attempts (success or failure) are rate-limited so a rejected range
+/// cannot loop every step, and every failure is best-effort — the nudge/GC ladder remains
+/// the fallback. Pressure uses conversation chars only; tool schemas are a fixed prefix.
 ///
 /// KV-cache alignment: when a prefix provider is wired, the summarizer replays the very
 /// system prompt used by main requests in front of the range (tool schemas are omitted so
@@ -37,7 +38,7 @@ public sealed class AcpAutoCompactor
     private const int MaximumEntryPreviewChars = 6_000;
     private const int EntryHeadChars = 2_500;
     private const int EntryTailChars = 1_500;
-    private const long MaximumSummarizerInputChars = 60_000;
+    private const long MaximumSummarizerInputChars = 16_000;
     private static readonly TimeSpan MinimumAttemptInterval = TimeSpan.FromSeconds(20);
     private static readonly Regex SpillLocatorRegex = new(
         "spill:[0-9a-f]{32}", RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -97,13 +98,14 @@ public sealed class AcpAutoCompactor
         if (ratio <= 0) return null;
 
         var budget = AcpContextStore.EffectiveBudget(settings);
-        var prefix = _prefixProvider?.Invoke();
-        if (store.PressureChars(prefix?.SystemPrompt, prefix?.Tools) < budget * ratio) return null;
+        // Status bar and auto-compact share conversation size. Tool schemas are a large
+        // fixed prefix and must not make an 18% window look like it needs compaction.
+        var pressure = store.ActiveChars;
+        if (pressure < budget * ratio) return null;
         if (DateTimeOffset.UtcNow - _lastAttempt < MinimumAttemptInterval) return null;
 
         var compacted = await CompactLargestRangeAsync(store, MinimumRangeChars, ct).ConfigureAwait(true);
-        if (compacted is not null)
-            _lastAttempt = DateTimeOffset.UtcNow;
+        _lastAttempt = DateTimeOffset.UtcNow;
         return compacted;
     }
 
@@ -128,64 +130,71 @@ public sealed class AcpAutoCompactor
         CancellationToken ct)
     {
         var snapshot = store.ActiveEntries;
-        var target = store.SuggestRanges(snapshot).FirstOrDefault(range => range.Chars >= minimumRangeChars);
-        if (target is null)
+        var candidates = store.SuggestRanges(snapshot)
+            .Where(range => range.Chars >= minimumRangeChars)
+            .ToList();
+        if (candidates.Count == 0)
         {
             _logger?.Warn("自动压缩跳过：当前没有可安全压缩的大区间。");
             return null;
         }
 
-        var startIndex = IndexOfRefPrefix(snapshot, target.StartRef);
-        var endIndex = IndexOfRefPrefix(snapshot, target.EndRef);
-        if (startIndex < 0 || endIndex < startIndex) return null;
-        var rangeEntries = snapshot.Skip(startIndex).Take(endIndex - startIndex + 1).ToList();
-        var rangeTotalChars = rangeEntries.Sum(entry => (long)entry.Chars);
-
-        string summary;
-        try
+        foreach (var target in candidates)
         {
-            summary = await SummarizeAsync(rangeEntries, ct).ConfigureAwait(true);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            _logger?.Warn($"自动压缩的摘要调用失败：{ex.Message}");
-            return null;
+            var startIndex = IndexOfRefPrefix(snapshot, target.StartRef);
+            var endIndex = IndexOfRefPrefix(snapshot, target.EndRef);
+            if (startIndex < 0 || endIndex < startIndex) continue;
+            var rangeEntries = snapshot.Skip(startIndex).Take(endIndex - startIndex + 1).ToList();
+            var rangeTotalChars = rangeEntries.Sum(entry => (long)entry.Chars);
+
+            string summary;
+            try
+            {
+                summary = await SummarizeAsync(rangeEntries, ct).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"自动压缩的摘要调用失败：{ex.Message}");
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(summary))
+            {
+                _logger?.Warn("自动压缩跳过：摘要调用返回空输出。");
+                continue;
+            }
+
+            // Shrink guard (dsh): the replacement must be strictly cheaper than the replaced
+            // range, priced through the store's own estimator so token-budgeted stores compare
+            // tokens instead of mixing units.
+            var summaryEstimate = store.EstimateContent(summary);
+            if (summaryEstimate >= rangeTotalChars)
+            {
+                _logger?.Warn($"自动压缩被收缩守卫拒绝：摘要约 {summaryEstimate:N0}，区间 {rangeTotalChars:N0}。");
+                continue;
+            }
+
+            var (ok, message) = store.Compress(target.StartRef, target.EndRef, summary, "(自动压缩)");
+            if (!ok)
+            {
+                _logger?.Warn($"自动压缩被存档层拒绝：{message}");
+                continue;
+            }
+
+            var warning = message.Contains("⚠️", StringComparison.Ordinal)
+                ? message[(message.IndexOf("⚠️", StringComparison.Ordinal) + 1)..].Trim()
+                : null;
+            // Summary rides in the payload so event-log replay can rebuild the block verbatim.
+            return new ContextCompacted(
+                Math.Max(0, rangeTotalChars - summaryEstimate),
+                $"[{target.StartRef}]–[{target.EndRef}]",
+                Automatic: true,
+                warning,
+                summary);
         }
 
-        if (string.IsNullOrWhiteSpace(summary))
-        {
-            _logger?.Warn("自动压缩跳过：摘要调用返回空输出。");
-            return null;
-        }
-
-        // Shrink guard (dsh): the replacement must be strictly cheaper than the replaced
-        // range, priced through the store's own estimator so token-budgeted stores compare
-        // tokens instead of mixing units.
-        var summaryEstimate = store.EstimateContent(summary);
-        if (summaryEstimate >= rangeTotalChars)
-        {
-            _logger?.Warn($"自动压缩被收缩守卫拒绝：摘要约 {summaryEstimate:N0}，区间 {rangeTotalChars:N0}。");
-            return null;
-        }
-
-        var (ok, message) = store.Compress(target.StartRef, target.EndRef, summary, "(自动压缩)");
-        if (!ok)
-        {
-            _logger?.Warn($"自动压缩被存档层拒绝：{message}");
-            return null;
-        }
-
-        var warning = message.Contains("⚠️", StringComparison.Ordinal)
-            ? message[(message.IndexOf("⚠️", StringComparison.Ordinal) + 1)..].Trim()
-            : null;
-        // Summary rides in the payload so event-log replay can rebuild the block verbatim.
-        return new ContextCompacted(
-            Math.Max(0, rangeTotalChars - summaryEstimate),
-            $"[{target.StartRef}]–[{target.EndRef}]",
-            Automatic: true,
-            warning,
-            summary);
+        return null;
     }
 
     private async Task<string> SummarizeAsync(IReadOnlyList<AcpEntry> rangeEntries, CancellationToken ct)

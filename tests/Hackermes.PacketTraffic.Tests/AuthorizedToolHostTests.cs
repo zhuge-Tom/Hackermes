@@ -137,6 +137,147 @@ public sealed class AuthorizedToolHostTests
     }
 
     [Fact]
+    public void Catalog_BuildsBoundedVerificationProbeInvocationsAndValidatesScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-verifyprobe-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var python = Path.Combine(root, "python.exe");
+        var sqlmap = Path.Combine(root, "sqlmap.py");
+        var unauthorized = Path.Combine(root, "Unauthorized-Vul.py");
+        File.WriteAllText(python, string.Empty);
+        File.WriteAllText(sqlmap, string.Empty);
+        File.WriteAllText(unauthorized, string.Empty);
+        var oldPython = Environment.GetEnvironmentVariable("HACKERMES_PYTHON_PATH");
+        var oldSqlmap = Environment.GetEnvironmentVariable("HACKERMES_SQLMAP_PATH");
+        var oldUnauthorized = Environment.GetEnvironmentVariable("HACKERMES_UNAUTHORIZED_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", python);
+            Environment.SetEnvironmentVariable("HACKERMES_SQLMAP_PATH", sqlmap);
+            Environment.SetEnvironmentVariable("HACKERMES_UNAUTHORIZED_PATH", unauthorized);
+
+            var sql = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeSqlmapInject,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":8080,\"path\":\"/search\",\"parameter\":\"id\",\"value\":\"1\"}"),
+                ["127.0.0.1"]);
+            Assert.Equal(python, sql.ExecutablePath);
+            Assert.Equal(root, sql.WorkingDirectory);
+            Assert.Contains("http://127.0.0.1:8080/search?id=1", sql.Arguments);
+            Assert.Contains("--batch", sql.Arguments);
+            Assert.Contains("--technique=BE", sql.Arguments);
+
+            var unauth = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeUnauthorizedAccess,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"http\"}"), ["127.0.0.1"]);
+            Assert.Equal(python, unauth.ExecutablePath);
+            Assert.Equal(root, unauth.WorkingDirectory);
+            Assert.Equal([unauthorized, "-u", "http://127.0.0.1:80/", "-t", "1"], unauth.Arguments);
+
+            var tools = AuthorizedToolCatalog.Describe();
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.ProbeSqlmapInject).Available);
+            Assert.True(tools.Single(tool => tool.Id == AuthorizedToolCatalog.ProbeUnauthorizedAccess).Available);
+
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeSqlmapInject,
+                    "{\"target\":\"example.com\",\"parameter\":\"id\"}"), ["127.0.0.1"]));
+            Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeSqlmapInject,
+                    "{\"target\":\"127.0.0.1\",\"parameter\":\"id\",\"path\":\"../etc\"}"), ["127.0.0.1"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", oldPython);
+            Environment.SetEnvironmentVariable("HACKERMES_SQLMAP_PATH", oldSqlmap);
+            Environment.SetEnvironmentVariable("HACKERMES_UNAUTHORIZED_PATH", oldUnauthorized);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Catalog_BuildsBoundedSubdomainEnumInvocationAndValidatesScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-subdomain-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var python = Path.Combine(root, "python.exe");
+        var script = Path.Combine(root, "subdomain_enum.py");
+        var wordlist = Path.Combine(root, "subdomains.txt");
+        File.WriteAllText(python, string.Empty);
+        File.WriteAllText(script, string.Empty);
+        File.WriteAllText(wordlist, "www\nmail\n");
+        var oldPython = Environment.GetEnvironmentVariable("HACKERMES_PYTHON_PATH");
+        var oldScript = Environment.GetEnvironmentVariable("HACKERMES_SUBDOMAIN_ENUM_PATH");
+        var oldWordlist = Environment.GetEnvironmentVariable("HACKERMES_SUBDOMAIN_WORDLIST");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", python);
+            Environment.SetEnvironmentVariable("HACKERMES_SUBDOMAIN_ENUM_PATH", script);
+            Environment.SetEnvironmentVariable("HACKERMES_SUBDOMAIN_WORDLIST", wordlist);
+
+            var step = new AssessmentStep(AuthorizedToolCatalog.ReconSubdomainEnum, "{\"domain\":\"example.com\"}");
+            var invocation = AuthorizedToolCatalog.BuildInvocation(step, ["*.example.com"]);
+
+            Assert.Equal(python, invocation.ExecutablePath);
+            Assert.Equal(root, invocation.WorkingDirectory);
+            Assert.Equal([script, "example.com", wordlist], invocation.Arguments);
+            Assert.Equal("{\"domain\":\"example.com\"}", AuthorizedToolCatalog.NormalizeStep(step, ["*.example.com"]).Input);
+
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ReconSubdomainEnum, "{\"domain\":\"outside.com\"}"), ["*.example.com"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", oldPython);
+            Environment.SetEnvironmentVariable("HACKERMES_SUBDOMAIN_ENUM_PATH", oldScript);
+            Environment.SetEnvironmentVariable("HACKERMES_SUBDOMAIN_WORDLIST", oldWordlist);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Catalog_BuildsBoundedParamCorpusInvocationAndValidatesCorpus()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hackermes-corpus-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var python = Path.Combine(root, "python.exe");
+        var script = Path.Combine(root, "param_corpus_probe.py");
+        var corpus = Path.Combine(root, "sqli-auth-bypass.txt");
+        File.WriteAllText(python, string.Empty);
+        File.WriteAllText(script, string.Empty);
+        File.WriteAllText(corpus, "' OR 1=1 --\n");
+        var oldPython = Environment.GetEnvironmentVariable("HACKERMES_PYTHON_PATH");
+        var oldProbe = Environment.GetEnvironmentVariable("HACKERMES_PARAM_CORPUS_PROBE_PATH");
+        var oldCorpus = Environment.GetEnvironmentVariable("HACKERMES_CORPUS_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", python);
+            Environment.SetEnvironmentVariable("HACKERMES_PARAM_CORPUS_PROBE_PATH", script);
+            Environment.SetEnvironmentVariable("HACKERMES_CORPUS_ROOT", root);
+
+            var invocation = AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeParamCorpus,
+                    "{\"target\":\"127.0.0.1\",\"scheme\":\"http\",\"port\":8080,\"path\":\"/q\",\"parameter\":\"id\",\"corpus\":\"sqli-auth-bypass\"}"),
+                ["127.0.0.1"]);
+            Assert.Equal(python, invocation.ExecutablePath);
+            Assert.Equal(root, invocation.WorkingDirectory);
+            Assert.Equal([script, "http://127.0.0.1:8080/q", "id", "1", corpus, "40"], invocation.Arguments);
+
+            Assert.Throws<ArgumentException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeParamCorpus,
+                    "{\"target\":\"127.0.0.1\",\"corpus\":\"does-not-exist\"}"), ["127.0.0.1"]));
+            Assert.Throws<UnauthorizedAccessException>(() => AuthorizedToolCatalog.BuildInvocation(
+                new AssessmentStep(AuthorizedToolCatalog.ProbeParamCorpus,
+                    "{\"target\":\"example.com\",\"parameter\":\"id\"}"), ["127.0.0.1"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HACKERMES_PYTHON_PATH", oldPython);
+            Environment.SetEnvironmentVariable("HACKERMES_PARAM_CORPUS_PROBE_PATH", oldProbe);
+            Environment.SetEnvironmentVariable("HACKERMES_CORPUS_ROOT", oldCorpus);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Catalog_BuildsBoundedWebProbeInvocationsAndValidatesScope()
     {
         var root = Path.Combine(Path.GetTempPath(), "hackermes-webprobe-test-" + Guid.NewGuid().ToString("N"));

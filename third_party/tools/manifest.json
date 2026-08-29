@@ -4,7 +4,16 @@
     "id": "python-cpython-3.11.14",
     "path": "_runtime/python/python.exe",
     "source": "python-build-standalone distribution managed by uv",
-    "licenseFiles": ["_runtime/python/LICENSE.txt"]
+    "licenseFiles": [
+      "_runtime/python/LICENSE.txt"
+    ],
+    "javafx": {
+      "id": "openjfx-21.0.5-win",
+      "path": "_runtime/javafx/lib",
+      "source": "Maven Central org.openjfx platform jars (base/graphics/controls/fxml/media/web)",
+      "license": "GPL-2.0-with-classpath-exception",
+      "notes": "Module path for bundled JavaFX GUI tools; requires a Java 21 runtime on PATH."
+    }
   },
   "tools": [
     {
@@ -19,7 +28,10 @@
       "version": "7.99",
       "source": "https://nmap.org/",
       "license": "NPSL-0.95",
-      "licenseFiles": ["LICENSE", "3rd-party-licenses.txt"],
+      "licenseFiles": [
+        "LICENSE",
+        "3rd-party-licenses.txt"
+      ],
       "entryPoint": "nmap.exe"
     },
     {
@@ -27,7 +39,9 @@
       "version": "1d00d2f2964e45884e4c7415739bb0a8dcf6cacd",
       "source": "https://github.com/maurosoria/dirsearch",
       "license": "GPL-2.0-only",
-      "licenseFiles": ["LICENSE"],
+      "licenseFiles": [
+        "LICENSE"
+      ],
       "entryPoint": "dirsearch.py"
     },
     {
@@ -42,7 +56,9 @@
       "version": "2.4.2-local",
       "source": "https://github.com/EnableSecurity/wafw00f",
       "license": "BSD-3-Clause",
-      "licenseFiles": ["LICENSE"],
+      "licenseFiles": [
+        "LICENSE"
+      ],
       "entryPoint": "wafw00f/main.py"
     },
     {
@@ -50,7 +66,9 @@
       "version": "820b9d13959998425396bd36e34d4d643bbf54a6",
       "source": "https://github.com/Asperis-Security/xssFuzz",
       "license": "GPL-3.0-only",
-      "licenseFiles": ["LICENSE"],
+      "licenseFiles": [
+        "LICENSE"
+      ],
       "entryPoint": "xssFuzz.py"
     },
     {
@@ -65,7 +83,9 @@
       "version": "1.10.6.64-dev-local",
       "source": "https://github.com/sqlmapproject/sqlmap",
       "license": "GPL-2.0-or-later-with-clarifications",
-      "licenseFiles": ["LICENSE"],
+      "licenseFiles": [
+        "LICENSE"
+      ],
       "entryPoint": "sqlmap.py"
     },
     {
@@ -74,6 +94,279 @@
       "source": "https://github.com/ADOOO/DnslogSqlinj",
       "license": "redistribution-unverified",
       "entryPoint": "dnslogSql.py"
+    },
+    {
+      "id": "recon.git-leak.terminal",
+      "version": "local-source",
+      "source": "https://github.com/lijiejie/GitHack",
+      "license": "GPL-3.0-only",
+      "licenseFiles": [
+        "LICENSE"
+      ],
+      "entryPoint": "GitHack.py"
+    },
+    {
+      "id": "recon.svn-leak.terminal",
+      "version": "local-source",
+      "source": "https://github.com/admintony/svnExploit",
+      "license": "redistribution-unverified",
+      "entryPoint": "SvnExploit.py",
+      "vendoredDependencies": [
+        "prettytable (BSD-3-Clause)",
+        "wcwidth (MIT)"
+      ]
+    },
+    {
+      "id": "recon.ds-store.terminal",
+      "version": "local-source",
+      "source": "https://github.com/lijiejie/ds_store_exp",
+      "license": "redistribution-unverified",
+      "entryPoint": "ds_store_exp.py",
+      "vendoredDependencies": [
+        "ds_store (MIT)",
+        "mac_alias (MIT)"
+      ]
+    },
+    {
+      "id": "recon.swagger-api.terminal",
+      "version": "local-source",
+      "source": "https://github.com/jayus0821/swagger-hack",
+      "license": "redistribution-unverified",
+      "entryPoint": "swagger-hack2.0.py",
+      "vendoredDependencies": [
+        "loguru (MIT)",
+        "colorama (BSD-3-Clause)",
+        "win32-setctime (MIT)"
+      ]
+    },
+    {
+      "id": "detect.weblogic-t3.terminal",
+      "version": "local-source",
+      "source": "https://github.com/RabbitMask/WeblogicScan",
+      "license": "MIT",
+      "licenseFiles": [
+        "LICENSE"
+      ],
+      "entryPoint": "WeblogicScan.py"
+    },
+    {
+      "id": "detect.fastjson-jndi.terminal",
+      "version": "1.4.0",
+      "source": "https://github.com/smallfox233/JsonExp",
+      "license": "redistribution-unverified",
+      "entryPoint": "JsonExp.exe"
+    },
+    {
+      "id": "exploit.vcenter.terminal",
+      "version": "local-source",
+      "source": "https://github.com/Schira4396/VcenterKiller",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        "LICENSE"
+      ],
+      "entryPoint": "main.exe",
+      "notes": "shell-verify.jsp is a Hackermes-supplied bounded verification payload for authorized upload tests."
+    },
+    {
+      "id": "exploit.heapdump.terminal",
+      "version": "1.1",
+      "source": "https://github.com/whwlsfb/JDumpSpider",
+      "license": "redistribution-unverified",
+      "entryPoint": "JDumpSpider-1.1-SNAPSHOT-full.jar",
+      "notes": "Requires a Java 8+ runtime resolved through HACKERMES_JAVA_PATH or PATH; not bundled."
+    },
+    {
+      "id": "detect.oa-poc.terminal",
+      "version": "0.83-runner1",
+      "source": "user-supplied local copy of OA-EXPTOOL 0.83 (book/ POC set)",
+      "license": "AGPL-3.0-only",
+      "licenseFiles": [
+        "LICENSE"
+      ],
+      "entryPoint": "oa_poc_runner.py",
+      "notes": "oa_poc_runner.py is a Hackermes-written single-shot runner reimplementing the bounded yaml matcher subset (word/status matchers, request-index extractors); detection only, never runs upstream exploit payloads.",
+      "vendoredDependencies": [
+        "PyYAML 6.0.3 (MIT)"
+      ]
+    },
+    {
+      "id": "detect.shiro.terminal",
+      "version": "local-copy-2022",
+      "source": "user-supplied local copy of shiro_tool (wyzxxz)",
+      "license": "redistribution-unverified",
+      "entryPoint": "shiro_tool.jar",
+      "notes": "Requires a Java 8+ runtime resolved through HACKERMES_JAVA_PATH or PATH; detection phase drives an interactive menu that exits on stdin EOF."
+    },
+    {
+      "id": "detect.struts2.terminal",
+      "version": "master-20260829",
+      "source": "https://github.com/HatBoy/Struts2-Scan",
+      "license": "GPL-3.0-only",
+      "licenseFiles": [
+        "LICENSE"
+      ],
+      "entryPoint": "Struts2Scan.py",
+      "vendoredDependencies": [
+        "click (BSD-3-Clause)"
+      ]
+    },
+    {
+      "id": "detect.nacos.terminal",
+      "version": "1.0-hackermes",
+      "source": "Hackermes-authored read-only probe (no upstream)",
+      "license": "repository license",
+      "entryPoint": "nacos_probe.py"
+    },
+    {
+      "id": "exploit.fastjson-payload.terminal",
+      "version": "0.1-beta2-hackermes-build",
+      "source": "https://github.com/c0ny1/FastjsonExploit (rebuilt by Hackermes)",
+      "license": "redistribution-unverified",
+      "entryPoint": "FastjsonExploit-0.1-beta2-all.jar",
+      "notes": "Hackermes build: pom source/target 1.8, org.javassist 3.29.2-GA, ClassClassPath patch, payload-only usage with JVM --add-opens flag."
+    },
+    {
+      "id": "probe.cloud-aksk.terminal",
+      "version": "0.1.2-local",
+      "source": "user-supplied local copy of teamssix/cf",
+      "license": "redistribution-unverified",
+      "entryPoint": "cf.exe",
+      "notes": "Read-only verification (ls/perm) driven with SDK-standard environment variables injected by the ToolHost from a DPAPI-staged credential reference; secrets never enter the plan, ticket or evidence."
+    },
+    {
+      "id": "gui.shiro-exploit.terminal",
+      "version": "local-copy",
+      "source": "ShiroExploit V2.51 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "ShiroExploit.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.struts2-check.terminal",
+      "version": "local-copy",
+      "source": "Struts2 全版本漏洞检测工具 19.21 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "Struts2_19.21.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.thinkphp.terminal",
+      "version": "local-copy",
+      "source": "ThinkPHP 综合漏洞利用工具 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "ThinkPHP.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.tomcat-pass.terminal",
+      "version": "local-copy",
+      "source": "TomcatPass (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "TomcatPass.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.nacos-exploit.terminal",
+      "version": "local-copy",
+      "source": "NacosExploitGUI v4.0 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "NacosExploitGUI_v4.0.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.xxl-job.terminal",
+      "version": "local-copy",
+      "source": "xxl-job ExploitGUI v1.0 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "xxl-jobExploitGUI_v1.0.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.jenkins-exploit.terminal",
+      "version": "local-copy",
+      "source": "JenkinsExploit-GUI 1.3 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "JenkinsExploit-GUI-1.3-SNAPSHOT.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.tongda-oa.terminal",
+      "version": "local-copy",
+      "source": "通达OA综合利用工具 V1.3 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "TongdaOATool_V1.3.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.frchannel.terminal",
+      "version": "local-copy",
+      "source": "帆软 FrChannelPlus (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "FrChannelPlus.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.hikvision.terminal",
+      "version": "local-copy",
+      "source": "海康威视综合利用工具 v3.0 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "HikvisionExploitGUI_v3.0.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.dahua.terminal",
+      "version": "local-copy",
+      "source": "大华 DahuaExploitGUI (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "DahuaExploitGUI.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.myexploit.terminal",
+      "version": "local-copy",
+      "source": "MYExploit (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "MYExploit.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.decrypt-tools.terminal",
+      "version": "local-copy",
+      "source": "DecryptTools 综合加解密 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "DecryptTools.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.mdat.terminal",
+      "version": "local-copy",
+      "source": "MDAT 多数据库综合利用 2.1.1 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "Multiple.Database.Utilization.Tools-2.1.1-jar-with-dependencies.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
+    },
+    {
+      "id": "gui.api-tool.terminal",
+      "version": "local-copy",
+      "source": "API-T00L v1.2 (user-supplied local copy)",
+      "license": "redistribution-unverified",
+      "entryPoint": "API-T00L_v1.2.jar",
+      "notes": "Human-only GUI tool; launched from the security tools panel against the bundled JavaFX/Swing runtime. Not agent-callable.",
+      "uiKind": "javafx-or-swing"
     }
   ]
 }

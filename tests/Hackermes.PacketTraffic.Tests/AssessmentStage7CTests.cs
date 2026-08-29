@@ -31,6 +31,28 @@ public sealed class AssessmentStage7CTests : IDisposable
 
     public AssessmentStage7CTests() => Directory.CreateDirectory(_root);
 
+    [Theory]
+    [InlineData("*", "anything.example", true)]
+    [InlineData("*.ys7.com", "ys7.com", true)]
+    [InlineData("*.ys7.com", "www.ys7.com", true)]
+    [InlineData("*.ys7.com", "api.cloud.ys7.com", true)]
+    [InlineData("*.ys7.com", "ys7.com.evil.test", false)]
+    [InlineData("*.ys7.com", "notys7.com", false)]
+    [InlineData("www.ys7.com", "www.ys7.com", true)]
+    [InlineData("www.ys7.com", "api.ys7.com", false)]
+    public void Wildcard_and_exact_scopes_authorize_only_in_range_hosts(string allowed, string host, bool expected)
+    {
+        Assert.Equal(expected, AuthorizedToolCatalog.IsTargetInScope(host, [allowed]));
+    }
+
+    [Fact]
+    public void CreateScope_accepts_a_platform_wildcard_domain()
+    {
+        var plane = CreatePlane();
+        var scope = plane.CreateScope("萤石", "platform", "owner", ["*.ys7.com"], DateTimeOffset.UtcNow.AddMinutes(5));
+        Assert.Equal(["*.ys7.com"], scope.Targets);
+    }
+
     [Fact]
     public void Unrestricted_scope_can_be_created_without_entering_a_domain()
     {
@@ -40,6 +62,115 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.Empty(selection.ExecutionEndpoints);
         Assert.Throws<ArgumentException>(() =>
             AssessmentWorkspaceView.PrepareQuickAuthorization(false, string.Empty));
+    }
+
+    [Fact]
+    public void Authorize_all_without_a_target_defers_execution_to_the_agent()
+    {
+        var selection = AssessmentWorkspaceView.PrepareQuickAuthorization(true, string.Empty);
+
+        Assert.False(AssessmentWorkspaceView.HasExecutionTarget(selection));
+        Assert.Equal(["*"], selection.ScopeTargets);
+    }
+
+    [Fact]
+    public async Task Workspace_isolates_jobs_until_they_are_moved()
+    {
+        var plane = CreatePlane();
+        var workspace = plane.CreateWorkspace("补天");
+        var first = await RunEchoAsync(plane, "default-job");
+        var second = await RunEchoAsync(plane, "moved-job");
+
+        Assert.True(plane.AssignJobWorkspace(second.Id, workspace.Id));
+        var isolated = plane.ReadCasesInWorkspace(workspace.Id);
+        var defaults = plane.ReadCasesInWorkspace(string.Empty);
+
+        Assert.Equal(second.Id, Assert.Single(isolated).Job.Id);
+        Assert.Contains(defaults, value => value.Job.Id == first.Id);
+        Assert.DoesNotContain(defaults, value => value.Job.Id == second.Id);
+        Assert.True(plane.VerifyAudit().Valid);
+    }
+
+    [Fact]
+    public void Complete_grant_creates_a_completed_job_without_running_tools()
+    {
+        var plane = CreatePlane();
+        var scope = plane.CreateScope(string.Empty, string.Empty, string.Empty, ["*"],
+            DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var job = plane.CompleteGrant(scope.Id, $"{scope.Name} · 授权确认", scope.OperatorId, "授权已确认。");
+
+        Assert.Equal(AssessmentJobStatus.Completed, job.Status);
+        Assert.Equal(job.Id, Assert.Single(plane.ReadCases()).Job.Id);
+        Assert.Equal("授权已确认。", Assert.Single(plane.Evidence(job.Id)).Content);
+        Assert.True(plane.VerifyAudit().Valid);
+    }
+
+    [Fact]
+    public void Confirm_and_run_accepts_a_concrete_target_with_unrestricted_scope()
+    {
+        var selection = AssessmentWorkspaceView.PrepareQuickAuthorization(true, "https://Example.COM:8443/path");
+
+        Assert.True(AssessmentWorkspaceView.HasExecutionTarget(selection));
+        Assert.Equal(["*"], selection.ScopeTargets);
+        var endpoint = Assert.Single(selection.ExecutionEndpoints);
+        Assert.Equal("example.com", endpoint.Target);
+        Assert.Equal("https", endpoint.Scheme);
+        Assert.Equal(8443, endpoint.Port);
+    }
+
+    [Fact]
+    public async Task Begin_surfaces_the_job_before_toolhost_finishes()
+    {
+        var host = new GateHost();
+        var plane = new AssessmentControlPlane(host, new TestSettings(Path.Combine(_root, "settings.json")),
+            new NullLogger(), _secrets);
+        var scope = plane.CreateScope("loopback", "unit-test", "owner", ["127.0.0.1"], DateTimeOffset.UtcNow.AddMinutes(5));
+        var plan = plane.CreatePlan(scope.Id, "gated",
+            [new AssessmentStep(AuthorizedToolCatalog.SimulationEcho, "pending")], "author");
+        var approval = plane.Approve(plan.Id, "approver", DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var run = plane.Begin(plan.Id, approval.Id, "runner");
+        await host.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(run.Completion.IsCompleted);
+        Assert.Contains(run.Job.Id, plane.ReadCases().Select(value => value.Job.Id));
+        Assert.Equal(AssessmentJobStatus.Running, plane.Jobs.Single(value => value.Id == run.Job.Id).Status);
+
+        host.Gate.SetResult(new AssessmentExecutionResult(true, "pending"));
+        var finished = await run.Completion;
+
+        Assert.Equal(AssessmentJobStatus.Completed, finished.Status);
+        Assert.Equal("pending", Assert.Single(plane.Evidence(finished.Id)).Content);
+    }
+
+    [Fact]
+    public async Task Hide_job_removes_it_from_read_cases_and_keeps_the_audit_chain()
+    {
+        var plane = CreatePlane();
+        var job = await RunEchoAsync(plane, "hide-me");
+
+        Assert.True(plane.HideJob(job.Id, "owner"));
+        Assert.False(plane.HideJob(job.Id, "owner"));
+        Assert.DoesNotContain(plane.ReadCases(), value => value.Job.Id == job.Id);
+        Assert.True(plane.Jobs.Single(value => value.Id == job.Id).Hidden);
+        Assert.True(plane.VerifyAudit().Valid);
+        Assert.Contains(plane.AuditForEntity(job.Id), entry => entry.Action == "job.hide");
+    }
+
+    [Fact]
+    public async Task Hide_finished_jobs_clears_completed_cases_from_the_workbench()
+    {
+        var plane = CreatePlane();
+        var first = await RunEchoAsync(plane, "one");
+        var second = await RunEchoAsync(plane, "two");
+
+        Assert.Equal(2, plane.HideFinishedJobs("owner"));
+        Assert.Equal(0, plane.HideFinishedJobs("owner"));
+        Assert.Empty(plane.ReadCases());
+        Assert.True(plane.Jobs.Single(value => value.Id == first.Id).Hidden);
+        Assert.True(plane.Jobs.Single(value => value.Id == second.Id).Hidden);
+        Assert.True(plane.VerifyAudit().Valid);
     }
 
     [Fact]
@@ -108,6 +239,44 @@ public sealed class AssessmentStage7CTests : IDisposable
         Assert.Equal(2, evidence.Count);
         Assert.Contains(evidence, item => item.Content.Contains("warning: expected failure", StringComparison.Ordinal));
         Assert.Contains(evidence, item => item.Content == "pass");
+    }
+
+    [Fact]
+    public async Task Missing_security_headers_recon_completes_and_archives_low_findings()
+    {
+        var plane = new AssessmentControlPlane(new ReconHeadersHost(),
+            new TestSettings(Path.Combine(_root, "settings.json")), new NullLogger(), _secrets);
+        var scope = plane.CreateScope("loopback", "unit-test", "owner", ["127.0.0.1"], DateTimeOffset.UtcNow.AddMinutes(5));
+        var plan = plane.CreatePlan(scope.Id, "headers",
+            [new AssessmentStep(AuthorizedToolCatalog.HttpHeadersProbe, """{"target":"127.0.0.1","scheme":"http","port":80,"path":"/"}""")],
+            "author");
+        var approval = plane.Approve(plan.Id, "approver", DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var job = await plane.StartAsync(plan.Id, approval.Id, "runner");
+
+        Assert.Equal(AssessmentJobStatus.Completed, job.Status);
+        var findings = plane.Findings(job.Id);
+        Assert.NotEmpty(findings);
+        var allowed = new[] { "Critical", "High", "Medium", "Low", "Info" };
+        Assert.All(findings, value => Assert.True(allowed.Contains(value.Severity), $"Unexpected severity: {value.Severity}"));
+    }
+
+    [Fact]
+    public async Task Finding_accepts_a_poc_and_the_report_renders_it()
+    {
+        var plane = CreatePlane();
+        var job = await RunEchoAsync(plane, "poc evidence");
+        var evidence = Assert.Single(plane.Evidence(job.Id));
+        var finding = plane.CreateFinding(job.Id, evidence.Id, "An issue", "Reproduced on authorized host",
+            "High", "High", "analyst", "curl -sSI 'https://host/' -> Location: http://host/");
+
+        Assert.Equal("curl -sSI 'https://host/' -> Location: http://host/", finding.PoC);
+        var markdown = plane.ExportReport(job.Id, "markdown");
+        Assert.Contains("curl -sSI", markdown, StringComparison.Ordinal);
+        var html = plane.ExportReport(job.Id, "html");
+        Assert.Contains("curl -sSI", html, StringComparison.Ordinal);
+        var json = plane.ExportReport(job.Id, "json");
+        Assert.Contains("curl -sSI", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -559,6 +728,19 @@ public sealed class AssessmentStage7CTests : IDisposable
         try { Directory.Delete(_root, true); } catch { }
     }
 
+    private sealed class GateHost : IAssessmentExecutionHost
+    {
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<AssessmentExecutionResult> Gate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<AssessmentExecutionResult> ExecuteAsync(AssessmentStep step,
+            AssessmentExecutionAuthorization authorization, CancellationToken ct)
+        {
+            Started.TrySetResult(true);
+            return await Gate.Task.WaitAsync(ct);
+        }
+    }
+
     private sealed class BestEffortHost : IAssessmentExecutionHost
     {
         public Task<AssessmentExecutionResult> ExecuteAsync(AssessmentStep step,
@@ -566,6 +748,14 @@ public sealed class AssessmentStage7CTests : IDisposable
             Task.FromResult(step.Input == "fail"
                 ? new AssessmentExecutionResult(false, string.Empty, "expected failure")
                 : new AssessmentExecutionResult(true, step.Input));
+    }
+
+    private sealed class ReconHeadersHost : IAssessmentExecutionHost
+    {
+        public Task<AssessmentExecutionResult> ExecuteAsync(AssessmentStep step,
+            AssessmentExecutionAuthorization authorization, CancellationToken ct) =>
+            Task.FromResult(new AssessmentExecutionResult(true,
+                "HTTP/1.1 200 OK\nContent-Type: text/html\n\n<html><body>hello</body></html>"));
     }
 
     private sealed class NullLogger : IAppLogger

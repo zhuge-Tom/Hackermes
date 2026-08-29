@@ -19,12 +19,23 @@ public sealed class AgentAssessmentPromptTests
         Assert.Contains("assessment_create_scope_from_page", system, StringComparison.Ordinal);
         Assert.Contains("one-time approval", system, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ToolHost", system, StringComparison.Ordinal);
-        Assert.Contains("Never invent or substitute a target", system, StringComparison.Ordinal);
+        Assert.Contains("Do not invent hosts outside the approved scope", system, StringComparison.Ordinal);
+        Assert.Contains("'*.domain'", system, StringComparison.Ordinal);
+        Assert.Contains("discover in-scope hostnames", system, StringComparison.Ordinal);
         Assert.Contains("do not claim a vulnerability without tool evidence", system, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("packet_analyze", system, StringComparison.Ordinal);
         Assert.Contains("assessment_create_finding", system, StringComparison.Ordinal);
         Assert.Contains("codes, not confirmed vulnerabilities", system, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("page_navigate", system, StringComparison.Ordinal);
+        Assert.Contains("do not wait for the operator to open a tab", system, StringComparison.Ordinal);
+        Assert.Contains("recon.git_leak.scan", system, StringComparison.Ordinal);
+        Assert.Contains("detect.weblogic_t3.scan", system, StringComparison.Ordinal);
+        Assert.Contains("exploit.heapdump.analyze", system, StringComparison.Ordinal);
+        Assert.Contains("detect.oa_poc.probe", system, StringComparison.Ordinal);
+        Assert.Contains("Match the adapter to the current stage", system, StringComparison.Ordinal);
         Assert.DoesNotContain("assessment_create_scope ", system, StringComparison.Ordinal);
+        Assert.DoesNotContain("Never invent or substitute a target", system, StringComparison.Ordinal);
+        Assert.DoesNotContain("or to attach a page", system, StringComparison.Ordinal);
         Assert.True(system.Length < 7_000, $"System safety guidance unexpectedly grew to {system.Length} characters.");
     }
 

@@ -25,8 +25,24 @@ public static class AgentRequestError
 {
     private static readonly int[] RetryableStatusCodes = [408, 429, 500, 502, 503, 504];
 
+    public static bool IsPrematureStreamEnd(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is IOException && current is not ObjectDisposedException) return true;
+            var message = current.Message;
+            if (message.Contains("ended prematurely", StringComparison.OrdinalIgnoreCase)) return true;
+            if (message.Contains("ResponseEnded", StringComparison.OrdinalIgnoreCase)) return true;
+            if (message.Contains("connection reset", StringComparison.OrdinalIgnoreCase)) return true;
+            if (message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
     public static AgentRequestFailureKind Classify(Exception exception)
     {
+        if (IsPrematureStreamEnd(exception)) return AgentRequestFailureKind.Transient;
+
         if (exception is HttpRequestException http)
         {
             // No "HTTP <code>" prefix means the request never completed (socket/DNS/TLS).

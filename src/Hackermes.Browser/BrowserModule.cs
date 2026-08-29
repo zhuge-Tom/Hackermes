@@ -30,6 +30,7 @@ public sealed class BrowserModule : IModule
             sp.GetRequiredService<BrowserPageContextService>());
         services.AddSingleton<IBrowserHistoryStore, BrowserHistoryStore>();
         services.AddSingleton<IBrowserTabManager, BrowserTabManager>();
+        services.AddSingleton<IBrowserTabOpener>(sp => sp.GetRequiredService<IBrowserTabManager>());
     }
 
     public void Initialize(IServiceProvider serviceProvider)

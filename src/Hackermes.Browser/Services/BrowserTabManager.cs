@@ -14,12 +14,8 @@ using System.Linq;
 namespace Hackermes.Browser.Services;
 
 /// <summary>浏览器标签页的创建与登记。</summary>
-public interface IBrowserTabManager
+public interface IBrowserTabManager : IBrowserTabOpener
 {
-    IReadOnlyList<string> OpenPageIds { get; }
-
-    /// <summary>新建标签页并切换过去。</summary>
-    string OpenTab(string? url = null);
 }
 
 public sealed class BrowserTabManager : IBrowserTabManager

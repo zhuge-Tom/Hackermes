@@ -21,6 +21,7 @@ public sealed class AgentGoalRegistry
     private readonly object _gate = new();
     private string? _goal;
     private int _roundsStarted;
+    private bool _exhausted;
 
     public string? CurrentGoal { get { lock (_gate) return _goal; } }
 
@@ -34,8 +35,13 @@ public sealed class AgentGoalRegistry
         if (trimmed.Length > 2_000) trimmed = trimmed[..2_000];
         lock (_gate)
         {
+            var same = SameGoal(_goal, trimmed);
             _goal = trimmed;
-            _roundsStarted = 0;
+            if (!same)
+            {
+                _roundsStarted = 0;
+                _exhausted = false;
+            }
         }
     }
 
@@ -45,6 +51,7 @@ public sealed class AgentGoalRegistry
         {
             _goal = null;
             _roundsStarted = 0;
+            _exhausted = false;
         }
     }
 
@@ -56,8 +63,9 @@ public sealed class AgentGoalRegistry
     {
         lock (_gate)
         {
-            if (_goal is null || _roundsStarted >= MaxRoundsPerGoal)
+            if (_goal is null || _exhausted || _roundsStarted >= MaxRoundsPerGoal)
             {
+                if (_roundsStarted >= MaxRoundsPerGoal) _exhausted = true;
                 roundMessage = string.Empty;
                 return false;
             }
@@ -68,6 +76,15 @@ public sealed class AgentGoalRegistry
             return true;
         }
     }
+
+    private static bool SameGoal(string? left, string right)
+    {
+        if (left is null) return false;
+        return string.Equals(Collapse(left), Collapse(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Collapse(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
 
 /// <summary>Model-facing goal_set / goal_clear tools.</summary>

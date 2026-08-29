@@ -27,8 +27,11 @@ public sealed class AiSettingsWindow : Window
     private readonly ComboBox _model = new() { PlaceholderText = "请先测试连接并获取模型" };
     private readonly TextBox _apiKey = new() { PasswordChar = '●' };
     private readonly ComboBox _permission = new();
+    private readonly ComboBox _webProvider = new();
+    private readonly TextBox _webApiKey = new() { PasswordChar = '●', PlaceholderText = "Brave 或 Serper 的搜索 API Key" };
+    private readonly TextBox _nvdApiKey = new() { PasswordChar = '●', PlaceholderText = "可选，提升 NVD 查询限额" };
     private readonly NumericUpDown _rounds = new() { Minimum = 1, Maximum = 256, Increment = 1 };
-    private readonly NumericUpDown _contextCharacters = new() { Minimum = 4_000, Maximum = 600_000, Increment = 1_000 };
+    private readonly NumericUpDown _contextCharacters = new() { Minimum = 4_000, Maximum = 1_200_000, Increment = 10_000 };
     private readonly NumericUpDown _toolResultCharacters = new() { Minimum = 1_000, Maximum = 100_000, Increment = 1_000 };
     private readonly NumericUpDown _toolTimeout = new() { Minimum = 5, Maximum = 3_600, Increment = 5 };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
@@ -58,6 +61,7 @@ public sealed class AiSettingsWindow : Window
 
         _provider.ItemsSource = AiProviderPresets.All;
         _permission.ItemsSource = PermissionOption.All;
+        _webProvider.ItemsSource = WebProviderOption.All;
         _provider.SelectionChanged += (_, _) => ApplyPreset();
         _testButton.Click += async (_, _) => await TestConnectionAsync();
 
@@ -142,6 +146,17 @@ public sealed class AiSettingsWindow : Window
             Opacity = .65,
             TextWrapping = TextWrapping.Wrap
         });
+        form.Children.Add(new Border { Height = 1, Margin = new Thickness(0, 4), Background = Brushes.Gray, Opacity = .18 });
+        form.Children.Add(new TextBlock { Text = "联网情报", FontWeight = FontWeight.SemiBold, FontSize = 15 });
+        form.Children.Add(Field("搜索方式", _webProvider));
+        form.Children.Add(Field("搜索 API Key", _webApiKey));
+        form.Children.Add(Field("NVD API Key", _nvdApiKey));
+        form.Children.Add(new TextBlock
+        {
+            Text = "web_search 与 CVE 查询只取回资料（不执行任何内容）。未配置 Key 时搜索降级为内置浏览器驱动 Bing；两个 Key 均以 DPAPI 加密保存，不写入 settings.json。",
+            Opacity = .65,
+            TextWrapping = TextWrapping.Wrap
+        });
 
         return new ScrollViewer { Content = form };
     }
@@ -168,6 +183,10 @@ public sealed class AiSettingsWindow : Window
         _contextCharacters.Value = value.MaxContextCharacters;
         _toolResultCharacters.Value = value.MaxToolResultCharacters;
         _toolTimeout.Value = value.ToolCallTimeoutSeconds;
+        _webProvider.SelectedItem = WebProviderOption.All.First(option =>
+            option.Id.Equals(value.WebSearchProvider, StringComparison.OrdinalIgnoreCase));
+        _webApiKey.Text = _secrets.Get("ai.webSearchApiKey") ?? string.Empty;
+        _nvdApiKey.Text = _secrets.Get("ai.nvdApiKey") ?? string.Empty;
     }
 
     private void ApplyPreset()
@@ -215,7 +234,7 @@ public sealed class AiSettingsWindow : Window
             var resolved = AiProviderPresets.ResolveChatEndpoint(endpoint);
             var model = RequiredModel();
             var rounds = (int)(_rounds.Value ?? 48);
-            var contextCharacters = (int)(_contextCharacters.Value ?? 120_000);
+            var contextCharacters = (int)(_contextCharacters.Value ?? 400_000);
             var permission = (_permission.SelectedItem as PermissionOption)?.Mode ?? AiPermissionMode.RequestApproval;
 
             _settings.Update(s =>
@@ -229,10 +248,14 @@ public sealed class AiSettingsWindow : Window
                 s.Ai.MaxContextCharacters = contextCharacters;
                 s.Ai.MaxToolResultCharacters = (int)(_toolResultCharacters.Value ?? 12_000);
                 s.Ai.ToolCallTimeoutSeconds = (int)(_toolTimeout.Value ?? 120);
+                s.Ai.WebSearchProvider = (_webProvider.SelectedItem as WebProviderOption)?.Id ?? "auto";
                 // Memory is an internal invariant, no longer a user-facing toggle.
                 s.Ai.MemoryEnabled = true;
+                s.Ai.NvdApiKeyConfigured = !string.IsNullOrWhiteSpace(_nvdApiKey.Text);
             }, SettingsSection.Ai);
             _secrets.Set("ai.apiKey", _apiKey.Text);
+            _secrets.Set("ai.webSearchApiKey", _webApiKey.Text);
+            _secrets.Set("ai.nvdApiKey", _nvdApiKey.Text);
             _client.Endpoint = resolved;
             _client.ApiKey = EmptyToNull(_apiKey.Text);
             _policy.SetMode(permission);
@@ -275,6 +298,19 @@ public sealed class AiSettingsWindow : Window
             new(AiPermissionMode.RequestApproval, "请求批准（默认）"),
             new(AiPermissionMode.HelpApproval, "帮我批准"),
             new(AiPermissionMode.FullAccess, "完全访问权限（不再逐次确认）")
+        ];
+
+        public override string ToString() => Label;
+    }
+
+    private sealed record WebProviderOption(string Id, string Label)
+    {
+        public static readonly WebProviderOption[] All =
+        [
+            new("auto", "自动（有 Key 用 Brave API，否则内置浏览器）"),
+            new("browser", "仅内置浏览器（降级方案，无需 Key）"),
+            new("brave", "Brave Search API"),
+            new("serper", "Serper（Google）API")
         ];
 
         public override string ToString() => Label;

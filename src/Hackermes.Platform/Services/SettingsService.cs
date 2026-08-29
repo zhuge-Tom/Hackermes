@@ -273,7 +273,9 @@ public sealed class SettingsService : ISettingsService
         if (!Enum.IsDefined(settings.Ai.PermissionMode))
             settings.Ai.PermissionMode = AiPermissionMode.RequestApproval;
         settings.Ai.MaxToolRounds = Math.Clamp(settings.Ai.MaxToolRounds, 1, 256);
-        settings.Ai.MaxContextCharacters = Math.Clamp(settings.Ai.MaxContextCharacters, 4_000, 600_000);
+        settings.Ai.MaxContextCharacters = Math.Clamp(settings.Ai.MaxContextCharacters, 4_000, 1_200_000);
+        if (settings.Ai.MaxContextCharacters <= 120_000)
+            settings.Ai.MaxContextCharacters = 400_000;
         settings.Ai.MaxRecentMessages = Math.Clamp(settings.Ai.MaxRecentMessages, 2, 64);
         settings.Ai.MaxToolResultCharacters = Math.Clamp(settings.Ai.MaxToolResultCharacters, 1_000, 200_000);
         settings.Ai.MaxParallelReadOnlyTools = Math.Clamp(settings.Ai.MaxParallelReadOnlyTools, 1, 8);

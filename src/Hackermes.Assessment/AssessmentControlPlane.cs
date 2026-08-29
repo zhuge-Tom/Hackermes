@@ -35,14 +35,16 @@ public sealed record AssessmentApproval(string Id, string PlanId, string PlanHas
 
 public sealed record AssessmentJob(string Id, string ScopeId, string PlanId, string ApprovalId, AssessmentJobStatus Status,
     string RequestedBy, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt = null, DateTimeOffset? FinishedAt = null,
-    string? Failure = null, string? CancellationReason = null);
+    string? Failure = null, string? CancellationReason = null, bool Hidden = false, string WorkspaceId = "");
+
+public sealed record AssessmentRun(AssessmentJob Job, Task<AssessmentJob> Completion);
 
 public sealed record AssessmentEvidence(string Id, string JobId, DateTimeOffset Timestamp, string Source, string Content,
     string Sha256, bool Redacted = true, string ContentType = "text/plain");
 
 public sealed record AssessmentFinding(string Id, string JobId, string EvidenceId, string Title, string Severity,
     string Status, DateTimeOffset CreatedAt, string Description = "", string Confidence = "Medium",
-    string? ReviewedBy = null, DateTimeOffset? ReviewedAt = null, string? ReviewNote = null);
+    string? PoC = null, string? ReviewedBy = null, DateTimeOffset? ReviewedAt = null, string? ReviewNote = null);
 
 public sealed record AssessmentAuditEntry(string Id, DateTimeOffset Timestamp, string Actor, string Action, string EntityId,
     string Detail, string PreviousHash = "", string IntegrityHash = "");
@@ -88,13 +90,21 @@ public interface IAssessmentControlPlane
     AssessmentPlan CreatePlan(string scopeId, string name, IReadOnlyList<AssessmentStep> steps, string actor);
     AssessmentApproval Approve(string planId, string operatorId, DateTimeOffset expiresAt);
     Task<AssessmentJob> StartAsync(string planId, string approvalId, string actor, CancellationToken ct = default);
+    AssessmentRun Begin(string planId, string approvalId, string actor, CancellationToken ct = default, string? workspaceId = null);
+    AssessmentJob CompleteGrant(string scopeId, string name, string actor, string note, string? workspaceId = null);
+    IReadOnlyList<AgentWorkspaceInfo> ListWorkspaces();
+    AgentWorkspaceInfo CreateWorkspace(string name);
+    bool AssignJobWorkspace(string jobId, string workspaceId);
+    IReadOnlyList<AssessmentCaseSummary> ReadCasesInWorkspace(string workspaceId, int limit = 500);
     bool Cancel(string jobId, string actor, string reason);
+    bool HideJob(string jobId, string actor);
+    int HideFinishedJobs(string actor, string? workspaceId = null);
     bool RevokeScope(string scopeId, string actor, string reason);
     bool RevokeApproval(string approvalId, string actor, string reason);
     IReadOnlyList<AssessmentEvidence> Evidence(string jobId);
     IReadOnlyList<AssessmentFinding> Findings(string jobId);
     AssessmentFinding CreateFinding(string jobId, string evidenceId, string title, string description,
-        string severity, string confidence, string actor);
+        string severity, string confidence, string actor, string? poc = null);
     AssessmentEvidence AttachObservation(string source, string content, string actor, string? jobId = null);
     AssessmentFinding ReviewFinding(string findingId, AssessmentFindingStatus status, string actor, string note);
     AssessmentEvidenceVerification VerifyEvidence(string evidenceId);
@@ -167,7 +177,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         {
             var evidenceJobs = _document.Evidence.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
             var findingJobs = _document.Findings.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
-            return _document.Jobs.OrderByDescending(value => value.CreatedAt)
+            return _document.Jobs.Where(job => !job.Hidden).OrderByDescending(value => value.CreatedAt)
                 .Take(Math.Clamp(limit, 1, 500))
                 .Select(job => BuildCaseSummaryUnsafe(job, evidenceJobs.Contains(job.Id), findingJobs.Contains(job.Id)))
                 .ToArray();
@@ -195,7 +205,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         if (expiresAt <= DateTimeOffset.UtcNow) throw new ArgumentException("Scope expiry must be in the future.");
         var normalized = targets.Where(IsSafeTarget).Select(value => value.Trim().ToLowerInvariant()).Distinct(StringComparer.Ordinal).Take(64).ToArray();
         if (normalized.Length == 0)
-            throw new ArgumentException("At least one exact hostname, loopback address, localhost target or '*' for an all-authorized scope is required.");
+            throw new ArgumentException("At least one exact hostname, '*.domain' wildcard, loopback address, localhost target or '*' for an all-authorized scope is required.");
         var allAuthorized = normalized.Contains("*", StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(name) && !allAuthorized)
             throw new ArgumentException("Scope name is required for an exact-target scope.");
@@ -214,6 +224,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         EnsureScopeUsable(scope);
         var clean = steps.Select(step => AuthorizedToolCatalog.NormalizeStep(step, scope!.Targets)).ToArray();
         if (clean.Length == 0 || clean.Length > 32) throw new ArgumentException("A plan must have 1 to 32 bounded steps.");
+        EnsureExploitationGate(scope!, clean);
         var id = Id();
         var hash = Hash(scopeId + "\n" + name + "\n" + string.Join("\n", clean.Select(step =>
             $"{step.AdapterId}|{step.Input}|{step.TimeoutSeconds}|{step.MaxOutputBytes}|{step.ContinueOnError}")));
@@ -232,24 +243,59 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         return approval;
     }
 
-    public async Task<AssessmentJob> StartAsync(string planId, string approvalId, string actor, CancellationToken ct = default)
+    public AssessmentJob CompleteGrant(string scopeId, string name, string actor, string note, string? workspaceId = null)
     {
-        AssessmentPlan plan; AssessmentApproval approval; AssessmentJob job; CancellationTokenSource linked;
+        lock (_gate)
+        {
+            var scope = Scope(scopeId);
+            EnsureScopeUsable(scope);
+            var now = DateTimeOffset.UtcNow;
+            var grantName = string.IsNullOrWhiteSpace(name) ? $"{scope!.Name} · 授权确认" : Limit(name, 120);
+            var grantActor = Limit(string.IsNullOrWhiteSpace(actor) ? "system" : actor, 120);
+            var grantNote = string.IsNullOrWhiteSpace(note) ? "授权已确认。" : Limit(note, 4_000);
+            var step = new AssessmentStep(AuthorizedToolCatalog.SimulationEcho, grantNote, 1);
+            var hash = Hash(scope!.Id + "\n" + grantName + "\n" +
+                            $"{step.AdapterId}|{step.Input}|{step.TimeoutSeconds}|{step.MaxOutputBytes}|{step.ContinueOnError}");
+            var plan = new AssessmentPlan(Id(), scope.Id, grantName, [step], grantActor, now, hash);
+            var approval = new AssessmentApproval(Id(), plan.Id, plan.VersionHash, grantActor, scope.ExpiresAt, ConsumedAt: now);
+            var job = new AssessmentJob(Id(), scope.Id, plan.Id, approval.Id, AssessmentJobStatus.Completed,
+                grantActor, now, now, now, WorkspaceId: NormalizeWorkspaceId(workspaceId));
+            _document.Plans.Add(plan);
+            _document.Approvals.Add(approval);
+            _document.Jobs.Add(job);
+            var evidence = new AssessmentEvidence(Id(), job.Id, now, AuthorizedToolCatalog.SimulationEcho, grantNote, Hash(grantNote));
+            _document.Evidence.Add(evidence);
+            AuditUnsafe(grantActor, "plan.create", plan.Id, plan.Name);
+            AuditUnsafe(grantActor, "plan.approve", plan.Id, approval.Id);
+            AuditUnsafe(grantActor, "job.grant", job.Id, grantNote);
+            AuditUnsafe(grantActor, "evidence.append", evidence.Id, $"job={job.Id};sha256={evidence.Sha256}");
+            SaveUnsafe();
+            return job;
+        }
+    }
+
+    public async Task<AssessmentJob> StartAsync(string planId, string approvalId, string actor, CancellationToken ct = default) =>
+        await Begin(planId, approvalId, actor, ct).Completion.ConfigureAwait(false);
+
+    public AssessmentRun Begin(string planId, string approvalId, string actor, CancellationToken ct = default, string? workspaceId = null)
+    {
+        AssessmentPlan plan; AssessmentJob job; CancellationTokenSource linked;
         lock (_gate)
         {
             plan = Plan(planId) ?? throw new InvalidOperationException("Plan not found.");
             EnsureScopeUsable(Scope(plan.ScopeId));
-            approval = _document.Approvals.SingleOrDefault(value => value.Id == approvalId) ?? throw new InvalidOperationException("Approval not found.");
+            var approval = _document.Approvals.SingleOrDefault(value => value.Id == approvalId) ?? throw new InvalidOperationException("Approval not found.");
             if (approval.Revoked || approval.ConsumedAt is not null || approval.ExpiresAt <= DateTimeOffset.UtcNow || approval.PlanId != plan.Id || approval.PlanHash != plan.VersionHash) throw new InvalidOperationException("Approval is expired, revoked, already used or no longer matches this plan.");
             var approvalIndex = _document.Approvals.IndexOf(approval);
             approval = approval with { ConsumedAt = DateTimeOffset.UtcNow };
             _document.Approvals[approvalIndex] = approval;
-            job = new AssessmentJob(Id(), plan.ScopeId, plan.Id, approval.Id, AssessmentJobStatus.Queued, Limit(actor, 120), DateTimeOffset.UtcNow);
+            job = new AssessmentJob(Id(), plan.ScopeId, plan.Id, approval.Id, AssessmentJobStatus.Queued, Limit(actor, 120), DateTimeOffset.UtcNow,
+                WorkspaceId: NormalizeWorkspaceId(workspaceId));
             _document.Jobs.Add(job); AuditUnsafe(actor, "job.queue", job.Id, plan.Id); SaveUnsafe();
             linked = CancellationTokenSource.CreateLinkedTokenSource(ct); _running[job.Id] = linked;
         }
 
-        return await RunAsync(job, plan, linked).ConfigureAwait(false);
+        return new AssessmentRun(job, RunAsync(job, plan, linked));
     }
 
     public bool Cancel(string jobId, string actor, string reason)
@@ -262,6 +308,109 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
             if (_running.Remove(jobId, out var cancellation)) cancellation.Cancel();
             ReplaceJobUnsafe(job with { Status = AssessmentJobStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, CancellationReason = Limit(reason, 240) });
             AuditUnsafe(actor, "job.cancel", jobId, Limit(reason, 240)); SaveUnsafe(); return true;
+        }
+    }
+
+    public bool HideJob(string jobId, string actor)
+    {
+        lock (_gate)
+        {
+            var job = _document.Jobs.Find(value => value.Id == jobId);
+            if (job is null || job.Hidden) return false;
+            if (job.Status is AssessmentJobStatus.Queued or AssessmentJobStatus.Running)
+            {
+                if (_running.Remove(jobId, out var cancellation)) cancellation.Cancel();
+                job = job with
+                {
+                    Status = AssessmentJobStatus.Cancelled,
+                    FinishedAt = DateTimeOffset.UtcNow,
+                    CancellationReason = "removed from workbench"
+                };
+            }
+            ReplaceJobUnsafe(job with { Hidden = true });
+            AuditUnsafe(actor, "job.hide", jobId, "workbench");
+            SaveUnsafe();
+            return true;
+        }
+    }
+
+    public int HideFinishedJobs(string actor, string? workspaceId = null)
+    {
+        lock (_gate)
+        {
+            var workspace = workspaceId is null ? null : NormalizeWorkspaceId(workspaceId);
+            var finished = _document.Jobs.Where(job => !job.Hidden &&
+                job.Status is not (AssessmentJobStatus.Queued or AssessmentJobStatus.Running) &&
+                (workspace is null || string.Equals(NormalizeWorkspaceId(job.WorkspaceId), workspace, StringComparison.Ordinal))).ToArray();
+            foreach (var job in finished)
+            {
+                ReplaceJobUnsafe(job with { Hidden = true });
+                AuditUnsafe(actor, "job.hide", job.Id, "workbench-clear");
+            }
+            if (finished.Length > 0) SaveUnsafe();
+            return finished.Length;
+        }
+    }
+
+    public IReadOnlyList<AgentWorkspaceInfo> ListWorkspaces()
+    {
+        lock (_gate)
+        {
+            EnsureWorkspacesUnsafe();
+            var named = _document.Workspaces
+                .Select(value => new AgentWorkspaceInfo(value.Id, value.Name))
+                .ToArray();
+            return new[] { new AgentWorkspaceInfo(string.Empty, "默认工作区") }.Concat(named).ToArray();
+        }
+    }
+
+    public AgentWorkspaceInfo CreateWorkspace(string name)
+    {
+        lock (_gate)
+        {
+            EnsureWorkspacesUnsafe();
+            var clean = string.IsNullOrWhiteSpace(name) ? $"工作区 {DateTimeOffset.Now:MM-dd HH:mm}" : Limit(name, 120);
+            var record = new AssessmentWorkspaceRecord { Id = Id(), Name = clean, CreatedAt = DateTimeOffset.UtcNow };
+            _document.Workspaces.Add(record);
+            AuditUnsafe("system", "workspace.create", record.Id, record.Name);
+            SaveUnsafe();
+            return new AgentWorkspaceInfo(record.Id, record.Name);
+        }
+    }
+
+    public bool AssignJobWorkspace(string jobId, string workspaceId)
+    {
+        lock (_gate)
+        {
+            var job = _document.Jobs.Find(value => value.Id == jobId);
+            if (job is null || job.Hidden) return false;
+            var id = NormalizeWorkspaceId(workspaceId);
+            if (id.Length > 0)
+            {
+                EnsureWorkspacesUnsafe();
+                if (_document.Workspaces.All(value => value.Id != id))
+                    throw new InvalidOperationException("Workspace not found.");
+            }
+            ReplaceJobUnsafe(job with { WorkspaceId = id });
+            AuditUnsafe("system", "job.workspace", jobId, id.Length == 0 ? "default" : id);
+            SaveUnsafe();
+            return true;
+        }
+    }
+
+    public IReadOnlyList<AssessmentCaseSummary> ReadCasesInWorkspace(string workspaceId, int limit = 500)
+    {
+        lock (_gate)
+        {
+            var id = NormalizeWorkspaceId(workspaceId);
+            var evidenceJobs = _document.Evidence.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
+            var findingJobs = _document.Findings.Select(value => value.JobId).ToHashSet(StringComparer.Ordinal);
+            return _document.Jobs.Where(job => !job.Hidden &&
+                    string.Equals(NormalizeWorkspaceId(job.WorkspaceId), id, StringComparison.Ordinal))
+                .OrderByDescending(value => value.CreatedAt)
+                .Take(Math.Clamp(limit, 1, 500))
+                .Select(job => BuildCaseSummaryUnsafe(job, evidenceJobs.Contains(job.Id), findingJobs.Contains(job.Id)))
+                .ToArray();
         }
     }
 
@@ -291,7 +440,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
     public IReadOnlyList<AssessmentEvidence> Evidence(string jobId) { lock (_gate) return _document.Evidence.Where(value => value.JobId == jobId).ToArray(); }
     public IReadOnlyList<AssessmentFinding> Findings(string jobId) { lock (_gate) return _document.Findings.Where(value => value.JobId == jobId).ToArray(); }
     public AssessmentFinding CreateFinding(string jobId, string evidenceId, string title, string description,
-        string severity, string confidence, string actor)
+        string severity, string confidence, string actor, string? poc = null)
     {
         if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(actor))
             throw new ArgumentException("Finding title and actor are required.");
@@ -302,9 +451,9 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
                 ?? throw new InvalidOperationException("Evidence does not belong to this job.");
             var finding = new AssessmentFinding(Id(), jobId, evidence.Id, Limit(title, 160), NormalizeSeverity(severity),
                 AssessmentFindingStatus.Unreviewed.ToString(), DateTimeOffset.UtcNow, Limit(description, 4000),
-                NormalizeConfidence(confidence));
+                NormalizeConfidence(confidence), LimitPoC(poc));
             _document.Findings.Add(finding);
-            AuditUnsafe(actor, "finding.create", finding.Id, $"job={jobId};evidence={evidenceId};severity={finding.Severity}");
+            AuditUnsafe(actor, "finding.create", finding.Id, $"job={jobId};evidence={evidenceId};severity={finding.Severity};poc={(string.IsNullOrEmpty(finding.PoC) ? "none" : "present")}");
             SaveUnsafe();
             return finding;
         }
@@ -401,6 +550,70 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         }
     }
 
+    /// <summary>
+    /// Exploitation-stage adapters may only run once detection-stage evidence exists for
+    /// the same target: either an earlier detection step in the same plan, or prior
+    /// evidence from a completed detection job whose scope (still active) covers the
+    /// target. This is the forced pre-exploitation review gate — jumping straight to
+    /// exploitation is refused at plan-creation time.
+    /// </summary>
+    private void EnsureExploitationGate(AssessmentScope scope, IReadOnlyList<AssessmentStep> steps)
+    {
+        for (var index = 0; index < steps.Count; index++)
+        {
+            var step = steps[index];
+            if (!AuthorizedToolCatalog.IsExploitationStage(step.AdapterId)) continue;
+            var target = StepTarget(step);
+            var hasInPlanDetection = steps.Take(index).Any(earlier =>
+                AuthorizedToolCatalog.IsDetectionStage(earlier.AdapterId) &&
+                string.Equals(StepTarget(earlier), target, StringComparison.OrdinalIgnoreCase));
+            if (hasInPlanDetection) continue;
+            if (HasDetectionEvidenceFor(target)) continue;
+            throw new InvalidOperationException(
+                $"Exploitation adapter '{step.AdapterId}' requires detection-stage evidence for target " +
+                $"'{target ?? "(unspecified)"}' first. Run a recon/detect adapter against the same target " +
+                "(its evidence unlocks exploitation while the scope is active), or place a detection " +
+                "step before the exploitation step in this plan.");
+        }
+    }
+
+    private bool HasDetectionEvidenceFor(string? target)
+    {
+        if (target is null) return false;
+        lock (_gate)
+        {
+            foreach (var evidence in _document.Evidence)
+            {
+                if (!AuthorizedToolCatalog.IsDetectionStage(evidence.Source)) continue;
+                var job = _document.Jobs.Find(value => value.Id == evidence.JobId);
+                if (job is null || job.Status is not (AssessmentJobStatus.Completed or AssessmentJobStatus.CompletedWithWarnings)) continue;
+                var jobScope = _document.Scopes.Find(value => value.Id == job.ScopeId);
+                if (jobScope is null || jobScope.Revoked || jobScope.ExpiresAt <= DateTimeOffset.UtcNow) continue;
+                if (AuthorizedToolCatalog.IsTargetInScope(target, jobScope.Targets)) return true;
+            }
+            return false;
+        }
+    }
+
+    private static string? StepTarget(AssessmentStep step)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(step.Input);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            foreach (var name in new[] { "target", "domain" })
+                if (root.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String &&
+                    property.GetString() is { Length: > 0 } value)
+                    return value.ToLowerInvariant();
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private async Task<AssessmentJob> RunAsync(AssessmentJob job, AssessmentPlan plan, CancellationTokenSource cancellation)
     {
         try
@@ -424,21 +637,22 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
                         if (!step.ContinueOnError)
                             throw new InvalidOperationException(result.Error ?? "ToolHost execution failed.");
                         AddEvidence(job.Id, step.AdapterId,
-                            $"warning: {result.Error ?? "ToolHost execution failed."}\n{result.Output}".TrimEnd());
+                            $"warning: {result.Error ?? "ToolHost execution failed."}\n{result.Output}".TrimEnd(),
+                            step.Input);
                         completedWithWarnings = true;
                         continue;
                     }
-                    AddEvidence(job.Id, step.AdapterId, result.Output);
+                    AddEvidence(job.Id, step.AdapterId, result.Output, step.Input);
                 }
                 catch (OperationCanceledException) when (step.ContinueOnError && !cancellation.IsCancellationRequested)
                 {
-                    AddEvidence(job.Id, step.AdapterId, "warning: tool execution timed out; remaining tools will continue.");
+                    AddEvidence(job.Id, step.AdapterId, "warning: tool execution timed out; remaining tools will continue.", step.Input);
                     completedWithWarnings = true;
                 }
                 catch (Exception exception) when (step.ContinueOnError)
                 {
                     AddEvidence(job.Id, step.AdapterId,
-                        $"warning: {Limit(exception.Message, 500)}; remaining tools will continue.");
+                        $"warning: {Limit(exception.Message, 500)}; remaining tools will continue.", step.Input);
                     completedWithWarnings = true;
                 }
             }
@@ -460,19 +674,22 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         return job;
     }
 
-    private void AddEvidence(string jobId, string source, string output)
+    private void AddEvidence(string jobId, string source, string output, string? probeInput = null)
     {
         var safe = Limit(output, 262_144);
         lock (_gate)
         {
             var evidence = new AssessmentEvidence(Id(), jobId, DateTimeOffset.UtcNow, source, safe, Hash(safe));
             _document.Evidence.Add(evidence);
-            foreach (var observation in ReconObservationParser.Parse(source, safe).Take(8))
+            foreach (var observation in ReconObservationParser.Parse(source, safe, probeInput).Take(8))
             {
+                string severity;
+                try { severity = NormalizeSeverity(observation.Severity); }
+                catch (ArgumentException) { continue; }
                 _document.Findings.Add(new AssessmentFinding(
                     Id(), jobId, evidence.Id, Limit(observation.Title, 160),
-                    NormalizeSeverity(observation.Severity), AssessmentFindingStatus.Unreviewed.ToString(),
-                    DateTimeOffset.UtcNow, Limit(observation.Message, 4000), "Low"));
+                    severity, AssessmentFindingStatus.Unreviewed.ToString(),
+                    DateTimeOffset.UtcNow, Limit(observation.Message, 4000), "Low", LimitPoC(observation.PoC)));
             }
             AuditUnsafe("system", "evidence.append", evidence.Id, $"job={jobId};sha256={evidence.Sha256}"); SaveUnsafe();
         }
@@ -564,6 +781,8 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         if (scope is null || scope.Revoked || scope.ExpiresAt <= DateTimeOffset.UtcNow) throw new InvalidOperationException("Scope is missing, revoked or expired.");
     }
     private void ReplaceJobUnsafe(AssessmentJob job) { var index = _document.Jobs.FindIndex(value => value.Id == job.Id); if (index >= 0) _document.Jobs[index] = job; }
+    private void EnsureWorkspacesUnsafe() => _document.Workspaces ??= new List<AssessmentWorkspaceRecord>();
+    private static string NormalizeWorkspaceId(string? workspaceId) => (workspaceId ?? string.Empty).Trim();
     private void AuditUnsafe(string actor, string action, string entity, string detail)
     {
         var previous = _document.Audit.LastOrDefault()?.IntegrityHash ?? string.Empty;
@@ -616,6 +835,7 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
     {
         var document = JsonSerializer.Deserialize(File.ReadAllText(path), AssessmentJsonContext.Default.AssessmentDocument)
             ?? throw new InvalidDataException("Assessment store is empty.");
+        document.Workspaces ??= new List<AssessmentWorkspaceRecord>();
         if (document.Version is < 1 or > CurrentDocumentVersion)
             throw new InvalidDataException($"Unsupported assessment store version {document.Version}.");
         if (document.Scopes is null || document.Plans is null || document.Approvals is null || document.Jobs is null ||
@@ -664,16 +884,22 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
         if (createBackup && File.Exists(_path)) File.Copy(_path, _path + ".bak", true);
         File.Move(temporary, _path, true);
     }
-    /// <summary>Exact targets only, plus the reserved "*" wildcard used by all-authorized scopes.</summary>
+    /// <summary>Exact hosts, "*.domain" wildcards, or the reserved "*" all-authorized scope.</summary>
     private static bool IsSafeTarget(string value)
     {
         var trimmed = value.Trim();
         if (trimmed.Length == 0 || trimmed.Length > 253) return false;
         if (trimmed == "*") return true;
-        return trimmed.All(character => char.IsLetterOrDigit(character) || character is '.' or '-' or ':');
+        if (trimmed.StartsWith("*.", StringComparison.Ordinal))
+            trimmed = trimmed[2..];
+        return trimmed.Length > 0 &&
+               trimmed.All(character => char.IsLetterOrDigit(character) || character is '.' or '-' or ':') &&
+               !trimmed.Contains('*', StringComparison.Ordinal);
     }
     private static string Id() => Guid.NewGuid().ToString("N");
     private static string Limit(string? value, int max) => (value ?? string.Empty).Trim()[..Math.Min((value ?? string.Empty).Trim().Length, max)];
+    private static string? LimitPoC(string? value) => string.IsNullOrWhiteSpace(value) ? null : Limit(value, 2000);
+    private static string Indent(string value, int spaces) => string.Join("\n", value.Split('\n').Select(line => new string(' ', spaces) + line));
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private string AuditHash(AssessmentAuditEntry entry)
     {
@@ -710,7 +936,8 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
     }
     private static string NormalizeSeverity(string value) => value.Trim().ToLowerInvariant() switch
     {
-        "critical" => "Critical", "high" => "High", "medium" => "Medium", "low" => "Low", "info" or "informational" => "Info",
+        "critical" => "Critical", "high" => "High", "medium" => "Medium", "low" => "Low",
+        "info" or "informational" or "warning" => "Info",
         _ => throw new ArgumentException("Severity must be Critical, High, Medium, Low or Info.")
     };
     private static string NormalizeConfidence(string value) => value.Trim().ToLowerInvariant() switch
@@ -727,7 +954,11 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
             .AppendLine($"- Scope: `{scope?.Name ?? job.ScopeId}`").AppendLine($"- Plan: `{plan?.Name ?? job.PlanId}`")
             .AppendLine($"- Audit chain: {(verification.Valid ? "valid" : "invalid")}").AppendLine()
             .AppendLine("## Findings").AppendLine();
-        foreach (var finding in findings) builder.AppendLine($"- **[{finding.Severity}] {finding.Title}** — {finding.Status}; confidence {finding.Confidence}; evidence `{finding.EvidenceId}`");
+        foreach (var finding in findings)
+        {
+            builder.AppendLine($"- **[{finding.Severity}] {finding.Title}** — {finding.Status}; confidence {finding.Confidence}; evidence `{finding.EvidenceId}`");
+            if (!string.IsNullOrWhiteSpace(finding.PoC)) builder.AppendLine("  - PoC:\n" + Indent(finding.PoC!, 4));
+        }
         builder.AppendLine().AppendLine("## Evidence").AppendLine();
         foreach (var item in evidence) builder.AppendLine($"- `{item.Id}` — {item.Source}; SHA-256 `{item.Sha256}`; redacted={item.Redacted}");
         builder.AppendLine().AppendLine("## Audit timeline").AppendLine();
@@ -744,7 +975,11 @@ public sealed class AssessmentControlPlane : IAssessmentControlPlane
             .Append($"<dt>Job</dt><dd><code>{E(job.Id)}</code></dd><dt>Status</dt><dd>{E(job.Status.ToString())}</dd>")
             .Append($"<dt>Scope</dt><dd>{E(scope?.Name ?? job.ScopeId)}</dd><dt>Plan</dt><dd>{E(plan?.Name ?? job.PlanId)}</dd>")
             .Append($"<dt>Audit chain</dt><dd>{(verification.Valid ? "valid" : "invalid")}</dd></dl><h2>Findings</h2><ul>");
-        foreach (var finding in findings) builder.Append($"<li><strong>[{E(finding.Severity)}] {E(finding.Title)}</strong> — {E(finding.Status)}; confidence {E(finding.Confidence)}</li>");
+        foreach (var finding in findings)
+        {
+            builder.Append($"<li><strong>[{E(finding.Severity)}] {E(finding.Title)}</strong> — {E(finding.Status)}; confidence {E(finding.Confidence)}</li>");
+            if (!string.IsNullOrWhiteSpace(finding.PoC)) builder.Append($"<li><pre>{E(finding.PoC)}</pre></li>");
+        }
         builder.Append("</ul><h2>Evidence</h2><ul>");
         foreach (var item in evidence) builder.Append($"<li><code>{E(item.Id)}</code> — {E(item.Source)}; SHA-256 <code>{E(item.Sha256)}</code></li>");
         builder.Append("</ul><h2>Audit timeline</h2><ul>");
@@ -763,6 +998,14 @@ public sealed class AssessmentDocument
     public List<AssessmentEvidence> Evidence { get; set; } = new();
     public List<AssessmentFinding> Findings { get; set; } = new();
     public List<AssessmentAuditEntry> Audit { get; set; } = new();
+    public List<AssessmentWorkspaceRecord> Workspaces { get; set; } = new();
+}
+
+public sealed class AssessmentWorkspaceRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true)]

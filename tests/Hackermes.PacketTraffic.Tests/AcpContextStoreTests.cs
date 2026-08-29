@@ -114,6 +114,23 @@ public sealed class AcpContextStoreTests
     }
 
     [Fact]
+    public void Compress_clips_a_protected_tail_and_keeps_the_older_unprotected_run()
+    {
+        var store = NewStore();
+        store.AppendUser(Long(800, "OLD-BULK"));
+        store.AppendAssistant(Long(800, "OLD-ANSWER"));
+        foreach (var i in Enumerable.Range(0, 8)) store.AppendUser($"消息-{i}");
+
+        var (ok, message) = store.Compress("m00001", "m00010", "旧任务摘要：保留 OLD-BULK 结论。", "旧任务");
+        Assert.True(ok, message);
+        Assert.Contains("已压缩", message, StringComparison.Ordinal);
+        Assert.Contains(store.ActiveEntries, entry => entry.BlockId is not null);
+        Assert.DoesNotContain(store.ActiveEntries, entry =>
+            entry.BlockId is null &&
+            (entry.Message.Content ?? string.Empty).Contains("OLD-BULK", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Load_bearing_compress_result_blocks_range_that_covers_it()
     {
         var store = NewStore();
@@ -122,9 +139,57 @@ public sealed class AcpContextStoreTests
         store.AppendToolResult("k1", "已压缩 … 摘要记录", "context_compress");
         for (var i = 0; i < 6; i++) store.AppendAssistant(Long(90, $"filler-{i}"));
 
-        var (ok, message) = store.Compress("m00003", "m00005", "试图吞掉压缩记录的区间", null);
+        var (ok, message) = store.Compress("m00002", "m00003", "试图吞掉压缩记录的区间", null);
         Assert.False(ok);
-        Assert.Matches(@"\[m00003\].*context_compress 结果", message);
+        Assert.Contains("受保护", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Failed_context_compress_tool_result_is_not_load_bearing()
+    {
+        var store = NewStore();
+        store.AppendUser(Long(800, "OLD-BULK"));
+        store.AppendAssistantToolCalls(null, [new AssistantToolCall("k1", "context_compress", "{}")]);
+        store.AppendToolResult("k1", "区间全部受保护 " + Long(400, "FAILED-COMPRESS"), "context_compress");
+        for (var i = 0; i < 6; i++) store.AppendAssistant(Long(90, $"filler-{i}"));
+
+        var (ok, message) = store.Compress("m00001", "m00003", "早期内容含一次失败的压缩尝试。", "早期");
+        Assert.True(ok, message);
+    }
+
+    [Fact]
+    public void Soft_protection_cap_leaves_older_runs_compressible_on_a_large_budget()
+    {
+        var store = NewStore(400_000);
+        store.AppendUser(Long(8_000, "OLD-BULK"));
+        store.AppendAssistant(Long(8_000, "OLD-ANSWER"));
+        for (var i = 0; i < 8; i++) store.AppendUser($"消息-{i}");
+
+        var suggestions = store.SuggestRanges(store.ActiveEntries);
+        Assert.Contains(suggestions, suggestion => suggestion.StartRef == "m00001");
+        var (ok, message) = store.Compress("m00001", "m00002", "旧任务摘要：保留 OLD-BULK 结论。", "旧任务");
+        Assert.True(ok, message);
+    }
+
+    [Fact]
+    public void SuggestRanges_does_not_offer_tool_pairs_split_by_the_recent_window()
+    {
+        var store = NewStore();
+        store.AppendUser(Long(800, "OLD-USER"));
+        store.AppendAssistant(Long(800, "OLD-ASSIST"));
+        store.AppendAssistantToolCalls(null, [new AssistantToolCall("c1", "console_read", "{}")]);
+        store.AppendToolResult("c1", Long(600, "DUMP"), "console_read");
+        store.AppendAssistant("r0");
+        store.AppendAssistant("r1");
+        store.AppendAssistant("r2");
+
+        var suggestions = store.SuggestRanges(store.ActiveEntries);
+        Assert.DoesNotContain(suggestions, suggestion =>
+            suggestion.StartRef == "m00003" || suggestion.EndRef == "m00003");
+        Assert.NotEmpty(suggestions);
+        var (ok, message) = store.Compress(suggestions[0].StartRef, suggestions[0].EndRef,
+            "旧对话摘要：保留 OLD-USER / OLD-ASSIST。", "旧段");
+        Assert.True(ok, message);
     }
 
     [Fact]
@@ -182,6 +247,7 @@ public sealed class AcpContextStoreTests
         var coldSystem = cold.BuildRequest(new AgentMemoryDocument(), [], Settings(500_000))[0].Content!;
         Assert.Contains(AcpContextStore.PhilosophyLine, coldSystem, StringComparison.Ordinal);
         Assert.DoesNotContain("[ACP 上下文预算]", coldSystem, StringComparison.Ordinal);
+        Assert.DoesNotContain("context_compress", coldSystem, StringComparison.Ordinal);
     }
 
     [Fact]

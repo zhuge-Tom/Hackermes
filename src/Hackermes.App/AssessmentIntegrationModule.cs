@@ -13,6 +13,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -37,6 +38,10 @@ public sealed class AssessmentIntegrationModule : IModule
                 serviceProvider.GetRequiredService<IAssessmentControlPlane>(),
                 serviceProvider.GetRequiredService<IAssessmentReportSigningKey>(),
                 serviceProvider.GetRequiredService<IAssessmentReportTrustPolicy>()));
+        services.AddSingleton<IAssessmentReportArchive>(serviceProvider =>
+            new AssessmentReportArchive(
+                serviceProvider.GetRequiredService<IAssessmentControlPlane>(),
+                serviceProvider.GetService<IAssessmentReportExportService>()));
         services.AddSingleton<ToolLaunchService>();
         services.AddSingleton<ToolCatalogService>();
         services.AddSingleton<IAgentPreStepHook, AssessmentContextPreStepHook>();
@@ -46,13 +51,19 @@ public sealed class AssessmentIntegrationModule : IModule
     {
         var plane = serviceProvider.GetRequiredService<IAssessmentControlPlane>();
         var settings = serviceProvider.GetRequiredService<ISettingsService>();
+        // exploit.heapdump.analyze resolves downloaded artifacts strictly inside this root; the
+        // desktop process sets it so the ToolHost child inherits the same boundary.
+        var artifactRoot = Path.Combine(Path.GetDirectoryName(settings.SettingsFilePath) ?? AppContext.BaseDirectory, "agent-tools");
+        Environment.SetEnvironmentVariable("HACKERMES_AGENT_ARTIFACT_ROOT", artifactRoot);
         var launcher = serviceProvider.GetRequiredService<ToolLaunchService>();
         var catalog = serviceProvider.GetRequiredService<ToolCatalogService>();
         var eventBus = serviceProvider.GetRequiredService<IEventBus>();
         var reports = serviceProvider.GetRequiredService<IAssessmentReportExportService>();
-        RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane, reports);
+        RegisterCli(serviceProvider.GetRequiredService<CommandRegistry>(), plane, reports,
+            serviceProvider.GetRequiredService<IAssessmentReportArchive>());
         RegisterAgent(serviceProvider.GetRequiredService<IAiToolRegistry>(), plane,
-            serviceProvider.GetRequiredService<IPageContextQueryService>(), reports);
+            serviceProvider.GetRequiredService<IPageContextQueryService>(), reports,
+            serviceProvider.GetRequiredService<IAssessmentReportArchive>());
         serviceProvider.GetRequiredService<IDockLayoutRegistry>().RegisterTab(new DockTabRegistration
         {
             Region = DockPosition.Left, TabId = "security-tools", Title = "安全工具",
@@ -72,7 +83,9 @@ public sealed class AssessmentIntegrationModule : IModule
             CreateTab = () => new DockTabItemViewModel
             {
                 Id = "authorized-assessment", Title = "授权评估",
-                Content = new AssessmentWorkspaceView(plane)
+                Content = new AssessmentWorkspaceView(plane,
+                    serviceProvider.GetRequiredService<IAgentWorkspaceContext>(),
+                    serviceProvider.GetRequiredService<IAssessmentReportArchive>())
             }
         });
     }
@@ -94,7 +107,7 @@ public sealed class AssessmentIntegrationModule : IModule
     }
 
     public static void RegisterCli(CommandRegistry commands, IAssessmentControlPlane plane,
-        IAssessmentReportExportService? reports = null)
+        IAssessmentReportExportService? reports = null, IAssessmentReportArchive? archive = null)
     {
         commands.Register(new CommandDefinition
         {
@@ -102,12 +115,12 @@ public sealed class AssessmentIntegrationModule : IModule
             Summary = "Manage authorized scopes, plans and isolated ToolHost jobs",
             Usage = "assessment scope|plan|approve|run|cancel|jobs|evidence|finding|audit|report|report-export|report-verify ...",
             IsMutating = true,
-            Handler = async (context, token) => await ExecuteCliAsync(context, plane, reports, token).ConfigureAwait(false)
+            Handler = async (context, token) => await ExecuteCliAsync(context, plane, reports, archive, token).ConfigureAwait(false)
         });
     }
 
     private static async Task<CommandResult> ExecuteCliAsync(CommandContext context, IAssessmentControlPlane plane,
-        IAssessmentReportExportService? reports, System.Threading.CancellationToken ct)
+        IAssessmentReportExportService? reports, IAssessmentReportArchive? archive, System.Threading.CancellationToken ct)
     {
         try
         {
@@ -182,8 +195,12 @@ public sealed class AssessmentIntegrationModule : IModule
                     return VerifyReportFile(reports, context);
                 case "report-export" or "report-verify":
                     return CommandResult.Fail("This assessment backend does not support signed report exports.");
+                case "report-archive" when archive is not null:
+                    return CommandResult.Ok(archive.Archive(Required(context, 1, "job")));
+                case "report-archive":
+                    return CommandResult.Fail("This assessment backend does not support report archiving.");
                 default:
-                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve/run/revoke/jobs | evidence <job> | evidence-verify <evidence> | findings <job> | finding create|review ... | audit <entity>|verify | report <job> [json|markdown|html] | report-export <path> <job> | report-verify <path> [keyId]");
+                    return CommandResult.Fail("Usage: assessment tools | scope create <name> <authorization> <operator> <targets> [minutes] | plan create <scope> <name> <adapter> [seconds] <json> | approve/run/revoke/jobs | evidence <job> | evidence-verify <evidence> | findings <job> | finding create|review ... | audit <entity>|verify | report <job> [json|markdown|html] | report-export <path> <job> | report-verify <path> [keyId] | report-archive <job>");
             }
         }
         catch (Exception exception) { return CommandResult.Fail(exception.Message); }
@@ -202,7 +219,8 @@ public sealed class AssessmentIntegrationModule : IModule
     }
 
     public static void RegisterAgent(IAiToolRegistry registry, IAssessmentControlPlane plane,
-        IPageContextQueryService? pageContexts = null, IAssessmentReportExportService? reports = null)
+        IPageContextQueryService? pageContexts = null, IAssessmentReportExportService? reports = null,
+        IAssessmentReportArchive? archive = null)
     {
         registry.Register(new AiToolDefinition("assessment_scopes", "List authorized assessment scopes.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.Scopes)))));
@@ -210,6 +228,9 @@ public sealed class AssessmentIntegrationModule : IModule
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(plane.ReadCases())))));
         registry.Register(new AiToolDefinition("assessment_tools", "List bounded ToolHost adapters and local availability.", Schema(new { }), AiToolRisk.ReadOnly,
             (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(AuthorizedToolCatalog.Describe())))));
+        registry.Register(new AiToolDefinition("assessment_resources", "List bundled wordlist/payload corpora available to scan adapters (subdomain dictionary, SQLi/auth-bypass/command-injection/LDAP payloads).", Schema(new { }), AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(ToolResult.Ok(JsonSerializer.Serialize(AuthorizedToolCatalog.CorpusResources())))));
+
         registry.Register(new AiToolDefinition("assessment_create_scope", "Create an exact, time-bounded authorized target scope when no browser page is attached. Browser-bound sessions must use assessment_create_scope_from_page.", Schema(new { name = new { type = "string" }, authorization = new { type = "string" }, operatorId = new { type = "string" }, targets = new { type = "array", items = new { type = "string" } }, minutes = new { type = "integer" } }), AiToolRisk.Mutating,
             (call, _) => ValueTask.FromResult(call.PageId is null
                 ? CreateScope(plane, call.Arguments)
@@ -235,7 +256,7 @@ public sealed class AssessmentIntegrationModule : IModule
                 input = new { type = "string", description = "Structured adapter input; target is normalized to the authorized page/target." },
                 scopeMinutes = new { type = "integer" }, timeoutSeconds = new { type = "integer" }
             }), AiToolRisk.Dangerous,
-            (call, token) => AuthorizeAndRunAsync(plane, pageContexts, call, token),
+            (call, token) => AuthorizeAndRunAsync(plane, pageContexts, call, token, archive),
             pageContexts is null
                 ? null
                 : (call, _) => ValueTask.FromResult(string.IsNullOrWhiteSpace(call.PageId)
@@ -272,6 +293,7 @@ public sealed class AssessmentIntegrationModule : IModule
             {
                 jobId = new { type = "string" }, evidenceId = new { type = "string" }, title = new { type = "string" },
                 description = new { type = "string" },
+                poc = new { type = "string", description = "Optional reproducible proof: request/response pair that triggers the issue (bounded, redacted)." },
                 source = new { type = "string", @enum = new[] { "page-snapshot", "packet-analyze" } },
                 observation = new { type = "string", description = "Bounded observation JSON or codes; no secrets." },
                 severity = new { type = "string", @enum = new[] { "Critical", "High", "Medium", "Low", "Info" } },
@@ -295,6 +317,17 @@ public sealed class AssessmentIntegrationModule : IModule
                 Schema(new { content = new { type = "string" }, expectedKeyId = new { type = "string" } }), AiToolRisk.ReadOnly,
                 (call, _) => ValueTask.FromResult(VerifyReport(reports, call.Arguments))));
         }
+        if (archive is not null)
+        {
+            registry.Register(new AiToolDefinition("assessment_report_archive",
+                "Archive one assessment job into a human-browsable folder: report.md (findings with PoC), case.json, evidence files and audit.json. Returns the folder path.",
+                Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+                (call, _) => ValueTask.FromResult(TryArchive(archive, call.Arguments))));
+            registry.Register(new AiToolDefinition("assessment_report_open",
+                "Archive one assessment job and open its folder in the file manager so a human can review the report, PoC, evidence and audit.",
+                Schema(new { jobId = new { type = "string" } }), AiToolRisk.ReadOnly,
+                (call, _) => ValueTask.FromResult(OpenArchive(archive, call.Arguments))));
+        }
     }
 
     private static ToolResult ExportReport(IAssessmentReportExportService reports, JsonElement args)
@@ -311,6 +344,24 @@ public sealed class AssessmentIntegrationModule : IModule
         var json = JsonSerializer.Serialize(verification);
         return verification.Valid ? ToolResult.Ok(json) : ToolResult.Fail(json);
     }
+
+    private static ToolResult TryArchive(IAssessmentReportArchive archive, JsonElement args) => Try(() =>
+    {
+        var jobId = Text(args, "jobId");
+        var folder = archive.Archive(jobId);
+        return JsonSerializer.Serialize(new { folder, report = Path.Combine(folder, "report.md") });
+    });
+
+    private static ToolResult OpenArchive(IAssessmentReportArchive archive, JsonElement args) => Try(() =>
+    {
+        var jobId = Text(args, "jobId");
+        var folder = archive.Archive(jobId);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "explorer.exe", Arguments = $"\"{folder}\"", UseShellExecute = true
+        });
+        return JsonSerializer.Serialize(new { folder, opened = true });
+    });
 
     private static ToolResult CreateScope(IAssessmentControlPlane plane, JsonElement args) => Try(() => plane.CreateScope(Text(args, "name"), Text(args, "authorization"), Text(args, "operatorId"), Strings(args, "targets"), DateTimeOffset.UtcNow.AddMinutes(Number(args, "minutes", 60))));
     private const string PageBindingArgument = "__hackermesPageBinding";
@@ -377,7 +428,8 @@ public sealed class AssessmentIntegrationModule : IModule
     private sealed record BrowserScopeBinding(string PageId, string Origin, string Target, string Scheme, int Port);
 
     private static async ValueTask<ToolResult> AuthorizeAndRunAsync(IAssessmentControlPlane plane,
-        IPageContextQueryService? pageContexts, ToolInvocation call, System.Threading.CancellationToken ct)
+        IPageContextQueryService? pageContexts, ToolInvocation call, System.Threading.CancellationToken ct,
+        IAssessmentReportArchive? archive = null)
     {
         try
         {
@@ -421,6 +473,12 @@ public sealed class AssessmentIntegrationModule : IModule
                 DateTimeOffset.UtcNow.AddMinutes(Math.Min(scopeMinutes, 1_440)));
             var job = await plane.StartAsync(plan.Id, approval.Id, actor, ct).ConfigureAwait(false);
             var evidence = plane.Evidence(job.Id);
+            string? archiveFolder = null;
+            if (archive is not null && job.Status is AssessmentJobStatus.Completed or AssessmentJobStatus.CompletedWithWarnings)
+            {
+                try { archiveFolder = archive.Archive(job.Id); }
+                catch { /* archiving must not fail the run result */ }
+            }
             return ToolResult.Ok(JsonSerializer.Serialize(new
             {
                 Scope = scope, Plan = plan, Approval = approval, Job = job,
@@ -428,7 +486,8 @@ public sealed class AssessmentIntegrationModule : IModule
                 {
                     item.Id, item.Source, item.Sha256, item.ContentType,
                     Preview = item.Content.Length <= 800 ? item.Content : item.Content[..800] + "…"
-                }).ToArray()
+                }).ToArray(),
+                ArchiveFolder = archiveFolder
             }));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -467,7 +526,7 @@ public sealed class AssessmentIntegrationModule : IModule
             evidenceId = evidence.Id;
         }
         return plane.CreateFinding(jobId, evidenceId, Text(args, "title"), Text(args, "description"),
-            Text(args, "severity"), Text(args, "confidence"), "agent");
+            Text(args, "severity"), Text(args, "confidence"), "agent", Text(args, "poc"));
     });
     private static ToolResult JobStatus(IAssessmentControlPlane plane, JsonElement args)
     {

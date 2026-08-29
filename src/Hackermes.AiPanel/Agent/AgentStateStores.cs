@@ -107,6 +107,8 @@ public sealed class AgentSkillStore : IAgentSkillStore
         _document ??= new AgentSkillDocument();
         _document.Skills ??= new List<AgentSkill>();
         _document.Skills = _document.Skills.Where(skill => skill is not null).Select(Normalize).Where(skill => skill.Name.Length > 0 && skill.Instructions.Length > 0).Take(MaxSkills).ToList();
+        if (MergeDefaultAssessmentSkill(_document))
+            Save(_document);
         return _document;
     }
 
@@ -135,6 +137,38 @@ public sealed class AgentSkillStore : IAgentSkillStore
         ToolNames = (input.ToolNames ?? new List<string>()).Where(name => !string.IsNullOrWhiteSpace(name)).Select(name => name.Trim()).Distinct(StringComparer.Ordinal).Take(64).ToList()
     };
 
+    /// <summary>
+    /// Stock playbook files seeded before page_navigate existed omit it from ToolNames,
+    /// which hides the only tool that can create a tab. Merge missing defaults in place
+    /// without reseeding empty or custom skill lists.
+    /// </summary>
+    internal static bool MergeDefaultAssessmentSkill(AgentSkillDocument document)
+    {
+        var index = document.Skills.FindIndex(skill =>
+            string.Equals(skill.Id, DefaultAssessmentSkillId, StringComparison.Ordinal));
+        if (index < 0) return false;
+
+        var current = document.Skills[index];
+        var fresh = CreateDefaultAssessmentSkill();
+        var changed = false;
+        foreach (var name in fresh.ToolNames)
+        {
+            if (current.ToolNames.Contains(name, StringComparer.Ordinal)) continue;
+            current.ToolNames.Add(name);
+            changed = true;
+        }
+
+        if (current.Instructions.StartsWith("Authorized assessment playbook", StringComparison.Ordinal)
+            && !current.Instructions.Equals(fresh.Instructions, StringComparison.Ordinal))
+        {
+            current.Instructions = fresh.Instructions;
+            changed = true;
+        }
+
+        if (changed) document.Skills[index] = Normalize(current);
+        return changed;
+    }
+
     public const string DefaultAssessmentSkillId = "authorized-assessment";
 
     public static AgentSkill CreateDefaultAssessmentSkill() => new()
@@ -143,19 +177,31 @@ public sealed class AgentSkillStore : IAgentSkillStore
         Name = "授权评估",
         Enabled = true,
         Instructions =
-            "Authorized assessment playbook. Observe first, then record. " +
-            "page_context → page_security_snapshot → packet_query/packet_analyze. " +
-            "Use page_eval_read for inspection JS and page_eval only for writes. " +
-            "Record Unreviewed findings with assessment_create_finding (evidenceId or source=page-snapshot|packet-analyze). " +
-            "Prefer assessment_authorize_and_run for one bounded ToolHost adapter. Never invent targets or claim a vuln without tool evidence.",
+            "Authorized assessment playbook: systematic, evidence-first coverage across classes. " +
+            "Never claim a vulnerability without tool evidence; never echo secrets; never scan a host outside the approved scope. " +
+            "If the scope is '*' or '*.domain', discover in-scope hosts first, then scan those exact hosts. " +
+            "No tab: page_navigate to an in-scope URL (creates a tab) or assessment_authorize_and_run with an exact target; do not wait for the operator. " +
+            "Workflow (repeat per in-scope asset):\n" +
+            "1) RECON: assessment_authorize_and_run with recon.dns.resolve, recon.nmap.quick, recon.nmap.service, recon.http.headers, recon.http.get, recon.httpx.probe, recon.dirsearch.quick; run recon.subdomain.enum on each in-scope wildcard root domain (uses the bundled subdomain wordlist automatically) to enumerate hosts. Call assessment_resources to see available wordlist/payload corpora before choosing inputs.\n" +
+            "2) FINGERPRINT: read recon.http.headers for tech/headers/WAF; read recon.dirsearch.quick hits and recon.nmap.quick open ports.\n" +
+            "3) VERIFY per class, only on exact in-scope targets:\n" +
+            "   - SQL/command/LDAP injection: first run probe.param.corpus per suspicious parameter (uses a bundled payload corpus; emits Medium 'candidate — verify', NOT auto-confirmed), then confirm with probe.sqlmap.inject (auto-confirms High + PoC; ignore 'not injectable').\n" +
+            "   - Unauthorized access / API / BOLA: probe.unauthorized.access (auto-confirms High + PoC URL); for app-layer, page_context → page_security_snapshot → packet_query/packet_analyze, then record codes.\n" +
+            "   - XSS/SSRF/IDOR/JWT: page_context + page_eval_read for inspection JS, page_security_snapshot for unsafe sinks, packet_analyze for request/response; record with assessment_create_finding only when a code or observed behavior supports it.\n" +
+            "   - Transport/config (HTTPS→HTTP downgrade, missing HSTS/CSP/frame): recon.http.headers auto-confirms Medium + PoC.\n" +
+            "4) RECORD: assessment_create_finding (jobId + evidenceId, or source=page-snapshot|packet-analyze). Attach a PoC only from observed evidence (poc argument); never fabricate. Findings stay Unreviewed.\n" +
+            "5) REPORT: assessment_report (json/markdown/html) and assessment_report_archive to persist; assessment_report_open to reveal the folder.\n" +
+            "Prefer assessment_authorize_and_run for one bounded adapter. Use page_eval only for writes; use page_eval_read for reading. " +
+            "Coverage is complete when you have run recon + verified each in-scope class on each in-scope host and recorded or explicitly ruled out the finding.",
         ToolNames =
         [
-            "page_context", "page_security_snapshot", "page_query", "page_screenshot", "page_eval_read", "page_wait",
+            "page_navigate", "page_context", "page_security_snapshot", "page_query", "page_screenshot", "page_eval_read", "page_wait",
             "console_read", "network_list",
             "packet_query", "packet_analyze", "packet_show", "packet_body_info", "packet_body_chunk",
-            "assessment_tools", "assessment_cases", "assessment_authorize_and_run", "assessment_create_scope_from_page",
+            "assessment_tools", "assessment_resources", "assessment_cases", "assessment_authorize_and_run", "assessment_create_scope_from_page",
             "assessment_evidence", "assessment_create_finding", "assessment_findings",
             "assessment_jobs", "assessment_job_status", "assessment_cancel", "assessment_report",
+            "assessment_report_archive", "assessment_report_open",
             "todo_write", "goal_set", "goal_clear", "read_spill", "agent_subtask"
         ]
     };
@@ -291,8 +337,9 @@ public sealed class AgentSessionEntry
     public string Name { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
-    public string Summary { get; set; } = string.Empty;
-    public List<AgentMemoryMessage> RecentMessages { get; set; } = new();
+        public string Summary { get; set; } = string.Empty;
+        public string WorkspaceId { get; set; } = string.Empty;
+        public List<AgentMemoryMessage> RecentMessages { get; set; } = new();
 
     public override string ToString() => string.IsNullOrWhiteSpace(Name) ? Id : Name;
 }

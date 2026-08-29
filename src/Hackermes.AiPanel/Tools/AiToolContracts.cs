@@ -38,7 +38,8 @@ public sealed record ToolResult(
     string Content,
     IReadOnlyList<string>? AdditionalContexts = null,
     bool ConcludesTurn = false,
-    IReadOnlyList<ChatImage>? Images = null)
+    IReadOnlyList<ChatImage>? Images = null,
+    string? AttachedPageId = null)
 {
     public static ToolResult Ok(string content = "") => new(true, content);
     public static ToolResult Fail(string error) => new(false, error);

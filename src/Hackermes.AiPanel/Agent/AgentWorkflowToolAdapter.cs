@@ -48,6 +48,16 @@ public sealed class AgentWorkflowToolAdapter
                 sha256 = new { type = "string", description = "optional expected SHA-256" }
             }), AiToolRisk.Mutating,
             DownloadAsync));
+        registry.Register(new AiToolDefinition("agent_artifact_list", "List artifacts in the Hackermes artifact store (downloaded references and materials; never executed).",
+            Schema(new { }), AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(ArtifactList())));
+        registry.Register(new AiToolDefinition("agent_artifact_read", "Read a stored text artifact as bounded, paged model context (offset/limit). Binary artifacts are refused — they belong behind ToolHost adapters.",
+            Schema(new
+            {
+                fileName = new { type = "string" }, offset = new { type = "integer", description = "character offset, default 0" },
+                maxChars = new { type = "integer", description = "characters to return, 1-16000 (default 8000)" }
+            }), AiToolRisk.ReadOnly,
+            (invocation, _) => ValueTask.FromResult(ArtifactRead(invocation.Arguments))));
     }
 
     private ToolResult UpsertSkill(JsonElement arguments)
@@ -67,6 +77,27 @@ public sealed class AgentWorkflowToolAdapter
 
     private ToolResult RemoveSkill(JsonElement arguments) => _skills.Remove(String(arguments, "id"))
         ? ToolResult.Ok("Skill removed.") : ToolResult.Fail("Skill was not found.");
+
+    private ToolResult ArtifactList()
+    {
+        try { return ToolResult.Ok(JsonSerializer.Serialize(_artifacts.List())); }
+        catch (Exception exception) { return ToolResult.Fail(exception.Message); }
+    }
+
+    private ToolResult ArtifactRead(JsonElement arguments)
+    {
+        try
+        {
+            var fileName = String(arguments, "fileName");
+            var offset = Long(arguments, "offset");
+            var maxChars = (int)Long(arguments, "maxChars", 8000);
+            return ToolResult.Ok(JsonSerializer.Serialize(_artifacts.ReadText(fileName, offset, maxChars)));
+        }
+        catch (Exception exception) { return ToolResult.Fail(exception.Message); }
+    }
+
+    private static long Long(JsonElement arguments, string name, long fallback = 0) =>
+        arguments.TryGetProperty(name, out var property) && property.TryGetInt64(out var value) ? value : fallback;
 
     private ToolResult SetNotes(JsonElement arguments)
     {

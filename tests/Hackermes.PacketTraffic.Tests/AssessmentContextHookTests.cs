@@ -38,6 +38,23 @@ public sealed class AssessmentContextHookTests : IDisposable
     }
 
     [Fact]
+    public async Task Hook_does_not_inject_jobs_from_another_workspace()
+    {
+        var plane = new AssessmentControlPlane(new SimulatedAssessmentExecutionHost(),
+            new PathSettings(Path.Combine(_root, "settings.json")), new NullLogger(), new MemorySecrets());
+        var evidence = plane.AttachObservation("packet-analyze",
+            """{"code":"missing-csp","severity":"Warning","message":"No CSP"}""", "analyst");
+        plane.CreateFinding(evidence.JobId, evidence.Id, "Missing CSP", "obs", "Medium", "Low", "analyst");
+        var context = new AgentWorkspaceContext();
+        context.SetCurrent("session-private");
+        var hook = new AssessmentContextPreStepHook(plane, context);
+
+        var decision = await hook.BeforeStepAsync(new PreStepInput(1, 1, []), CancellationToken.None);
+
+        Assert.Same(PreStepDecision.Proceed, decision);
+    }
+
+    [Fact]
     public async Task Hook_is_silent_when_there_are_no_cases()
     {
         var plane = new AssessmentControlPlane(new SimulatedAssessmentExecutionHost(),

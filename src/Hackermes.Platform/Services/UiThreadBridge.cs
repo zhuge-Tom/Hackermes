@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Threading;
 using System;
 using System.Threading.Tasks;
@@ -25,6 +26,22 @@ public static class UiThreadBridge
 
         if (IsOnUiThread)
         {
+            try
+            {
+                action();
+                return Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                return Task.FromException(ex);
+            }
+        }
+
+        if (Application.Current is null)
+        {
+            // Headless context (unit tests, design preview): there is no running Avalonia
+            // app, so Dispatcher.UIThread.Post would drop the work into a queue that is
+            // never pumped and the awaiting caller would hang forever. Run inline instead.
             try
             {
                 action();
@@ -70,6 +87,20 @@ public static class UiThreadBridge
             }
         }
 
+        if (Application.Current is null)
+        {
+            // Headless context (unit tests, design preview): run inline instead of
+            // dropping the work into an unpumped dispatcher queue (would hang forever).
+            try
+            {
+                return Task.FromResult(func());
+            }
+            catch (Exception ex)
+            {
+                return Task.FromException<T>(ex);
+            }
+        }
+
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Dispatcher.UIThread.Post(() =>
@@ -91,6 +122,12 @@ public static class UiThreadBridge
     public static Task<T> InvokeAsync<T>(Func<Task<T>> func, DispatcherPriority priority = default)
     {
         ArgumentNullException.ThrowIfNull(func);
+
+        if (Application.Current is null)
+        {
+            // Headless context: no dispatcher queue to pump — run the delegate inline.
+            return RunHeadlessAsync(func);
+        }
 
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -118,6 +155,8 @@ public static class UiThreadBridge
 
         return tcs.Task;
     }
+
+    private static async Task<T> RunHeadlessAsync<T>(Func<Task<T>> func) => await func().ConfigureAwait(true);
 
     /// <summary>发射后不管。仅用于确实无需等待结果的界面更新。</summary>
     public static void Post(Action action, DispatcherPriority priority = default)

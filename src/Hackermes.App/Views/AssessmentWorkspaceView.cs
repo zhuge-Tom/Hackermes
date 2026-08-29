@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Hackermes.Assessment;
 using Hackermes.Platform.Registries;
+using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,7 +20,11 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     private const string AllToolsAdapterId = "__all_tools__";
 
     private readonly IAssessmentControlPlane _plane;
+    private readonly IAgentWorkspaceContext? _workspaceContext;
+    private readonly IAssessmentReportArchive? _archive;
+    private readonly ComboBox _workspaces = new() { MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly ComboBox _jobs = new() { MinWidth = 280, HorizontalAlignment = HorizontalAlignment.Stretch };
+    private bool _suppressWorkspaceChange;
     private readonly ListBox _scopes = WorkspaceList();
     private readonly ListBox _plans = WorkspaceList();
     private readonly ListBox _approvals = WorkspaceList();
@@ -29,7 +34,7 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     private readonly TextBox _targets = new() { PlaceholderText = "本次执行目标（域名或 URL）" };
     private readonly CheckBox _authorizeAll = new()
     {
-        Content = "全部授权范围（不限制域名；目标可留空，仅创建无限制范围）",
+        Content = "全部授权范围（不限制域名；目标可留空）",
         HorizontalContentAlignment = HorizontalAlignment.Left
     };
     private readonly TextBox _scopeMinutes = new() { PlaceholderText = "有效分钟数", Text = "1440" };
@@ -45,7 +50,6 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     };
     private readonly TextBox _timeoutSeconds = new() { PlaceholderText = "超时秒数", Text = "300" };
     private readonly TextBox _approvalMinutes = new() { PlaceholderText = "审批有效分钟数", Text = "30" };
-    private readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, IsVisible = false };
     private readonly TextBlock _jobEmpty = EmptyText("暂无评估任务。在“授权与执行”中填写目标，点击“确认授权并执行”即可开始。");
     private readonly TextBlock _evidenceEmpty = EmptyText("当前任务暂无证据。执行获批计划后，证据将显示在这里。");
@@ -66,12 +70,21 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     private readonly ComboBox _reviewStatus = new() { ItemsSource = Enum.GetValues<AssessmentFindingStatus>(), SelectedIndex = 0 };
     private readonly TextBox _reviewer = new() { PlaceholderText = "复核人身份" };
     private readonly TextBox _reviewNote = new() { PlaceholderText = "复核说明", AcceptsReturn = true, MinHeight = 72, TextWrapping = TextWrapping.Wrap };
+    private bool _composingNew;
+    private bool _busy;
 
-    public AssessmentWorkspaceView(IAssessmentControlPlane plane)
+    public AssessmentWorkspaceView(IAssessmentControlPlane plane, IAgentWorkspaceContext? workspaceContext = null,
+        IAssessmentReportArchive? archive = null)
     {
         _plane = plane;
+        _workspaceContext = workspaceContext;
+        _archive = archive;
         Content = Build();
-        _jobs.SelectionChanged += (_, _) => RefreshSelectedJob();
+        _jobs.SelectionChanged += (_, _) =>
+        {
+            if (_jobs.SelectedItem is JobItem) _composingNew = false;
+            RefreshSelectedJob();
+        };
         _evidence.SelectionChanged += (_, _) => ShowEvidence();
         _findings.SelectionChanged += (_, _) => ShowFinding();
         _audit.SelectionChanged += (_, _) => ShowAudit();
@@ -87,11 +100,13 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
                     : $"{value.Name}（{value.Id}）· 不可用：{value.UnavailableReason}")))
             .ToArray();
         _adapter.SelectedIndex = 0;
+        WireJobList();
+        _workspaces.SelectionChanged += (_, _) => OnWorkspaceSelected();
         _authorizeAll.PropertyChanged += (_, change) =>
         {
             if (change.Property == Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty)
                 _targets.PlaceholderText = _authorizeAll.IsChecked == true
-                    ? "本次执行目标（可留空；留空只创建无限制授权范围）"
+                    ? "本次执行目标（可留空）"
                     : "本次执行目标（域名或 URL）";
         };
         RefreshAll();
@@ -103,13 +118,31 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     {
         var refresh = new Button { Content = "刷新任务", VerticalAlignment = VerticalAlignment.Center };
         refresh.Click += (_, _) => RefreshAll();
+        var compose = new Button { Content = "新建任务", VerticalAlignment = VerticalAlignment.Center };
+        compose.Click += (_, _) => StartNewTask();
+        var clear = new Button { Content = "清空任务", VerticalAlignment = VerticalAlignment.Center };
+        clear.Click += (_, _) => ClearFinishedJobs();
+        var newWorkspace = new Button { Content = "新建工作区", VerticalAlignment = VerticalAlignment.Center };
+        newWorkspace.Click += (_, _) => CreateWorkspace();
 
-        var jobPicker = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 10 };
+        var workspacePicker = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 8 };
+        var workspaceLabel = new TextBlock { Text = "工作区", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold };
+        Grid.SetColumn(_workspaces, 1);
+        Grid.SetColumn(newWorkspace, 2);
+        workspacePicker.Children.Add(workspaceLabel);
+        workspacePicker.Children.Add(_workspaces);
+        workspacePicker.Children.Add(newWorkspace);
+
+        var jobPicker = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), ColumnSpacing = 8 };
         var jobLabel = new TextBlock { Text = "当前任务", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold };
         Grid.SetColumn(_jobs, 1);
-        Grid.SetColumn(refresh, 2);
+        Grid.SetColumn(compose, 2);
+        Grid.SetColumn(clear, 3);
+        Grid.SetColumn(refresh, 4);
         jobPicker.Children.Add(jobLabel);
         jobPicker.Children.Add(_jobs);
+        jobPicker.Children.Add(compose);
+        jobPicker.Children.Add(clear);
         jobPicker.Children.Add(refresh);
 
         var top = new Border
@@ -117,7 +150,7 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             Padding = new Thickness(16, 14),
             BorderThickness = new Thickness(0, 0, 0, 1),
             BorderBrush = Brushes.Gray,
-            Child = new StackPanel { Spacing = 8, Children = { jobPicker, _jobEmpty, _summary, _status } }
+            Child = new StackPanel { Spacing = 8, Children = { workspacePicker, jobPicker, _jobEmpty, _status } }
         };
 
         var tabs = new TabControl
@@ -147,8 +180,8 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
 
         var quickPanel = Section(
             "授权与执行",
-            "填写范围名称并点击一次按钮，即视为操作者的人工确认：系统自动创建授权范围、生成固定计划、" +
-            "签发一次性审批并立即在独立 ToolHost 中执行，无需逐步确认。授权依据与操作人由系统自动记录。",
+            "填写范围名称后点击一次按钮，即视为操作者的人工确认：系统自动创建授权范围、生成固定计划、" +
+            "签发一次性审批。若已填写执行目标，将立即在独立 ToolHost 中执行；勾选全部授权且目标留空时只创建授权任务。",
             Labeled("范围名称", _scopeName),
             _authorizeAll,
             Labeled("目标", _targets),
@@ -239,6 +272,11 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
     /// <summary>One operator confirmation covers scope creation, plan hashing, approval issuance and execution.</summary>
     private async System.Threading.Tasks.Task ConfirmAndRunAsync()
     {
+        if (_busy)
+        {
+            SetStatus("已有任务正在执行。", true);
+            return;
+        }
         try
         {
             var minutes = PositiveInt(_scopeMinutes.Text, "范围有效分钟数", 1, 10_080);
@@ -250,13 +288,16 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             var requestedEndpoints = selection.ExecutionEndpoints.ToArray();
             var scopeTargets = selection.ScopeTargets.ToArray();
 
-            if (requestedEndpoints.Length == 0)
+            var scope = _plane.CreateScope(_scopeName.Text ?? string.Empty, _authorization.Text ?? string.Empty,
+                _operator.Text ?? string.Empty, scopeTargets, DateTimeOffset.UtcNow.AddMinutes(minutes));
+            var actor = scope.OperatorId;
+            if (!HasExecutionTarget(selection))
             {
-                var unrestricted = _plane.CreateScope(_scopeName.Text ?? string.Empty,
-                    _authorization.Text ?? string.Empty, _operator.Text ?? string.Empty,
-                    scopeTargets, DateTimeOffset.UtcNow.AddMinutes(minutes));
+                var granted = _plane.CompleteGrant(scope.Id, $"{scope.Name} · 授权确认", actor, "授权已确认。", CurrentWorkspaceId());
+                _composingNew = false;
                 RefreshAll();
-                SetStatus($"无限制授权范围已创建：{unrestricted.Name}。未填写本次执行目标，因此没有启动工具。", false);
+                SelectJob(granted.Id);
+                SetStatus("授权已确认并已创建任务。", false);
                 return;
             }
 
@@ -264,9 +305,7 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
             var planLabel = allTools ? "全部工具" : adapterId;
             if (allTools)
             {
-                // 工具输入必须是具体目标;全部授权只放宽范围校验,不能替代目标本身。
-                var concrete = requestedEndpoints.FirstOrDefault(value => value.Target != "*")
-                    ?? throw new ArgumentException("全部工具模式需要在目标中填写至少一个具体目标。");
+                var concrete = requestedEndpoints.First(value => value.Target != "*");
                 steps = BuildAllToolSteps(concrete, timeout);
                 if (steps.Count == 0) throw new InvalidOperationException("当前没有可用的评估工具（本地工具或运行时缺失）。");
             }
@@ -275,22 +314,25 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
                 steps = [new AssessmentStep(adapterId, _stepInput.Text ?? string.Empty, timeout)];
             }
 
-            var scope = _plane.CreateScope(_scopeName.Text ?? string.Empty, _authorization.Text ?? string.Empty,
-                _operator.Text ?? string.Empty, scopeTargets, DateTimeOffset.UtcNow.AddMinutes(minutes));
-            var actor = scope.OperatorId;
             var plan = _plane.CreatePlan(scope.Id, $"{scope.Name} · {planLabel}",
                 steps, actor);
             var approval = _plane.Approve(plan.Id, actor,
                 DateTimeOffset.UtcNow.AddMinutes(Math.Min(minutes, 1_440)));
-            SetStatus($"授权已确认，任务执行中…（{steps.Count} 个步骤）", false);
-            var job = await _plane.StartAsync(plan.Id, approval.Id, actor);
+            _busy = true;
+            var run = _plane.Begin(plan.Id, approval.Id, actor, workspaceId: CurrentWorkspaceId());
+            _composingNew = false;
             RefreshAll();
-            _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == job.Id);
+            SelectJob(run.Job.Id);
+            SetStatus($"授权已确认，已创建任务并开始执行（{steps.Count} 个步骤）…", false);
+            var job = await run.Completion;
+            RefreshAll();
+            SelectJob(job.Id);
             var failure = string.IsNullOrWhiteSpace(job.Failure) ? string.Empty : $"：{job.Failure}";
             SetStatus($"任务结束：{job.Status}{failure}。",
                 job.Status is AssessmentJobStatus.CompletedWithWarnings or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
         }
         catch (Exception exception) { SetStatus(exception.Message, true); }
+        finally { _busy = false; }
     }
 
     internal sealed record QuickAuthorizationSelection(
@@ -309,6 +351,13 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         if (scopeTargets.Length == 0)
             throw new ArgumentException("请填写至少一个目标，或勾选“全部授权范围”。");
         return new QuickAuthorizationSelection(scopeTargets, endpoints);
+    }
+
+    internal static bool HasExecutionTarget(QuickAuthorizationSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return selection.ExecutionEndpoints.Count > 0 &&
+               selection.ExecutionEndpoints.Any(value => value.Target != "*");
     }
 
     /// <summary>One bounded step per locally available recon tool, each pointed at the same concrete target.</summary>
@@ -423,13 +472,15 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
                 SetStatus("报告已复制到剪贴板。", false);
             }
         };
+        var archive = new Button { Content = "归档并打开文件夹" };
+        archive.Click += (_, _) => ArchiveAndOpen();
         var panel = new DockPanel { Margin = new Thickness(12) };
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             Margin = new Thickness(0, 0, 0, 10),
-            Children = { json, markdown, html, copy }
+            Children = { json, markdown, html, copy, archive }
         };
         DockPanel.SetDock(actions, Avalonia.Controls.Dock.Top);
         panel.Children.Add(actions);
@@ -451,17 +502,20 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         _scopes.SelectedItem = scopes.FirstOrDefault(value => value.Value.Id == selectedScope) ?? scopes.FirstOrDefault();
         _plans.SelectedItem = plans.FirstOrDefault(value => value.Value.Id == selectedPlan) ?? plans.FirstOrDefault();
         _approvals.SelectedItem = approvals.FirstOrDefault(value => value.Value.Id == selectedApproval) ?? approvals.FirstOrDefault();
+        RefreshWorkspaces();
         var selected = SelectedJob?.Value.Id;
-        var items = _plane.ReadCases().Select(value => new JobItem(value)).ToArray();
+        var items = _plane.ReadCasesInWorkspace(CurrentWorkspaceId()).Select(value => new JobItem(value)).ToArray();
         _jobs.ItemsSource = items;
+        if (_composingNew)
+        {
+            _jobs.SelectedItem = null;
+            _jobEmpty.IsVisible = items.Length == 0;
+            ClearJobViews();
+            return;
+        }
         _jobs.SelectedItem = items.FirstOrDefault(value => value.Value.Id == selected) ?? items.FirstOrDefault();
         _jobEmpty.IsVisible = items.Length == 0;
-        _summary.IsVisible = items.Length > 0;
-        if (items.Length == 0)
-        {
-            _summary.Text = string.Empty;
-            ClearJobViews();
-        }
+        if (items.Length == 0) ClearJobViews();
         else RefreshSelectedJob();
     }
 
@@ -516,9 +570,13 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         {
             var approval = (_approvals.SelectedItem as ApprovalItem)?.Value ?? throw new InvalidOperationException("请先选择审批票据。");
             SetStatus("任务执行中…", false);
-            var job = await _plane.StartAsync(approval.PlanId, approval.Id, _operator.Text ?? string.Empty);
+            var run = _plane.Begin(approval.PlanId, approval.Id, Actor(), workspaceId: CurrentWorkspaceId());
+            _composingNew = false;
             RefreshAll();
-            _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == job.Id);
+            SelectJob(run.Job.Id);
+            var job = await run.Completion;
+            RefreshAll();
+            SelectJob(job.Id);
             SetStatus($"任务结束：{job.Status}。",
                 job.Status is AssessmentJobStatus.CompletedWithWarnings or AssessmentJobStatus.Failed or AssessmentJobStatus.Cancelled);
         }
@@ -530,10 +588,134 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         var selected = SelectedJob;
         var job = selected?.Value;
         if (job is null) { SetStatus("请先选择任务。", true); return; }
-        if (!selected!.Case.AvailableActions.CanCancelJob) { SetStatus("当前案例状态不允许取消任务。", true); return; }
-        SetStatus(_plane.Cancel(job.Id, _operator.Text ?? string.Empty, "workbench cancellation") ? "已请求取消任务。" : "当前任务无法取消。", false);
+        if (selected!.Case.AvailableActions.CanCancelJob)
+        {
+            SetStatus(_plane.Cancel(job.Id, Actor(), "workbench cancellation") ? "已请求取消任务。" : "当前任务无法取消。", false);
+            RefreshAll();
+            return;
+        }
+        HideJob(selected);
+    }
+
+    private void StartNewTask()
+    {
+        _composingNew = true;
+        _jobs.SelectedItem = null;
+        ClearJobViews();
+        _jobEmpty.IsVisible = (_jobs.ItemsSource as JobItem[])?.Length is 0;
+        SetStatus("已新建任务草稿。填写范围与目标后点击确认授权并执行。", false);
+    }
+
+    private void ClearFinishedJobs()
+    {
+        var count = _plane.HideFinishedJobs(Actor(), CurrentWorkspaceId());
+        _composingNew = count > 0 && SelectedJob is null;
+        RefreshAll();
+        SetStatus(count == 0 ? "没有可清空的已结束任务。" : $"已清空 {count} 个已结束任务。", false);
+    }
+
+    private void HideJob(JobItem item)
+    {
+        if (!_plane.HideJob(item.Value.Id, Actor()))
+        {
+            SetStatus("当前任务无法删除。", true);
+            return;
+        }
+        RefreshAll();
+        SetStatus("任务已从列表中删除。", false);
+    }
+
+    private void SelectJob(string jobId)
+    {
+        _jobs.SelectedItem = (_jobs.ItemsSource as JobItem[])?.FirstOrDefault(value => value.Value.Id == jobId);
+    }
+
+    private void WireJobList()
+    {
+        var delete = new MenuItem { Header = "删除此任务" };
+        delete.Click += (_, _) =>
+        {
+            if (SelectedJob is { } item) HideJob(item);
+            else SetStatus("请先选择任务。", true);
+        };
+        var clear = new MenuItem { Header = "清空已结束任务" };
+        clear.Click += (_, _) => ClearFinishedJobs();
+        RebuildJobContextMenu(delete, clear);
+    }
+
+    private void RebuildJobContextMenu(MenuItem delete, MenuItem clear)
+    {
+        var move = new MenuItem { Header = "移到工作区" };
+        foreach (var workspace in _plane.ListWorkspaces())
+        {
+            var id = workspace.Id;
+            var item = new MenuItem { Header = workspace.Name };
+            item.Click += (_, _) => MoveSelectedJob(id);
+            move.Items.Add(item);
+        }
+        _jobs.ContextMenu = new ContextMenu { ItemsSource = new[] { delete, move, clear } };
+    }
+
+    private void MoveSelectedJob(string workspaceId)
+    {
+        if (SelectedJob is not { } item)
+        {
+            SetStatus("请先选择任务。", true);
+            return;
+        }
+        if (!_plane.AssignJobWorkspace(item.Value.Id, workspaceId))
+        {
+            SetStatus("无法移动该任务。", true);
+            return;
+        }
+        RefreshAll();
+        SetStatus("任务已移入所选工作区。", false);
+    }
+
+    private void CreateWorkspace()
+    {
+        var created = _plane.CreateWorkspace(string.Empty);
+        _workspaceContext?.SetCurrent(created.Id);
+        RefreshAll();
+        SetStatus($"已创建工作区：{created.Name}。", false);
+    }
+
+    private void OnWorkspaceSelected()
+    {
+        if (_suppressWorkspaceChange) return;
+        if (_workspaces.SelectedItem is not WorkspaceOption option) return;
+        _workspaceContext?.SetCurrent(option.Id);
         RefreshAll();
     }
+
+    private void RefreshWorkspaces()
+    {
+        _suppressWorkspaceChange = true;
+        var items = _plane.ListWorkspaces().Select(value => new WorkspaceOption(value.Id, value.Name)).ToArray();
+        var current = CurrentWorkspaceId();
+        _workspaces.ItemsSource = items;
+        _workspaces.SelectedItem = items.FirstOrDefault(value => value.Id == current) ?? items.FirstOrDefault();
+        _suppressWorkspaceChange = false;
+        if (_jobs.ContextMenu is not null)
+        {
+            var delete = new MenuItem { Header = "删除此任务" };
+            delete.Click += (_, _) =>
+            {
+                if (SelectedJob is { } item) HideJob(item);
+                else SetStatus("请先选择任务。", true);
+            };
+            var clear = new MenuItem { Header = "清空已结束任务" };
+            clear.Click += (_, _) => ClearFinishedJobs();
+            RebuildJobContextMenu(delete, clear);
+        }
+    }
+
+    private string CurrentWorkspaceId() =>
+        _workspaceContext?.CurrentId
+        ?? (_workspaces.SelectedItem as WorkspaceOption)?.Id
+        ?? string.Empty;
+
+    private string Actor() => string.IsNullOrWhiteSpace(_operator.Text) ? Environment.UserName : _operator.Text.Trim();
 
     private void RevokeScope()
     {
@@ -556,7 +738,6 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         var job = SelectedJob?.Value;
         if (job is null) { ClearJobViews(); return; }
         var snapshot = _plane.ReadCase(job.Id);
-        _summary.Text = $"{snapshot.Job.Status} · 范围：{snapshot.Scope.Name} · 计划：{snapshot.Plan.Name} · 请求人：{snapshot.Job.RequestedBy}";
         _evidence.ItemsSource = snapshot.Evidence.Select(value => new EvidenceItem(value)).ToArray();
         _findings.ItemsSource = snapshot.Findings.Select(value => new FindingItem(value)).ToArray();
         _audit.ItemsSource = snapshot.Audit.Select(value => new AuditItem(value)).ToArray();
@@ -668,6 +849,23 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         catch (Exception exception) { SetStatus(exception.Message, true); }
     }
 
+    private void ArchiveAndOpen()
+    {
+        try
+        {
+            var job = SelectedJob?.Value ?? throw new InvalidOperationException("请先选择任务。");
+            if (_archive is null) throw new InvalidOperationException("报告归档后端不可用。");
+            var folder = _archive.Archive(job.Id);
+            _report.Text = _plane.ExportReport(job.Id, "markdown");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe", Arguments = $"\"{folder}\"", UseShellExecute = true
+            });
+            SetStatus($"已归档到文件夹并已在文件管理器中打开：{folder}", false);
+        }
+        catch (Exception exception) { SetStatus(exception.Message, true); }
+    }
+
     private void SetStatus(string message, bool error)
     {
         _status.Text = error ? $"错误：{message}" : message;
@@ -766,10 +964,22 @@ public sealed class AssessmentWorkspaceView : UserControl, ITabActivationAware
         return grid;
     }
 
+    private sealed record WorkspaceOption(string Id, string Name)
+    {
+        public override string ToString() => Name;
+    }
+
     private sealed record JobItem(AssessmentCaseSummary Case)
     {
         public AssessmentJob Value => Case.Job;
-        public override string ToString() => $"{Value.CreatedAt:MM-dd HH:mm} · {Value.Status} · {Case.Scope.Name} / {Case.Plan.Name}";
+        public override string ToString()
+        {
+            var summary = Case;
+            if (summary?.Job is not { } job) return string.Empty;
+            var scope = summary.Scope?.Name ?? string.Empty;
+            var plan = summary.Plan?.Name ?? string.Empty;
+            return $"{job.CreatedAt:MM-dd HH:mm} · {job.Status} · {scope} / {plan}";
+        }
     }
 
     private sealed record ToolOption(string Id, string Label)

@@ -1,4 +1,5 @@
 using Hackermes.Automation.Commands;
+using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,8 +20,13 @@ public sealed class CommandToolAdapter
         { "help", "timeline", "save", "load", "packet", "rule", "repeater", "compare", "compare-session",
           "agent", "assessment", "annotation", "traffic-history", "identity", "signing-keys" };
     private readonly CommandRegistry _commands;
+    private readonly IBrowserTabOpener? _tabs;
 
-    public CommandToolAdapter(CommandRegistry commands) => _commands = commands;
+    public CommandToolAdapter(CommandRegistry commands, IBrowserTabOpener? tabs = null)
+    {
+        _commands = commands;
+        _tabs = tabs;
+    }
 
     public IReadOnlyList<AiToolDefinition> EnumerateTools() => _commands.All
         .Where(c => !Excluded.Contains(c.Name))
@@ -52,6 +58,12 @@ public sealed class CommandToolAdapter
         CommandDefinition command, ToolInvocation invocation, CancellationToken ct)
     {
         var arguments = ResolveArguments(command.Name, invocation.Arguments);
+        if (command.Name.Equals("open", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(invocation.PageId))
+        {
+            return await OpenNewTabAsync(arguments, ct).ConfigureAwait(false);
+        }
+
         var result = await _commands.ExecuteAsync(
             string.IsNullOrWhiteSpace(arguments) ? command.Name : $"{command.Name} {arguments}",
             invocation.PageId, ct).ConfigureAwait(false);
@@ -59,6 +71,49 @@ public sealed class CommandToolAdapter
         if (result.MediaBase64 is { Length: > 0 } data)
             return new ToolResult(true, result.Output, Images: [new ChatImage(result.MediaType ?? "image/png", data)]);
         return ToolResult.Ok(result.Output);
+    }
+
+    private async ValueTask<ToolResult> OpenNewTabAsync(string url, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return ToolResult.Fail("缺少地址");
+        if (_tabs is null)
+            return ToolResult.Fail("没有活动的页面,请先新建标签页");
+
+        ct.ThrowIfCancellationRequested();
+        string pageId;
+        try
+        {
+            pageId = await OpenTabOnUiThreadAsync(url).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Fail("无法打开页面: " + ex.Message);
+        }
+
+        if (string.IsNullOrWhiteSpace(pageId))
+            return ToolResult.Fail("无法打开页面: 未返回标签页 id");
+
+        return new ToolResult(
+            true,
+            $"已打开新标签页 {pageId} → {url.Trim()}",
+            AttachedPageId: pageId);
+    }
+
+    private async Task<string> OpenTabOnUiThreadAsync(string url)
+    {
+        try
+        {
+            return await UiThreadBridge.InvokeAsync(() => _tabs!.OpenTab(url)).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return _tabs!.OpenTab(url);
+        }
     }
 
     private static string ResolveArguments(string commandName, JsonElement args)

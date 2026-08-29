@@ -235,6 +235,35 @@ public sealed class AgentRuntimeCTests
     }
 
     [Fact]
+    public void Restating_the_same_goal_does_not_reset_the_round_cap()
+    {
+        var goals = new AgentGoalRegistry();
+        goals.Set("对当前页面做只读安全评估");
+        Assert.True(goals.TryBeginRound(out _));
+        goals.Set("对当前页面做只读安全评估");
+        Assert.Equal(1, goals.RoundsStarted);
+
+        for (var round = 2; round <= AgentGoalRegistry.MaxRoundsPerGoal; round++)
+            Assert.True(goals.TryBeginRound(out _));
+        goals.Set("对当前页面做只读安全评估");
+        Assert.False(goals.TryBeginRound(out _));
+        Assert.Equal(AgentGoalRegistry.MaxRoundsPerGoal, goals.RoundsStarted);
+    }
+
+    [Fact]
+    public void A_new_goal_resets_the_round_counter()
+    {
+        var goals = new AgentGoalRegistry();
+        goals.Set("第一目标");
+        Assert.True(goals.TryBeginRound(out _));
+        goals.Set("完全不同的目标");
+        Assert.Equal(0, goals.RoundsStarted);
+        Assert.True(goals.TryBeginRound(out var message));
+        Assert.Contains("完全不同的目标", message, StringComparison.Ordinal);
+        Assert.Equal(1, goals.RoundsStarted);
+    }
+
+    [Fact]
     public async Task Goal_round_cap_bounds_the_continuation()
     {
         var goals = new AgentGoalRegistry();

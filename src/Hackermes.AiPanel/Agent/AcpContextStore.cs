@@ -42,15 +42,16 @@ public sealed class AcpBlock
 /// Active Context Pruning store (opencode-acp / pai-acp lineage): the model decides
 /// when and what to compress. Messages carry stable refs ([m00012]) used as compression
 /// boundaries; compressed ranges become labeled blocks that can be decompressed or searched.
-/// Protections: recent working set, last user message, and context_compress tool results
-/// (their summaries are the sole record of compressed conversation). Ranges never split an
-/// assistant tool_call from its results. A GC fallback truncates the oldest content when the
-/// budget is still exceeded, parking victims into a searchable tombstone block.
+/// Protections: recent working set, last user message, and active compression-block markers
+/// (their summaries are the sole record of compressed conversation). Failed context_compress
+/// tool results are not protected. Ranges never split an assistant tool_call from its results.
+/// A GC fallback truncates the oldest content when the budget is still exceeded, parking
+/// victims into a searchable tombstone block.
 /// </summary>
 public sealed class AcpContextStore
 {
-    public const double MinNudgeRatio = 0.45;
-    public const double MaxNudgeRatio = 0.55;
+    public const double MinNudgeRatio = 0.70;
+    public const double MaxNudgeRatio = 0.85;
     public const string LoadBearingTool = "context_compress";
     private const int ProtectedRecentEntries = 4;
     private const int NudgeEveryBuilds = 3;
@@ -71,7 +72,7 @@ public sealed class AcpContextStore
 
     /// <param name="initialBudget">Budget used for protection zones before the first BuildRequest, in the active unit.</param>
     /// <param name="estimate">Optional unit override; when provided (token metering) entry sizes and budgets are tokens.</param>
-    public AcpContextStore(Func<string> systemMessageFactory, int initialBudget = 120_000, Func<string, int>? estimate = null)
+    public AcpContextStore(Func<string> systemMessageFactory, int initialBudget = 400_000, Func<string, int>? estimate = null)
     {
         _systemMessageFactory = systemMessageFactory;
         _estimate = estimate ?? (content => (content?.Length ?? 0) + LegacyEntryOverheadChars);
@@ -203,10 +204,10 @@ public sealed class AcpContextStore
         return messages;
     }
 
-    /// <summary>Stable one-line guidance injected on every request so compression stays in attention.</summary>
+    /// <summary>Stable one-line guidance: archive is automatic; the model should keep working.</summary>
     public const string PhilosophyLine =
-        "[ACP 上下文管理] 你负责管理本会话的上下文：当较早的内容不再被当前步骤需要时，调用 context_compress 把该区间替换为你写的自包含摘要" +
-        "（保留文件路径、决策、错误信息与用户目标）。压缩前可用 context_status 查看用量与可压缩区间，context_search 可检索已归档块。";
+        "[ACP 上下文管理] 较早内容由系统在预算压力下自动归档。优先推进当前任务，不要把压缩当成本轮主任务。" +
+        "已归档细节用 context_search / context_decompress 取回。";
 
     private static void KeepNewestScreenshot(List<ChatMessage> messages)
     {
@@ -260,25 +261,19 @@ public sealed class AcpContextStore
 
         var builder = new StringBuilder("[ACP 上下文预算] ");
         builder.Append(strong
-            ? $"活动上下文已达预算的 {chars / (double)budget:P0}（{chars:N0}/{budget:N0} 字符），必须立即压缩："
-            : $"活动上下文约占预算 {chars / (double)budget:P0}（{chars:N0}/{budget:N0} 字符），建议适时压缩：");
+            ? $"活动上下文已达预算的 {chars / (double)budget:P0}（{chars:N0}/{budget:N0} 字符），系统将自动归档较早内容。请继续当前任务，不要反复调用 context_compress。"
+            : $"活动上下文约占预算 {chars / (double)budget:P0}（{chars:N0}/{budget:N0} 字符）。请继续当前任务；系统会在压力升高时自动归档。");
         AppendBreakdown(builder, snapshot);
         if (suggestions.Count > 0)
         {
-            builder.Append("可压缩区间（从大到小）:\n");
+            builder.Append("可压缩区间（供参考，从大到小）:\n");
             foreach (var suggestion in suggestions)
                 builder.Append($"  [{suggestion.StartRef}]–[{suggestion.EndRef}] 约 {FormatSize(suggestion.Chars)} 字符 ({suggestion.Label})\n");
         }
         else
         {
-            builder.Append("当前没有可安全压缩的大区间；避免再产生大结果输出。");
+            builder.Append("当前没有可安全压缩的大区间；不要再调用 context_compress，系统会自动截断最旧内容。");
         }
-        builder.Append("调用 context_compress，ranges 传入 {{start,end,summary,title}}。优先级: 冗长工具输出(构建/扫描/目录列表) → " +
-                       "无结果的探索 → 重复读取 → 已完成任务的中间步骤。必须保留文件路径、决策、错误信息与用户目标。" +
-                       $"最近 {ProtectedRecentEntries} 条消息、最后一条用户消息与 context_compress 结果受保护；" +
-                       "区间不能把一次工具调用和它的结果分开。摘要要自包含——解压前的检索只能看到它。");
-        if (strong)
-            builder.Append(" 压缩完成前不要再发起新的大结果工具调用；若无可压缩区间，超出预算的部分会被自动截断。");
         return builder.ToString();
     }
 
@@ -305,6 +300,18 @@ public sealed class AcpContextStore
     public List<AcpRangeSuggestion> SuggestRanges(IReadOnlyList<AcpEntry> snapshot)
     {
         var flags = ComputeProtections(snapshot);
+        // Compress snaps to tool-pair segments and rejects mixed pairs. Mirror that here so
+        // suggestions are ranges that can actually land (otherwise auto-compact summarizes
+        // a doomed range and the model is told to retry).
+        foreach (var segment in PartitionSegments(snapshot))
+        {
+            var blocked = false;
+            for (var i = segment.Start; i <= segment.End; i++)
+                if (flags[i]) { blocked = true; break; }
+            if (!blocked) continue;
+            for (var i = segment.Start; i <= segment.End; i++)
+                flags[i] = true;
+        }
         var runs = new List<AcpRangeSuggestion>();
         var index = 0;
         while (index < snapshot.Count)
@@ -362,26 +369,25 @@ public sealed class AcpContextStore
 
     #region Protection
 
-    /// <summary>True when the entry must survive compression ranges and GC as long as possible.</summary>
-    private static bool IsLoadBearing(AcpEntry entry) =>
-        entry.Message.Role == "tool" && string.Equals(entry.ToolName, LoadBearingTool, StringComparison.Ordinal);
+    /// <summary>
+    /// Successful compress transcripts are the model's record of what was archived.
+    /// Failed attempts must stay compressible or they seal the window shut.
+    /// Block markers are not load-bearing — T2/T3 distillation rewrites them on purpose.
+    /// </summary>
+    private static bool IsLoadBearing(AcpEntry entry)
+    {
+        if (entry.Message.Role != "tool") return false;
+        if (!string.Equals(entry.ToolName, LoadBearingTool, StringComparison.Ordinal)) return false;
+        var text = entry.Message.Content ?? string.Empty;
+        return text.Contains("已压缩", StringComparison.Ordinal)
+            || text.Contains("已应用", StringComparison.Ordinal);
+    }
 
     private bool[] ComputeProtections(IReadOnlyList<AcpEntry> snapshot)
     {
         var flags = new bool[snapshot.Count];
         for (var i = Math.Max(0, snapshot.Count - ProtectedRecentEntries); i < snapshot.Count; i++)
             flags[i] = true;
-
-        // Soft char zone over non-tool entries only: verbose tool output is exactly what
-        // should stay compressible once consumed, so it does not extend the zone.
-        long accumulated = 0;
-        var softBudget = (long)(_budgetChars * 0.15);
-        for (var i = snapshot.Count - 1; i >= 0 && accumulated < softBudget; i--)
-        {
-            if (snapshot[i].Message.Role == "tool") continue;
-            flags[i] = true;
-            accumulated += snapshot[i].Chars;
-        }
 
         for (var i = snapshot.Count - 1; i >= 0; i--)
             if (snapshot[i].Message.Role == "user") { flags[i] = true; break; }
@@ -390,6 +396,57 @@ public sealed class AcpContextStore
             if (IsLoadBearing(snapshot[i])) flags[i] = true;
 
         return flags;
+    }
+
+    /// <summary>
+    /// Shrinks [start,end] to the largest segment-aligned unprotected run inside it.
+    /// False when nothing in the range can be compressed.
+    /// </summary>
+    private static bool TryClipToUnprotected(
+        IReadOnlyList<AcpEntry> snapshot,
+        List<(int Start, int End)> segments,
+        bool[] flags,
+        ref int start,
+        ref int end)
+    {
+        int bestStart = -1, bestEnd = -1;
+        long bestChars = 0;
+        int runStart = -1, runEnd = -1;
+        long runChars = 0;
+
+        void Flush()
+        {
+            if (runStart >= 0 && runChars > bestChars)
+            {
+                bestStart = runStart;
+                bestEnd = runEnd;
+                bestChars = runChars;
+            }
+            runStart = -1;
+            runChars = 0;
+        }
+
+        foreach (var segment in segments)
+        {
+            if (segment.End < start || segment.Start > end) continue;
+            var blocked = false;
+            for (var i = segment.Start; i <= segment.End; i++)
+                if (flags[i]) { blocked = true; break; }
+            if (blocked)
+            {
+                Flush();
+                continue;
+            }
+            if (runStart < 0) runStart = segment.Start;
+            runEnd = segment.End;
+            for (var i = segment.Start; i <= segment.End; i++)
+                runChars += snapshot[i].Chars;
+        }
+        Flush();
+        if (bestStart < 0) return false;
+        start = bestStart;
+        end = bestEnd;
+        return true;
     }
 
     #endregion
@@ -446,10 +503,9 @@ public sealed class AcpContextStore
             end = segments.First(segment => segment.Start <= end && end <= segment.End).End;
 
             var flags = ComputeProtections(snapshot);
-            for (var i = start; i <= end; i++)
-                if (flags[i])
-                    return (false, $"区间包含受保护的条目 [{snapshot[i].Ref}]（最近工作集、最后一条用户消息或 context_compress 结果）。" +
-                                   "请把范围缩小到更早的内容，或拆成多个避开保护区的区间。");
+            if (!TryClipToUnprotected(snapshot, segments, flags, ref start, ref end))
+                return (false, "区间全部受保护（最近工作集、最后一条用户消息或成功的 context_compress 结果）。" +
+                               "请改压更早的内容，或先 context_status 查看可压缩区间。不要重试同一区间。");
 
             var consumed = snapshot[start..(end + 1)].ToList();
             if (consumed.All(entry => entry.BlockId is { } id && FindBlock(id) is { Tier: 3 } ))
@@ -667,7 +723,7 @@ public sealed class AcpContextStore
     /// <summary>
     /// Last-resort truncation: drop oldest droppable entries until within budget. Victims are
     /// parked into a searchable tombstone block instead of vanishing silently. Load-bearing
-    /// context_compress results are dropped only after everything else is gone.
+    /// compression-block markers are dropped only after everything else is gone.
     /// </summary>
     private void GcIfNeeded(AiSettings settings, int reserve = 0)
     {

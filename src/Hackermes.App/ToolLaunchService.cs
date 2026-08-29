@@ -21,6 +21,39 @@ public sealed class ToolLaunchService
     }
 
     /// <summary>
+    /// Launches a GUI tool entry, choosing the bundled-JavaFX runtime for tools declared
+    /// with RequiresJavaFx (OpenJDK does not ship JavaFX) and a plain JVM for Swing jars.
+    /// </summary>
+    public void LaunchGui(DesktopToolEntry tool)
+    {
+        var start = DesktopToolCatalog.TryGetBundledGuiLaunch(tool.Id, out var java, out var arguments, out var workingDirectory)
+            ? CreateJavaGuiStartInfo(java, arguments, workingDirectory)
+            : CreateGuiStartInfo(tool.Path!);
+        Directory.CreateDirectory(start.Environment["TEMP"]!);
+        _ = Process.Start(start) ?? throw new InvalidOperationException("工具进程未能启动。");
+    }
+
+    internal static ProcessStartInfo CreateJavaGuiStartInfo(string java, IReadOnlyList<string> arguments, string? workingDirectory)
+    {
+        var userData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(userData))
+            userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local");
+        var start = new ProcessStartInfo
+        {
+            FileName = java,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                : workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = false
+        };
+        start.Environment["TEMP"] = Path.Combine(userData, "Temp");
+        start.Environment["TMP"] = Path.Combine(userData, "Temp");
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        return start;
+    }
+
+    /// <summary>
     /// GUI 工具必须使用当前用户的临时目录。开发宿主、提权启动器或系统服务可能把
     /// TEMP/TMP 设为 C:\Windows\Temp；旧版 PyInstaller/Tk 程序虽然能在那里解包，
     /// 却可能在创建窗口时直接报 Failed to execute script。

@@ -49,3 +49,16 @@ third_party/tools/recon.layer/
 third_party/tools/detect.unauthorized.terminal/
 third_party/tools/exploit.dnslog-sqli.terminal/
 third_party/tools/exploit.xss-fuzzer.terminal/windows/
+
+# Test runner artifacts
+TestResults/
+
+## 批次 D/E 新增的纯二进制工具目录(体积大,遵循既有"二进制不入库"策略;
+## manifest.json 记录来源,发布构建从本地 third_party/tools 原样 stage)
+third_party/tools/detect.shiro.terminal/
+third_party/tools/exploit.fastjson-payload.terminal/
+third_party/tools/probe.cloud-aksk.terminal/
+third_party/tools/gui.*/
+third_party/tools/exploit.vcenter.terminal/
+third_party/tools/detect.fastjson-jndi.terminal/
+third_party/tools/exploit.heapdump.terminal/

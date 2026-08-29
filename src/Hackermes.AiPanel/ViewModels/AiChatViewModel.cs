@@ -105,14 +105,16 @@ public partial class AiToolCallLine : AiChatLine
 /// <summary>Selectable entry in the chat session picker.</summary>
 public partial class AgentSessionOption : ObservableObject
 {
-    public AgentSessionOption(string id, string name, DateTimeOffset updatedAt)
+    public AgentSessionOption(string id, string name, DateTimeOffset updatedAt, string workspaceId = "")
     {
         Id = id;
         _name = name;
         UpdatedAt = updatedAt;
+        WorkspaceId = workspaceId;
     }
 
     public string Id { get; }
+    public string WorkspaceId { get; set; }
     [ObservableProperty] private string _name;
     [ObservableProperty] private DateTimeOffset _updatedAt;
 
@@ -148,6 +150,7 @@ public partial class AiChatViewModel : ViewModelBase
     private readonly AgentGoalRegistry _goals;
     private readonly AgentEvidenceLedger _evidence = new();
     private readonly IReadOnlyList<IAgentPreStepHook> _extraHooks;
+    private readonly IAgentWorkspaceContext? _workspaceContext;
     private readonly IAppLogger? _logger;
     private readonly AcpAutoCompactor _autoCompactor;
     private readonly AgentEventLogStore? _eventLogStore;
@@ -179,7 +182,8 @@ public partial class AiChatViewModel : ViewModelBase
         IAppLogger? logger = null,
         AgentTodoRegistry? todos = null,
         AgentGoalRegistry? goals = null,
-        IEnumerable<IAgentPreStepHook>? extraHooks = null)
+        IEnumerable<IAgentPreStepHook>? extraHooks = null,
+        IAgentWorkspaceContext? workspaceContext = null)
     {
         _client = client;
         _tools = tools;
@@ -193,6 +197,7 @@ public partial class AiChatViewModel : ViewModelBase
         _todos = todos;
         _goals = goals ?? new AgentGoalRegistry();
         _extraHooks = extraHooks?.ToArray() ?? [];
+        _workspaceContext = workspaceContext;
         // Created lazily per event so runtime toggles of ai.sessionEvents take effect
         // without an app restart; a write failure surfaces once, then pauses persistence.
         var settingsDirectory = Path.GetDirectoryName(settings.SettingsFilePath);
@@ -369,10 +374,12 @@ public partial class AiChatViewModel : ViewModelBase
         SessionPromptTokens = 0;
         SessionCompletionTokens = 0;
         _sessionId = Guid.NewGuid().ToString("N");
+        var workspaceId = Guid.NewGuid().ToString("N");
+        BindWorkspace(workspaceId);
         var cleanName = string.IsNullOrWhiteSpace(name)
             ? $"新会话 {DateTimeOffset.Now:MM-dd HH:mm}"
             : name.Trim()[..Math.Min(name.Trim().Length, 120)];
-        var option = new AgentSessionOption(_sessionId, cleanName, DateTimeOffset.Now);
+        var option = new AgentSessionOption(_sessionId, cleanName, DateTimeOffset.Now, workspaceId);
         AddSessionOption(option);
         SetSelectedSessionSilently(option);
         PersistSession();
@@ -407,6 +414,7 @@ public partial class AiChatViewModel : ViewModelBase
     {
         PersistSession();
         _sessionId = target.Id;
+        BindWorkspace(target.WorkspaceId);
         _summary = string.Empty;
         ResetAcpStore();
         _goals.Clear();
@@ -537,7 +545,7 @@ public partial class AiChatViewModel : ViewModelBase
         {
             PendingInstructionSummary = _runner.PeekNextInstruction();
             PendingInstructionHint = _runner.IsNextInstructionPriority()
-                ? $"优先指示 · 将在当前协议安全收尾后转向（共 {count} 条）"
+                ? $"优先指示 · 正在中断当前请求并转向（共 {count} 条）"
                 : $"已排队 · 将在下一阶段执行（共 {count} 条）";
         }
         OnPropertyChanged(nameof(HasPendingInstruction));
@@ -555,6 +563,7 @@ public partial class AiChatViewModel : ViewModelBase
                     user.Injected ? "上下文注入"
                         : user.Steered ? (user.Priority ? "追加指示 · 优先" : "追加指示")
                         : null));
+                if (user.Steered) RefreshPendingInstructionState();
                 break;
 
             case AssistantDelta delta:
@@ -764,6 +773,7 @@ public partial class AiChatViewModel : ViewModelBase
             "todo_write", "goal_set", "goal_clear", "read_spill", "agent_subtask"
         ];
         foreach (var tool in control) listed.Add(tool);
+        listed.Add("page_navigate");
         // ACP context management must stay reachable even under restrictive workflows —
         // it is the session's only mechanism for reclaiming context.
         if (_acp is not null)
@@ -786,7 +796,7 @@ public partial class AiChatViewModel : ViewModelBase
 
         var document = _sessionStore.Load();
         foreach (var entry in document.Sessions)
-            AddSessionOption(new AgentSessionOption(entry.Id, entry.Name, entry.UpdatedAt));
+            AddSessionOption(new AgentSessionOption(entry.Id, entry.Name, entry.UpdatedAt, entry.WorkspaceId));
 
         var activeId = document.ActiveId.Length > 0 ? document.ActiveId : document.Sessions.FirstOrDefault()?.Id;
         SetSelectedSessionSilently(Sessions.FirstOrDefault(option => option.Id == activeId) ?? Sessions.FirstOrDefault());
@@ -795,6 +805,7 @@ public partial class AiChatViewModel : ViewModelBase
         {
             _sessionId = current.Id;
             _summary = current.Summary;
+            BindWorkspace(current.WorkspaceId);
             if (!TryRestoreFromEventLog()) RestoreMessages(current.RecentMessages, settings);
             return;
         }
@@ -810,6 +821,7 @@ public partial class AiChatViewModel : ViewModelBase
         var option = new AgentSessionOption(_sessionId, $"新会话 {DateTimeOffset.Now:MM-dd HH:mm}", DateTimeOffset.Now);
         AddSessionOption(option);
         SetSelectedSessionSilently(option);
+        BindWorkspace(option.WorkspaceId);
         OnPropertyChanged(nameof(HasSessions));
 
         // Seed the first-ever session from the legacy global memory so nothing is silently lost.
@@ -913,6 +925,7 @@ public partial class AiChatViewModel : ViewModelBase
             }
             entry.Name = SelectedSession?.Name ?? $"会话 {entry.CreatedAt:MM-dd HH:mm}";
             entry.UpdatedAt = DateTimeOffset.UtcNow;
+            entry.WorkspaceId = SelectedSession?.WorkspaceId ?? _workspaceContext?.CurrentId ?? string.Empty;
             entry.Summary = _summary;
             entry.RecentMessages = recent.Select(message => new AgentMemoryMessage { Role = message.Role, Content = message.Content }).ToList();
             document.ActiveId = _sessionId;
@@ -931,6 +944,9 @@ public partial class AiChatViewModel : ViewModelBase
             .Select(message => new AgentMemoryMessage { Role = message.Role, Content = message.Content ?? string.Empty })
             .Where(message => message.Content.Length > 0)
             .TakeLast(settings.MaxRecentMessages).ToArray();
+
+    private void BindWorkspace(string? workspaceId) =>
+        _workspaceContext?.SetCurrent(workspaceId ?? string.Empty);
 
     private void AddSessionOption(AgentSessionOption option)
     {

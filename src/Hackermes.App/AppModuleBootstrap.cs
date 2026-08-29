@@ -66,6 +66,9 @@ internal static class AppModuleBootstrap
         new Terminal.TerminalModule(),
         new TrafficIntegrationModule(),
         new AssessmentIntegrationModule(),
+        new WebIntelModule(),
+        new CallbackListenerModule(),
+        new CloudCredentialModule(),
         new AiPanel.AiPanelModule()
         // 后续扩展模块:SidebarModule、SettingsModule
     ];

@@ -3,6 +3,11 @@
              xmlns:vm="using:Hackermes.AiPanel.ViewModels"
              x:Class="Hackermes.AiPanel.Views.AiChatView"
              x:DataType="vm:AiChatViewModel">
+  <UserControl.Resources>
+    <StreamGeometry x:Key="IconSessionNew">M9,3 L11,3 L11,9 L17,9 L17,11 L11,11 L11,17 L9,17 L9,11 L3,11 L3,9 L9,9 Z</StreamGeometry>
+    <StreamGeometry x:Key="IconTranscriptExport">M9,13.2 L11,13.2 L11,6.2 L14.4,9.6 L15.8,8.2 L10,2.4 L4.2,8.2 L5.6,9.6 L9,6.2 Z M3,15.5 L17,15.5 L17,18 L3,18 Z</StreamGeometry>
+    <StreamGeometry x:Key="IconAiSettings">F0 M10,2.2 L10.85,4.55 L13.35,3.65 L14.1,6.15 L16.7,6.4 L15.95,8.85 L18.05,10 L15.95,11.15 L16.7,13.6 L14.1,13.85 L13.35,16.35 L10.85,15.45 L10,17.8 L9.15,15.45 L6.65,16.35 L5.9,13.85 L3.3,13.6 L4.05,11.15 L1.95,10 L4.05,8.85 L3.3,6.4 L5.9,6.15 L6.65,3.65 L9.15,4.55 Z M10,6.9 A3.1,3.1 0 1,0 10,13.1 A3.1,3.1 0 1,0 10,6.9 Z</StreamGeometry>
+  </UserControl.Resources>
   <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" Margin="12">
     <!-- Header: session picker is the primary control (full width); actions are uniform
          32px icon buttons tucked right. No stretchy text buttons, no dead space. -->
@@ -26,13 +31,22 @@
           </DataTemplate>
         </ComboBox.ItemTemplate>
       </ComboBox>
-      <Button Grid.Column="1" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
-              Content="＋" FontSize="15" ToolTip.Tip="新建会话" Click="NewSession" />
-      <Button Grid.Column="2" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
-              Content="⇩" FontSize="14" ToolTip.Tip="导出会话转录" Click="ExportTranscript"
-              IsEnabled="{Binding HasTranscript}" />
-      <Button Grid.Column="3" Width="32" Height="30" Margin="6,0,0,0" Padding="0"
-              Content="⚙" FontSize="14" ToolTip.Tip="设置" Click="OpenSettings" />
+      <Button Grid.Column="1" Width="32" Height="32" Margin="6,0,0,0" Padding="0"
+              HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+              ToolTip.Tip="新建会话" Click="NewSession">
+        <PathIcon Width="14" Height="14" Data="{StaticResource IconSessionNew}" />
+      </Button>
+      <Button Grid.Column="2" Width="32" Height="32" Margin="6,0,0,0" Padding="0"
+              HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+              ToolTip.Tip="导出会话转录" Click="ExportTranscript"
+              IsEnabled="{Binding HasTranscript}">
+        <PathIcon Width="14" Height="14" Data="{StaticResource IconTranscriptExport}" />
+      </Button>
+      <Button Grid.Column="3" Width="32" Height="32" Margin="6,0,0,0" Padding="0"
+              HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+              ToolTip.Tip="设置" Click="OpenSettings">
+        <PathIcon Width="14" Height="14" Data="{StaticResource IconAiSettings}" />
+      </Button>
     </Grid>
     <!-- Model badge: quiet metadata bar spanning the full row, with a live indicator dot. -->
     <Border Grid.Row="1" Padding="9,4" Margin="0,0,0,10"

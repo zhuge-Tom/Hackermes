@@ -22,5 +22,37 @@
     <None Include="..\..\src\Hackermes.AiPanel\Views\AiChatView.axaml"
           Link="Fixtures\AiChatView.axaml"
           CopyToOutputDirectory="PreserveNewest" />
+    <!-- Stage-3 test range fixtures: mock targets plus the vendored tool sources the
+         range exercises with the production argument surface (AuthorizedToolCatalog). -->
+    <None Include="..\..\third_party\tools\_testrange\testrange_server.py"
+          Link="Fixtures\tools\_testrange\testrange_server.py"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\detect.oa-poc.terminal\oa_poc_runner.py"
+          Link="Fixtures\tools\detect.oa-poc.terminal\oa_poc_runner.py"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\detect.oa-poc.terminal\book\**\*.yaml"
+          Link="Fixtures\tools\detect.oa-poc.terminal\book\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\detect.oa-poc.terminal\yaml\**\*.py"
+          Link="Fixtures\tools\detect.oa-poc.terminal\yaml\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.git-leak.terminal\**\*.py"
+          Link="Fixtures\tools\recon.git-leak.terminal\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.git-leak.terminal\data\**\*"
+          Link="Fixtures\tools\recon.git-leak.terminal\data\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.swagger-api.terminal\swagger-hack2.0.py"
+          Link="Fixtures\tools\recon.swagger-api.terminal\swagger-hack2.0.py"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.swagger-api.terminal\loguru\**\*.py"
+          Link="Fixtures\tools\recon.swagger-api.terminal\loguru\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.swagger-api.terminal\colorama\**\*.py"
+          Link="Fixtures\tools\recon.swagger-api.terminal\colorama\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\tools\recon.swagger-api.terminal\win32_setctime\**\*.py"
+          Link="Fixtures\tools\recon.swagger-api.terminal\win32_setctime\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

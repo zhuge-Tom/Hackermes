@@ -22,8 +22,11 @@ if ([string]::IsNullOrWhiteSpace($BuildRoot)) {
     $BuildRoot = $buildEnvironment.DefaultBuildRoot
 }
 $buildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
-if ([IO.Path]::GetPathRoot($buildRoot) -ne 'G:\') {
-    throw "BuildRoot must stay on G: $buildRoot"
+# 产物必须远离被监控的源码树（G:\Hackmes 里的新 DLL 会被监控软件锁定），
+# 且不得落在源码树内部；盘符本身不限（G: 为 exFAT U 盘时会丢已构建文件，推荐本地 SSD）。
+$projectRootResolved = [System.IO.Path]::GetFullPath($projectRoot)
+if ($buildRoot.StartsWith($projectRootResolved + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "BuildRoot must stay outside the watched source tree: $buildRoot"
 }
 $executable = Join-Path $buildRoot "bin\Hackermes.App\$Configuration\net10.0\Hackermes.App.exe"
 $buildStamp = Join-Path $buildRoot 'source.fingerprint'

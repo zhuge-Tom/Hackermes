@@ -155,7 +155,7 @@ public sealed class AcpAutoCompactorTests
     }
 
     [Fact]
-    public async Task Failed_compact_does_not_rate_limit_the_next_attempt()
+    public async Task Failed_compact_rate_limits_the_next_attempt()
     {
         var store = CreatePressuredStore();
         var bloated = new string('z', 20_000);
@@ -164,7 +164,33 @@ public sealed class AcpAutoCompactorTests
 
         Assert.Null(await compactor.CompactIfNeededAsync(CancellationToken.None));
         Assert.Null(await compactor.CompactIfNeededAsync(CancellationToken.None));
-        Assert.Equal(2, client.Requests.Count);
+        Assert.Single(client.Requests);
+    }
+
+    [Fact]
+    public async Task Tool_schema_overhead_does_not_trigger_compaction_on_a_small_conversation()
+    {
+        var store = new AcpContextStore(() => "system prompt", Budget);
+        store.AppendUser("短消息。");
+        store.AppendAssistant("短回复。");
+        var tools = Enumerable.Range(0, 30).Select(i => new AiToolDefinition(
+            $"tool_{i}",
+            new string('d', 800),
+            JsonSerializer.SerializeToElement(new { type = "object", description = new string('x', 400) }),
+            AiToolRisk.ReadOnly,
+            (_, _) => ValueTask.FromResult(ToolResult.Ok()))).ToList();
+        var prefix = new CompactionPrefix("主请求系统提示", tools);
+        var client = new StubClient();
+        var compactor = new AcpAutoCompactor(client, () => "test-model", () => store,
+            () => Settings(), prefixProvider: () => prefix);
+
+        Assert.True(store.PressureChars(prefix.SystemPrompt, prefix.Tools) >= Budget * 0.8);
+        Assert.True(store.ActiveChars < Budget * 0.8);
+
+        var result = await compactor.CompactIfNeededAsync(CancellationToken.None);
+
+        Assert.Null(result);
+        Assert.Empty(client.Requests);
     }
 
     [Fact]

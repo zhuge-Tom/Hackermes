@@ -1,5 +1,6 @@
 using Hackermes.AiPanel.Tools;
 using Hackermes.Automation.Commands;
+using Hackermes.Platform.Services;
 using Hackermes.Automation.Execution;
 using Hackermes.Automation.Recording;
 using Hackermes.Automation.Timeline;
@@ -10,7 +11,6 @@ using Hackermes.Browser.ViewModels;
 using Hackermes.Cdp.Session;
 using Hackermes.Inspector.Models;
 using Hackermes.Inspector.Services;
-using Hackermes.Platform.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -127,6 +127,39 @@ public sealed class BrowserAiToolTests
 
         Assert.True(result.Success);
         Assert.Equal("open https://typed.test/", received);
+    }
+
+    [Fact]
+    public async Task Page_navigate_without_a_page_opens_a_new_tab()
+    {
+        var tabs = new FakeTabs();
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(CreateCommands(), tabs).RegisterAll(tools);
+        var tool = tools.All.Single(candidate => candidate.Name == "page_navigate");
+
+        var result = await tool.Handler(
+            new ToolInvocation(tool.Name, JsonSerializer.SerializeToElement(new { url = "https://opened.test/" })),
+            default);
+
+        Assert.True(result.Success, result.Content);
+        Assert.Equal("https://opened.test/", tabs.LastUrl);
+        Assert.Equal("page-new", result.AttachedPageId);
+        Assert.Contains("page-new", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Page_navigate_without_a_page_or_tab_opener_still_fails_clearly()
+    {
+        var tools = new AiToolRegistry();
+        new CommandToolAdapter(CreateCommands()).RegisterAll(tools);
+        var tool = tools.All.Single(candidate => candidate.Name == "page_navigate");
+
+        var result = await tool.Handler(
+            new ToolInvocation(tool.Name, JsonSerializer.SerializeToElement(new { url = "https://opened.test/" })),
+            default);
+
+        Assert.False(result.Success);
+        Assert.Contains("没有活动的页面", result.Content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -289,6 +322,17 @@ public sealed class BrowserAiToolTests
         var executor = new ActionExecutor(new EmptySessionRegistry(), logger, timeline);
         var recorder = new ActionRecorder(new EventBus(), executor, timeline);
         return new CommandRegistry(executor, recorder, logger, timeline, new ActionPersistence());
+    }
+
+    private sealed class FakeTabs : IBrowserTabOpener
+    {
+        public string? LastUrl { get; private set; }
+        public IReadOnlyList<string> OpenPageIds => ["page-new"];
+        public string OpenTab(string? url = null)
+        {
+            LastUrl = url;
+            return "page-new";
+        }
     }
 
     private static JsonElement EmptyArguments() => JsonSerializer.SerializeToElement(new { });

@@ -15,6 +15,7 @@ public static class AiProviderPresets
         new("openai", "OpenAI", "https://api.openai.com/v1", "/chat/completions", "gpt-5-mini"),
         new("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "/chat/completions", "deepseek-chat"),
         new("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "/chat/completions", "openai/gpt-4.1-mini"),
+        new("grok", "Grok", "https://api.x.ai/v1", "/chat/completions", "grok-4.6"),
         new("custom", "自定义（OpenAI 兼容）", "", "/chat/completions", "")
     ];
 

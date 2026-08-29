@@ -20,7 +20,24 @@ public sealed class AiProviderPresetTests
             item => Assert.Equal("OpenAI", item.ToString()),
             item => Assert.Equal("DeepSeek", item.ToString()),
             item => Assert.Equal("OpenRouter", item.ToString()),
+            item => Assert.Equal("Grok", item.ToString()),
             item => Assert.Equal("自定义（OpenAI 兼容）", item.ToString()));
+    }
+
+    [Fact]
+    public void GrokPreset_UsesOfficialXaiEndpointAndModelsRoute()
+    {
+        var grok = Assert.Single(AiProviderPresets.All, item => item.Id == "grok");
+
+        Assert.Equal("https://api.x.ai/v1", grok.Endpoint);
+        Assert.Equal("/chat/completions", grok.ChatPath);
+        Assert.Equal("grok-4.6", grok.DefaultModel);
+        Assert.Equal(
+            "https://api.x.ai/v1/chat/completions",
+            AiProviderPresets.ResolveChatEndpoint(grok.Endpoint, grok.ChatPath).AbsoluteUri);
+        Assert.Equal(
+            "https://api.x.ai/v1/models",
+            AiProviderPresets.ResolveModelsEndpoint(grok.Endpoint).AbsoluteUri);
     }
 
     [Fact]

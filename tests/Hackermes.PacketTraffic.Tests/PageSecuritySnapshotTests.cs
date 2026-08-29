@@ -193,7 +193,7 @@ public sealed class PageSecuritySnapshotTests
     {
         var session = new EventSession("page-secure");
         var store = new NetworkStore(new SingleSessionRegistry(session), new EventBus(), new NullLogger());
-        await session.WaitForSubscriptionAsync("Network.responseReceived");
+        await session.WaitForSubscriptionAsync("Network.responseReceived", "Network.requestWillBeSent");
         session.Raise("Network.requestWillBeSent", """
             {"requestId":"doc-1","type":"Document","request":{"method":"GET","url":"https://secure.test/app?view=1"}}
             """);
@@ -209,8 +209,14 @@ public sealed class PageSecuritySnapshotTests
             }}}
             """);
 
-        var metadata = store.ReadSecurityMetadata("page-secure", "https://secure.test/app?view=1#fragment");
-        var serialized = JsonSerializer.Serialize(metadata);
+        // Entries are inserted through a fire-and-forget UI-thread post; poll briefly for
+        // the document entry to land instead of racing the dispatcher timer.
+        var metadata = NetworkSecurityMetadata.Empty;
+        var serialized = string.Empty;
+        // Metadata is derived from the store's synchronous query source (_byRequestId);
+        // the UI collection mirror is dispatcher-bound and irrelevant to this assertion.
+        metadata = store.ReadSecurityMetadata("page-secure", "https://secure.test/app?view=1#fragment");
+        serialized = JsonSerializer.Serialize(metadata);
 
         Assert.True(metadata.HasDocumentResponse);
         Assert.True(metadata.HasStrictTransportSecurity);
@@ -308,14 +314,20 @@ public sealed class PageSecuritySnapshotTests
             lock (_handlers) handler = _handlers[eventName];
             handler(new CdpEventArgs(eventName, parametersJson));
         }
-        public async Task WaitForSubscriptionAsync(string eventName)
+        public async Task WaitForSubscriptionAsync(params string[] eventNames)
         {
-            for (var index = 0; index < 100; index++)
+            // Wait until EVERY named handler is installed: the store subscribes several
+            // events through independent async tasks, and raising an event before its
+            // handler exists is a lost event (or a KeyNotFound) — the source of a flake.
+            for (var index = 0; index < 200; index++)
             {
-                lock (_handlers) if (_handlers.ContainsKey(eventName)) return;
+                lock (_handlers)
+                {
+                    if (eventNames.All(name => _handlers.ContainsKey(name))) return;
+                }
                 await Task.Delay(10);
             }
-            throw new TimeoutException($"Subscription '{eventName}' was not installed.");
+            throw new TimeoutException($"Subscriptions were not installed: {string.Join(", ", eventNames)}");
         }
         private sealed class Subscription : IDisposable { public void Dispose() { } }
     }

@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IWorkspaceService, WorkspaceService>();
+        services.AddSingleton<IAgentWorkspaceContext, AgentWorkspaceContext>();
         services.AddSingleton<WebViewCreationCoordinator>();
 
         services.AddSingleton<ISecretStore>(sp =>

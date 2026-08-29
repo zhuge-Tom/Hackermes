@@ -3,6 +3,7 @@ using Hackermes.Base.Diagnostics;
 using Hackermes.Platform.Services;
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -23,12 +24,14 @@ internal static class Program
             if (input.Length is 0 or > 32_768) return await WriteAsync(new(false, string.Empty, "ToolHost request is empty or too large.")).ConfigureAwait(false);
             var envelope = JsonSerializer.Deserialize<ToolHostEnvelope>(input) ?? throw new UnauthorizedAccessException("ToolHost envelope is invalid.");
             var secretFile = Environment.GetEnvironmentVariable("HACKERMES_TOOLHOST_SECRET_FILE");
-            var signer = new ToolHostTicketSigner(SecretStoreFactory.Create(new FileAppLogger(LogLevel.Warn), secretFile));
+            var secrets = SecretStoreFactory.Create(new FileAppLogger(LogLevel.Warn), secretFile);
+            var signer = new ToolHostTicketSigner(secrets);
             var ticket = signer.Verify(envelope);
             ToolHostReplayGuard.Consume(ticket.Nonce, ticket.ExpiresAt);
             var invocation = AuthorizedToolCatalog.BuildInvocation(ticket.Step, ticket.AllowedTargets);
             if (invocation.AdapterId == AuthorizedToolCatalog.SimulationEcho)
                 return await WriteAsync(new(true, ticket.Step.Input[..Math.Min(ticket.Step.Input.Length, ticket.Step.MaxOutputBytes)], null, 0)).ConfigureAwait(false);
+            invocation = ResolveSecretReference(invocation, secrets);
             var response = await ExecuteAsync(invocation).ConfigureAwait(false);
             return await WriteAsync(response).ConfigureAwait(false);
         }
@@ -36,6 +39,30 @@ internal static class Program
         {
             return await WriteAsync(new(false, string.Empty, exception.Message)).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Resolves an opaque secret reference (e.g. a staged cloud credential) from the DPAPI
+    /// secret store into process environment variables. The reference — never the secret —
+    /// is what travels inside the signed ticket, so plans and evidence stay free of key
+    /// material. The resolved values exist only in this child process's environment.
+    /// </summary>
+    private static AuthorizedToolInvocation ResolveSecretReference(AuthorizedToolInvocation invocation, ISecretStore secrets)
+    {
+        if (string.IsNullOrWhiteSpace(invocation.SecretReference)) return invocation;
+        var provider = secrets.Get(invocation.SecretReference + ".provider")
+            ?? throw new UnauthorizedAccessException("The staged credential referenced by this step was not found, expired or was cleared; stage it again with cloud_credential_stage.");
+        var expiresRaw = secrets.Get(invocation.SecretReference + ".expires");
+        if (DateTimeOffset.TryParse(expiresRaw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var expires)
+            && expires <= DateTimeOffset.UtcNow)
+            throw new UnauthorizedAccessException("The staged credential referenced by this step has expired; stage it again with cloud_credential_stage.");
+        var accessKey = secrets.Get(invocation.SecretReference + ".ak")
+            ?? throw new UnauthorizedAccessException("The staged credential is incomplete (missing access key).");
+        var secretKey = secrets.Get(invocation.SecretReference + ".sk")
+            ?? throw new UnauthorizedAccessException("The staged credential is incomplete (missing secret key).");
+        var sessionToken = secrets.Get(invocation.SecretReference + ".st");
+        var environment = AuthorizedToolCatalog.CloudCredentialEnvironment(provider, accessKey, secretKey, sessionToken);
+        return invocation with { EnvironmentVariables = environment };
     }
 
     /// <summary>
@@ -97,6 +124,9 @@ internal static class Program
             start.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
         }
         foreach (var argument in invocation.Arguments) start.ArgumentList.Add(argument);
+        if (invocation.EnvironmentVariables is { Count: > 0 } environment)
+            foreach (var pair in environment)
+                start.Environment[pair.Key] = pair.Value;
         using var process = new Process { StartInfo = start };
         if (!process.Start()) return new(false, string.Empty, "Tool process could not be started.");
         process.StandardInput.Close();

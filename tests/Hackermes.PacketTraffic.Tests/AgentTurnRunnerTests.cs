@@ -122,6 +122,33 @@ public sealed class AgentTurnRunnerTests
     }
 
     [Fact]
+    public async Task Attached_page_id_from_a_tool_is_used_on_the_next_call()
+    {
+        var tools = new AiToolRegistry();
+        var seen = new List<string?>();
+        tools.Register(new AiToolDefinition(
+            "page_navigate", "open", JsonSerializer.SerializeToElement(new { }), AiToolRisk.Mutating,
+            (_, _) => ValueTask.FromResult(new ToolResult(true, "opened", AttachedPageId: "page-opened"))));
+        tools.Register(new AiToolDefinition(
+            "page_context", "ctx", JsonSerializer.SerializeToElement(new { }), AiToolRisk.ReadOnly,
+            (invocation, _) =>
+            {
+                seen.Add(invocation.PageId);
+                return ValueTask.FromResult(ToolResult.Ok("ctx-done"));
+            }));
+        var client = new ScriptedClient()
+            .Respond(_ => [new ChatStreamDelta(null, new ToolCallDelta(0, "c1", "page_navigate", "{\"url\":\"https://t.test/\"}"), "tool_calls")])
+            .Respond(_ => [new ChatStreamDelta(null, new ToolCallDelta(0, "c2", "page_context", "{}"), "tool_calls")])
+            .Respond(_ => [new ChatStreamDelta("done", null, "stop")]);
+        var runner = CreateRunner(client, tools);
+
+        var reason = await runner.RunTurnAsync("scan", "m", null, null, CancellationToken.None);
+
+        Assert.Equal(AgentTurnEndReason.Completed, reason);
+        Assert.Equal("page-opened", Assert.Single(seen));
+    }
+
+    [Fact]
     public async Task Queued_instruction_is_claimed_at_the_step_boundary_within_the_same_turn()
     {
         var tools = new AiToolRegistry();
@@ -176,13 +203,31 @@ public sealed class AgentTurnRunnerTests
 
         Assert.Equal(AgentTurnEndReason.Completed, reason);
         Assert.Equal(0, dispatched);
-        // Both calls stay logged with synthetic results so the protocol remains complete.
-        var results = runner.Log.Snapshot().Where(@event => @event.Kind == AgentEventKind.ToolResult)
-            .Select(@event => (ToolCallCompleted)@event.Data).ToArray();
-        Assert.Equal(2, results.Length);
-        Assert.All(results, result => Assert.Contains("优先指示", result.Content, StringComparison.Ordinal));
-        Assert.All(results, result => Assert.True(result.Success));
+        // Promoting now aborts the in-flight model request, so no tool_calls are assembled.
+        Assert.DoesNotContain(runner.Log.Snapshot(), @event => @event.Kind == AgentEventKind.ToolCall);
         Assert.Contains(runner.History, message => message.Role == "user" && message.Content == "stop everything");
+        Assert.Contains(runner.History, message => message.Role == "assistant" && message.Content == "acknowledged the steer");
+    }
+
+    [Fact]
+    public async Task Promoted_instruction_aborts_an_in_flight_model_request()
+    {
+        var client = new ScriptedClient()
+            .Respond(_ => [new ChatStreamDelta("should not land", null, "stop")])
+            .Respond(_ => [new ChatStreamDelta("转向优先指示", null, "stop")]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.BeforeFirstStream.Add(release.Task);
+        var runner = CreateRunner(client);
+
+        var running = runner.RunTurnAsync("go", "m", null, null, CancellationToken.None);
+        runner.EnqueueInstruction("改读当前页面");
+        Assert.True(runner.PromoteLatestInstruction());
+        var reason = await running.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(AgentTurnEndReason.Completed, reason);
+        Assert.DoesNotContain(runner.History, message => message.Role == "assistant" && message.Content == "should not land");
+        Assert.Contains(runner.History, message => message.Role == "user" && message.Content == "改读当前页面");
+        Assert.Contains(runner.History, message => message.Role == "assistant" && message.Content == "转向优先指示");
     }
 
     [Fact]
@@ -325,6 +370,33 @@ public sealed class AgentTurnRunnerTests
         var payload = Assert.IsType<TurnEnded>(ended.Data);
         Assert.Equal(AgentTurnEndReason.Error, payload.Reason);
         Assert.NotNull(payload.Detail);
+    }
+
+    [Fact]
+    public async Task Premature_stream_end_after_partial_content_is_retried()
+    {
+        var client = new PrematureThenRecoverClient();
+        var runner = CreateRunner(client, configureOptions: options =>
+        {
+            options.MaxRequestRetries = 2;
+            options.RetryBackoff = _ => TimeSpan.FromMilliseconds(1);
+        });
+
+        var reason = await runner.RunTurnAsync("continue", "m", null, null, CancellationToken.None);
+
+        Assert.Equal(AgentTurnEndReason.Completed, reason);
+        Assert.Equal(2, client.Calls);
+        Assert.Contains(runner.Log.Snapshot(), @event => @event.Kind == AgentEventKind.RequestRetry);
+        Assert.Equal("完整回复", runner.History[^1].Content);
+        Assert.DoesNotContain(runner.History, message => message.Content == "partial");
+    }
+
+    [Fact]
+    public void ResponseEnded_is_classified_as_transient()
+    {
+        var error = new HttpRequestException("The response ended prematurely. (ResponseEnded)");
+        Assert.True(AgentRequestError.IsPrematureStreamEnd(error));
+        Assert.True(AgentRequestError.IsTransient(error));
     }
 
     [Fact]
@@ -531,6 +603,25 @@ public sealed class AgentTurnRunnerTests
         {
             Count++;
             return ValueTask.FromResult(new ToolConfirmation(true));
+        }
+    }
+
+    private sealed class PrematureThenRecoverClient : IOpenAiChatClient
+    {
+        public int Calls { get; private set; }
+
+        public async IAsyncEnumerable<ChatStreamDelta> StreamChatAsync(
+            OpenAiChatRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Calls++;
+            if (Calls == 1)
+            {
+                yield return new ChatStreamDelta("partial", null, null);
+                throw new HttpRequestException("The response ended prematurely. (ResponseEnded)");
+            }
+
+            yield return new ChatStreamDelta("完整回复", null, "stop");
         }
     }
 

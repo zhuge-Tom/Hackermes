@@ -24,7 +24,9 @@ public sealed class AiPanelModule : IModule
     public void RegisterServices(IServiceCollection services)
     {
         services.AddSingleton<IAiToolRegistry, AiToolRegistry>();
-        services.AddSingleton<CommandToolAdapter>();
+        services.AddSingleton(sp => new CommandToolAdapter(
+            sp.GetRequiredService<Hackermes.Automation.Commands.CommandRegistry>(),
+            sp.GetService<IBrowserTabOpener>()));
         services.AddSingleton<InspectionToolAdapter>();
         services.AddSingleton<PageContextToolAdapter>();
         services.AddSingleton<PageSecuritySnapshotToolAdapter>();
@@ -93,6 +95,8 @@ public sealed class AiPanelModule : IModule
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<AgentWorkflowToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
+        // Seed curated vulnerability-chain skills once (disabled until the operator enables them).
+        BuiltInSkillCatalog.SeedOnce(serviceProvider.GetRequiredService<IAgentSkillStore>());
         serviceProvider.GetRequiredService<AcpToolAdapter>()
             .RegisterAll(serviceProvider.GetRequiredService<IAiToolRegistry>());
         serviceProvider.GetRequiredService<AgentTodoToolAdapter>()
@@ -149,7 +153,8 @@ public sealed class AiPanelModule : IModule
                         serviceProvider.GetRequiredService<IAppLogger>(),
                         serviceProvider.GetRequiredService<AgentTodoRegistry>(),
                         serviceProvider.GetRequiredService<AgentGoalRegistry>(),
-                        serviceProvider.GetServices<IAgentPreStepHook>())
+                        serviceProvider.GetServices<IAgentPreStepHook>(),
+                        serviceProvider.GetRequiredService<IAgentWorkspaceContext>())
                     {
                         Model = aiSettings.Model
                     }

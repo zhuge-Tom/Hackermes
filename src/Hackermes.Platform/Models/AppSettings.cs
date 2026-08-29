@@ -212,7 +212,7 @@ public sealed class AiSettings
 
     /// <summary>Bounded character budget used when preparing a model request.</summary>
     [JsonPropertyName("maxContextCharacters")]
-    public int MaxContextCharacters { get; set; } = 120_000;
+    public int MaxContextCharacters { get; set; } = 400_000;
 
     /// <summary>Number of recent human/assistant messages retained after compaction.</summary>
     [JsonPropertyName("maxRecentMessages")]
@@ -297,6 +297,19 @@ public sealed class AiSettings
     /// <summary>Maximum size of one HTTPS artifact cached for an approved Agent download.</summary>
     [JsonPropertyName("maxToolDownloadBytes")]
     public int MaxToolDownloadBytes { get; set; } = 128 * 1024 * 1024;
+
+    /// <summary>
+    /// Web search backend for the web_search tool: "auto" (default) uses the configured
+    /// search API when a key is stored in the secret store and falls back to driving the
+    /// embedded browser; "browser" forces the fallback; "brave"/"serper" force an API.
+    /// The API key itself lives in the DPAPI secret store (ai.webSearchApiKey), never here.
+    /// </summary>
+    [JsonPropertyName("webSearchProvider")]
+    public string WebSearchProvider { get; set; } = "auto";
+
+    /// <summary>Optional NVD API key (raises services.nvd.nist.gov rate limits); stored in the DPAPI secret store (ai.nvdApiKey).</summary>
+    [JsonPropertyName("nvdApiKeyConfigured")]
+    public bool NvdApiKeyConfigured { get; set; }
 
     [JsonPropertyName("mcpServers")]
     public List<McpServerSettings> McpServers { get; set; } = new();

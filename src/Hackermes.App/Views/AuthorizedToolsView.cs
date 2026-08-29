@@ -437,7 +437,7 @@ public sealed class AuthorizedToolsView : UserControl
                     await ShowBuiltInWindowAsync(tool);
                     break;
                 case DesktopToolKind.Gui:
-                    _launcher.LaunchGui(tool.Path!);
+                    _launcher.LaunchGui(tool);
                     _status.Text = $"已启动：{tool.Name}";
                     break;
                 case DesktopToolKind.Shortcut:

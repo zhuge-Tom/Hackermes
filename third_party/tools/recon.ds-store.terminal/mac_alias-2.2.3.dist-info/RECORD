@@ -1,0 +1,11 @@
+mac_alias/__init__.py,sha256=Xsx0KE685Z9p0GpAVimwrMgur13sHWFYA6d2sew6p4g,1075
+mac_alias/alias.py,sha256=2wIs5MVGEkFsN2LNRCqNUwlEMI-R1alai-wg33xERWs,24880
+mac_alias/bookmark.py,sha256=CSdUiWw_wytCYM9VLg8jN8ViqtEl6EnnL_cHYM03x-0,22897
+mac_alias/osx.py,sha256=iovmxe_vMznLsV-4D8N2rsI8dLFYCMl0HXtMXnL9DOo,32410
+mac_alias/utils.py,sha256=NfUuwhOS4ZReDpo4d9yFrfZMoaeUDwisplL9PZRTD6c,409
+mac_alias-2.2.3.dist-info/licenses/LICENSE,sha256=su7eBibo3J-m8QjIljRduxkyghVlN8ICXY9drtxOWP4,1100
+mac_alias-2.2.3.dist-info/METADATA,sha256=wKZy18AfAbzjUwW5ROWrfEI2W3SX6HE0KYjDuokrDXY,2726
+mac_alias-2.2.3.dist-info/WHEEL,sha256=_zCd3N1l69ArxyTb8rzEoP9TpbYXkqRFSNOD5OuxnTs,91
+mac_alias-2.2.3.dist-info/entry_points.txt,sha256=jhbu0zTWPTLVIHSDQG7PH8sxSKF0gc8BdKZrjpDLXBQ,54
+mac_alias-2.2.3.dist-info/top_level.txt,sha256=fZ2hVUtofYoVe4CQ_g25BoNe6ag86MzAISHhYaEt_ig,10
+mac_alias-2.2.3.dist-info/RECORD,,

@@ -25,6 +25,20 @@ public sealed class AiChatViewLayoutTests
     }
 
     [Fact]
+    public void Session_actions_use_path_icons_for_new_export_and_settings()
+    {
+        var (document, controls, _) = LoadView();
+        var tips = new[] { "新建会话", "导出会话转录", "设置" };
+        foreach (var tip in tips)
+        {
+            var button = Assert.Single(document.Descendants(controls + "Button"),
+                element => string.Equals(element.Attribute("ToolTip.Tip")?.Value, tip, StringComparison.Ordinal));
+            Assert.NotNull(button.Descendants(controls + "PathIcon").SingleOrDefault());
+            Assert.Null(button.Attribute("Content"));
+        }
+    }
+
+    [Fact]
     public void Multiline_prompt_starts_text_at_the_top()
     {
         var (document, controls, _) = LoadView();

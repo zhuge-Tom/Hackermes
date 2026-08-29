@@ -97,7 +97,7 @@ public sealed class CommandRegistry
         {
             Name = "open",
             Aliases = ["go", "goto"],
-            Summary = "导航到指定地址",
+            Summary = "导航到指定地址；无活动标签时新建标签页",
             Usage = "open <url>",
             IsMutating = true,
             Handler = (ctx, ct) => RunActionAsync(ctx, ct,
