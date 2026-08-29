@@ -53,7 +53,8 @@ public sealed class AuthorizedToolsView : UserControl
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         Padding = new Thickness(0, 0, 2, 0)
     };
-    private readonly TextBlock _status = new() { FontSize = 11, Opacity = .68, TextWrapping = TextWrapping.Wrap };
+    // SelectableTextBlock：错误/状态信息可选中复制。
+    private readonly SelectableTextBlock _status = new() { FontSize = 11, Opacity = .68, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _manifestNote = new() { FontSize = 10, Opacity = .55, TextWrapping = TextWrapping.Wrap };
 
     /// <summary>用户明确设置过的分类展开状态；未接入工具默认收起，其余默认展开。</summary>

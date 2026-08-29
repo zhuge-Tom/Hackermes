@@ -26,9 +26,11 @@ public sealed class ToolLaunchService
     /// </summary>
     public void LaunchGui(DesktopToolEntry tool)
     {
-        var start = DesktopToolCatalog.TryGetBundledGuiLaunch(tool.Id, out var java, out var arguments, out var workingDirectory)
-            ? CreateJavaGuiStartInfo(java, arguments, workingDirectory)
-            : CreateGuiStartInfo(tool.Path!);
+        // 绝不把 .jar 当作可执行文件直接启动——回退失败必须给出可操作的原因。
+        if (!DesktopToolCatalog.TryGetBundledGuiLaunch(tool.Id, out var java, out var arguments,
+                out var workingDirectory, out var reason))
+            throw new InvalidOperationException($"{tool.Name} 无法启动：{reason}");
+        var start = CreateJavaGuiStartInfo(java, arguments, workingDirectory);
         Directory.CreateDirectory(start.Environment["TEMP"]!);
         _ = Process.Start(start) ?? throw new InvalidOperationException("工具进程未能启动。");
     }

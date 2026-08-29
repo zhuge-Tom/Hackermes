@@ -353,24 +353,40 @@ public static class DesktopToolCatalog
     /// entry is not a bundled GUI jar or a Java runtime is unavailable.
     /// </summary>
     public static bool TryGetBundledGuiLaunch(string toolId, out string java,
-        out IReadOnlyList<string> arguments, out string? workingDirectory)
+        out IReadOnlyList<string> arguments, out string? workingDirectory, out string? unavailableReason)
     {
         java = string.Empty;
         arguments = [];
         workingDirectory = null;
+        unavailableReason = null;
         if (!BundledTools.TryGetValue(toolId, out var descriptor) || descriptor.Kind is not DesktopToolKind.Gui)
+        {
+            unavailableReason = "该工具不在内置清单中。";
             return false;
+        }
         var runtime = FindJavaRuntime();
-        if (runtime is null) return false;
+        if (runtime is null)
+        {
+            unavailableReason = "未找到 Java 运行时（PATH 与常见安装位置均未命中）；请安装 Java 21+。";
+            return false;
+        }
         var jarPath = Path.Combine(
             AppContext.BaseDirectory, "tools", descriptor.EntryPoint.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(jarPath)) return false;
+        if (!File.Exists(jarPath))
+        {
+            unavailableReason = $"内置工具文件缺失：{jarPath}";
+            return false;
+        }
         java = runtime;
         workingDirectory = Path.GetDirectoryName(jarPath);
         if (descriptor.RequiresJavaFx)
         {
             var fxLib = Path.Combine(AppContext.BaseDirectory, "tools", "_runtime", "javafx", "lib");
-            if (!Directory.Exists(fxLib)) return false;
+            if (!Directory.Exists(fxLib))
+            {
+                unavailableReason = "内置 JavaFX 模块缺失（tools/_runtime/javafx/lib）。";
+                return false;
+            }
             arguments =
             [
                 "--module-path", fxLib,
@@ -391,8 +407,23 @@ public static class DesktopToolCatalog
 
     private static string? FindJavaRuntime()
     {
-        var candidates = new[] { "java.exe", "java" };
+        // GUI 进程的 PATH 可能与终端不同（双击启动走 Explorer 环境），除 PATH 外
+        // 再探测常见安装位置与 Oracle javapath。
+        var candidates = new List<string>();
+        foreach (var root in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
+        {
+            var javaRoot = Path.Combine(Environment.GetFolderPath(root), "Java");
+            if (Directory.Exists(javaRoot))
+                foreach (var dir in Directory.GetDirectories(javaRoot, "jdk-*").OrderByDescending(d => d))
+                    candidates.Add(Path.Combine(dir, "bin", "java.exe"));
+        }
+        var javapath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), "Oracle", "Java", "javapath", "java.exe");
+        candidates.Add(javapath);
+        candidates.Add("java.exe");
         foreach (var candidate in candidates)
+            if (File.Exists(candidate)) return candidate;
+        foreach (var candidate in new[] { "java.exe", "java" })
         {
             var found = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
