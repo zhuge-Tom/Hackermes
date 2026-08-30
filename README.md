@@ -6,7 +6,7 @@ Hackermes 是面向人工操作与 Agent 协作的桌面网页调试、流量分
 项目基于 .NET 10 与 Avalonia，将内置浏览器、CDP、DOM 检查、HTTP 数据包处理、终端、
 AI 助手和受控 ToolHost 集成在同一应用中。
 
-> 当前版本：`0.13.0`，已发布 Windows 10/11 x64 自包含包。
+> 当前版本：`0.13.1`，已发布 Windows 10/11 x64 自包含包。
 > Windows 10/11 x64 是主要验证平台；Linux x64 为预览平台。
 
 ## 主要能力
@@ -39,18 +39,20 @@ AI 助手和受控 ToolHost 集成在同一应用中。
 - 内置 OpenJFX 21 运行时与 14 个图形化综合利用工具（Shiro/Struts2/Nacos/Tomcat/Jenkins/帆软等，人工使用），
   左侧安全工具面板分门别类、开箱即用。
 
-> v0.13.0：基于已验收的 v0.12.0 源码递增，Release 全量构建通过。Windows x64 自包含打包（含 43 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
+> v0.13.1：基于已验收的 v0.12.0 源码递增，Release 全量构建通过。Windows x64 自包含打包（含 43 个内置工具目录与 JavaFX 运行时）。整套视觉门禁见 [NEXT-STAGE.md](NEXT-STAGE.md)。
+>
+> 本次变更：Agent「清空会话」现在会连同持久化记忆（Operator memory 笔记/摘要）一并清空，避免历史授权范围等笔记在新建会话时被再次注入。
 
 ## 下载与安装
 
-最新版位于 [Hackermes v0.13.0](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.13.0)，也可查看
+最新版位于 [Hackermes v0.13.1](https://github.com/zhuge-Tom/Hackermes/releases/tag/v0.13.1)，也可查看
 [GitHub Releases](https://github.com/zhuge-Tom/Hackermes/releases)。附件同时提供
 `SHA256SUMS.txt` 用于校验下载完整性。
 
-- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.13.0/Hackermes-0.13.0-windows-x64.zip)
-- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.13.0/SHA256SUMS.txt)
+- [Windows 10/11 x64 ZIP](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.13.1/Hackermes-0.13.1-windows-x64.zip)
+- [SHA-256 校验值](https://github.com/zhuge-Tom/Hackermes/releases/download/v0.13.1/SHA256SUMS.txt)
 
-v0.13.0 发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
+v0.13.1 发布 Windows x64 已验证本地构建。Linux x64 因尚未完成真实 GUI 全链路验收而暂未附加；
 可在能访问 NuGet 的 Linux/交叉构建环境中从源码发布。
 
 ### Windows 10/11 x64
@@ -150,7 +152,7 @@ G:\HackermesBuild\
 ### 本地创建 Windows/Linux 发布包
 
 ```powershell
-.\scripts\package-release.ps1 -Version 0.13.0 -Platforms windows
+.\scripts\package-release.ps1 -Version 0.13.1 -Platforms windows
 ```
 
 Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授权评估浅/深截图、打包与哈希校验）：
@@ -166,7 +168,7 @@ Windows 完整发布验收（Release 构建、完整 TRX、真实 loopback、授
 只生成单个平台时可将 `all` 改为 `windows` 或 `linux`。产物位于：
 
 ```text
-G:\HackermesBuild\artifacts\release\0.13.0\
+G:\HackermesBuild\artifacts\release\0.13.1\
 ```
 
 发布脚本生成：

@@ -61,6 +61,36 @@ public sealed class AgentSessionStore : IAgentSessionStore
         }
     }
 
+    /// <summary>Removes a single persisted session. Returns true when the id was present.</summary>
+    public bool Delete(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return false;
+        lock (_gate)
+        {
+            var document = Load();
+            var removed = document.Sessions.RemoveAll(session => string.Equals(session.Id, sessionId, StringComparison.Ordinal)) > 0;
+            if (!removed) return false;
+            if (string.Equals(document.ActiveId, sessionId, StringComparison.Ordinal))
+                document.ActiveId = document.Sessions.FirstOrDefault()?.Id ?? string.Empty;
+            Save(document);
+            return true;
+        }
+    }
+
+    /// <summary>Removes every persisted session. Returns the number of sessions that were dropped.</summary>
+    public int DeleteAll()
+    {
+        lock (_gate)
+        {
+            var document = Load();
+            var count = document.Sessions.Count;
+            document.Sessions.Clear();
+            document.ActiveId = string.Empty;
+            Save(document);
+            return count;
+        }
+    }
+
     private void Normalize(AgentSessionDocument document)
     {
         document.ActiveId ??= string.Empty;

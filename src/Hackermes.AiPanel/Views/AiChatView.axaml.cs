@@ -97,6 +97,27 @@ public partial class AiChatView : UserControl
         if (!viewModel.ForkSession(option.Id)) return;
     }
 
+    private async void DeleteSessionClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        if ((sender as Avalonia.Controls.MenuItem)?.DataContext is not AgentSessionOption option) return;
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        var confirmed = await ConfirmDialog.ShowAsync(
+            owner, "删除会话", $"确定删除会话「{option.Name}」吗？该会话的消息与事件记录将一并清除，不可恢复。");
+        if (!confirmed) return;
+        viewModel.DeleteSession(option.Id);
+    }
+
+    private async void ClearSessionsClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AiChatViewModel viewModel) return;
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        var confirmed = await ConfirmDialog.ShowAsync(
+            owner, "清空全部会话", "确定清空所有会话吗？将删除全部会话的记录与消息，当前会话也会被重置为空会话，不可恢复。");
+        if (!confirmed) return;
+        viewModel.ClearSessions();
+    }
+
     private async void ExportTranscript(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not AiChatViewModel viewModel) return;

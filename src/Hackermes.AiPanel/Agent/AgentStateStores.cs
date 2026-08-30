@@ -355,6 +355,10 @@ public interface IAgentSessionStore
 {
     AgentSessionDocument Load();
     void Save(AgentSessionDocument document);
+    /// <summary>Removes a single persisted session from the document. Returns true if it was present.</summary>
+    bool Delete(string sessionId);
+    /// <summary>Removes every persisted session. Returns the number of sessions that were dropped.</summary>
+    int DeleteAll();
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]

@@ -103,6 +103,27 @@ public sealed class AgentEventLogStoreTests : IDisposable
     }
 
     [Fact]
+    public void DeleteAll_removes_every_event_log_file()
+    {
+        var store = CreateStore();
+        store.Append(SessionId, new AgentSessionEvent(0, DateTimeOffset.UtcNow, AgentEventKind.TurnStart, 1, 0, new TurnStarted(1)));
+        store.Append("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new AgentSessionEvent(0, DateTimeOffset.UtcNow, AgentEventKind.TurnStart, 1, 0, new TurnStarted(1)));
+
+        Assert.Equal(2, store.DeleteAll());
+
+        Assert.False(store.Exists(SessionId));
+        Assert.False(store.Exists("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(_dataDir, "agent-events"), "*.jsonl"));
+    }
+
+    [Fact]
+    public void DeleteAll_returns_zero_when_no_events_exist()
+    {
+        var store = CreateStore();
+        Assert.Equal(0, store.DeleteAll());
+    }
+
+    [Fact]
     public async Task Resume_rebuilds_history_compaction_blocks_and_audits_from_the_log()
     {
         // --- First runner: a full turn with a manual context_compress call. ---

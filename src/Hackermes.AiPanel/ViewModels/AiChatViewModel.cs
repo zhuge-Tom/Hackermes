@@ -747,6 +747,81 @@ public partial class AiChatViewModel : ViewModelBase
         return true;
     }
 
+    /// <summary>
+    /// Deletes one persisted session (its store entry and any event log file). The active
+    /// session is replaced by a fresh empty one; otherwise the picker moves to the newest
+    /// remaining session. Returns false when the id is missing or the VM is busy.
+    /// </summary>
+    public bool DeleteSession(string sessionId)
+    {
+        if (IsBusy || string.IsNullOrWhiteSpace(sessionId)) return false;
+        var option = Sessions.FirstOrDefault(value => value.Id == sessionId);
+        if (option is null) return false;
+
+        try
+        {
+            if (_sessionStore is null)
+            {
+                Error = "会话删除不可用：会话存储未初始化。";
+                return false;
+            }
+            var removed = _sessionStore.Delete(sessionId);
+            if (!removed)
+            {
+                Error = "会话删除失败：未找到对应的持久化记录。";
+                return false;
+            }
+            _eventLogStore?.Delete(sessionId);
+            Sessions.Remove(option);
+            OnPropertyChanged(nameof(HasSessions));
+
+            if (SelectedSession?.Id == sessionId)
+            {
+                // The live session was removed; start a fresh, empty one in its place.
+                NewSessionInternal(_settings.Load().Ai);
+            }
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Error = $"会话删除失败：{exception.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes every persisted session and event log, clears the retained agent memory
+    /// (notes/summary/messages), then starts a fresh empty session.
+    /// Returns true on success. This is the "clear all" action bound to the header button.
+    /// <para>Agent memory was previously left untouched, so the "Operator memory" note
+    /// persisted across clear-all and was re-injected into new sessions. Clearing it here
+    /// makes the action match its label.</para>
+    /// </summary>
+    public bool ClearSessions()
+    {
+        if (IsBusy) return false;
+        try
+        {
+            if (_sessionStore is null)
+            {
+                Error = "清空会话不可用：会话存储未初始化。";
+                return false;
+            }
+            _sessionStore.DeleteAll();
+            _eventLogStore?.DeleteAll();
+            _memory.Clear();
+            Sessions.Clear();
+            OnPropertyChanged(nameof(HasSessions));
+            NewSessionInternal(_settings.Load().Ai);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Error = $"清空会话失败：{exception.Message}";
+            return false;
+        }
+    }
+
     /// <summary>Markdown transcript of the live session's durable log (UI-agnostic builder).</summary>
     public string BuildTranscriptMarkdown() => AgentTranscriptExporter.BuildMarkdown(
         SelectedSession?.Name ?? SessionLabel,

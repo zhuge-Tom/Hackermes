@@ -109,6 +109,20 @@ public sealed class AgentEventLogStore
         }
     }
 
+    /// <summary>Deletes every persisted event log file. Returns the number of files removed.</summary>
+    public int DeleteAll()
+    {
+        var directory = Path.Combine(_settingsDirectoryFactory(), "agent-events");
+        if (!Directory.Exists(directory)) return 0;
+        var removed = 0;
+        foreach (var file in Directory.EnumerateFiles(directory, "*.jsonl"))
+        {
+            try { File.Delete(file); removed++; }
+            catch (Exception ex) { _logger?.Warn($"Failed to delete agent event log {Path.GetFileName(file)}: {ex.Message}"); }
+        }
+        return removed;
+    }
+
     /// <summary>
     /// Copies one session's full event stream to a fresh session id (dsh fork lineage):
     /// the fork resumes with complete history, compaction blocks and audits intact, while
